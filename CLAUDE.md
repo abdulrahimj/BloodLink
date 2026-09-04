@@ -163,6 +163,7 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 
 ## Conventions
 
+- Configuration file: `application.properties` (not `.yml`) — chosen for this project, keep consistent across all phases
 - REST endpoints: `/api/<resource>`, plural nouns, standard verbs (GET/POST/PATCH)
 - All timestamps UTC
 - All monetary/unit fields are integers (no fractional blood units)
