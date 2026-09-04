@@ -163,6 +163,7 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 
 ## Conventions
 
+- **Work directly on the `main` branch.** Do not create feature branches, task branches, or any other branch unless explicitly instructed to. This is a two-person project working phase-by-phase in turns; branching adds coordination overhead we've deliberately chosen not to use.
 - **Comment all non-trivial code**, especially service-layer methods and business logic (eligibility checks, threshold calculations, request status transitions, WebSocket event triggers). A short comment above each method explaining *what it does and why*, not just what the code says. This matters for two people maintaining this together, and for explaining the implementation later.
 - Configuration file: `application.properties` (not `.yml`) — chosen for this project, keep consistent across all phases
 - REST endpoints: `/api/<resource>`, plural nouns, standard verbs (GET/POST/PATCH)
