@@ -39,14 +39,20 @@ public class Donor {
     @JoinColumn(name = "user_id", nullable = false, unique = true)
     private User user;
 
-    @Column(name = "blood_type", nullable = false, length = 3)
+    /**
+     * Nullable: a donor may register before knowing their group ("I don't know yet").
+     * Business Rule 4 means this field is never authoritative anyway — the tested
+     * value on each Donation record is. See V2__auth_constraints.sql.
+     */
+    @Column(name = "blood_type", length = 3)
     private BloodType bloodType;
 
     @Column(name = "date_of_birth", nullable = false)
     private LocalDate dateOfBirth;
 
+    // length 32 (widened in V3): PREFER_NOT_TO_SAY does not fit the original 16.
     @Enumerated(EnumType.STRING)
-    @Column(name = "gender", nullable = false, length = 16)
+    @Column(name = "gender", nullable = false, length = 32)
     private Gender gender;
 
     @Column(name = "last_donation_date")

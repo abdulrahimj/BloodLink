@@ -1,8 +1,10 @@
 package com.bloodlink.domain.enums;
 
 // CLAUDE.md specifies Donor.gender as an enum but does not enumerate its values.
-// MALE / FEMALE is the minimal set; extend here if the project owner needs more.
+// PREFER_NOT_TO_SAY was added alongside MALE / FEMALE so the enum covers every option
+// the Register screen offers. Kept in step with the CHECK constraint in V2.
 public enum Gender {
     MALE,
-    FEMALE
+    FEMALE,
+    PREFER_NOT_TO_SAY
 }
