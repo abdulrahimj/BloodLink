@@ -82,6 +82,16 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    /** The authenticated caller has no such resource — see NotFoundException. */
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiError> handleNotFound(NotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiError.of(
+            HttpStatus.NOT_FOUND.value(),
+            "Not Found",
+            ex.getMessage()
+        ));
+    }
+
     /** Phone or email already registered. */
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiError> handleConflict(ConflictException ex) {

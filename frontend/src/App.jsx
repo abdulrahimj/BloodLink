@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
+import DonorPortal from './pages/DonorPortal.jsx';
 import { clearSession, getUser, isSignedIn } from './auth/session.js';
 
 /* ================================================================
    BloodLink — app shell
 
-   Routes between the two auth screens and, once signed in, shows the
-   signed-in placeholder. Routing is on the URL hash because that is
+   Routes between the two auth screens and, once signed in, to a
+   role-appropriate view. Routing is on the URL hash because that is
    what the mockups' own links already use (#login, #register) — no
-   router dependency needed for two public screens. Role dashboards
-   arrive in a later phase and will replace SignedInPlaceholder.
+   router dependency needed for a handful of screens. Only DONOR has a
+   real portal so far; the other three roles still fall back to
+   SignedInPlaceholder until their phases land.
    ================================================================ */
 
 /** Reads the current screen from the hash, defaulting to login. */
@@ -44,7 +46,9 @@ export default function App() {
   }
 
   if (user) {
-    return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
+    return user.role === 'DONOR'
+      ? <DonorPortal user={user} onSignOut={handleSignOut} />
+      : <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
   }
 
   return route === 'register'
