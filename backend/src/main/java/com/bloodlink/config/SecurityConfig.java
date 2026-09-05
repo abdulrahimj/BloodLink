@@ -87,9 +87,17 @@ public class SecurityConfig {
                 // --- Administrator: account management and aggregate reporting ---
                 .requestMatchers("/api/users/**", "/api/reports/**").hasRole(Role.ADMIN.name())
 
-                // --- Blood bank / lab staff: own bank's stock and donation appeals ---
+                // --- Blood banks: reference data (name/location) and inventory ---
+                // The dashboard summary is an operational, staff-facing view (pending
+                // requests, donor counts) — narrower than the plain bank listing, and
+                // matched first since Spring evaluates these rules in order.
+                .requestMatchers(HttpMethod.GET, "/api/blood-banks/*/dashboard")
+                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+                .requestMatchers(HttpMethod.GET, "/api/blood-banks/**").authenticated()
                 // Reading inventory is open to all signed-in staff (hospitals need a live
-                // view across banks); only bank staff may change it.
+                // view across banks); only bank staff may change it. Which bank a given
+                // BLOOD_BANK_STAFF member may write to is enforced in InventoryService,
+                // not here — a URL rule can't see whose bank the path id belongs to.
                 .requestMatchers(HttpMethod.GET, "/api/inventory/**").authenticated()
                 .requestMatchers("/api/inventory/**", "/api/appeals/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())

@@ -25,11 +25,17 @@ public record AuthResponse(
         String fullName,
         String email,
         String phone,
-        Role role
+        Role role,
+        /** Null for every role except BLOOD_BANK_STAFF, and even then only once an
+         *  administrator has assigned one (see V5__add_staff_blood_bank_link.sql).
+         *  Lets the Blood Bank portal jump straight to the right bank without a
+         *  separate "who am I" call. */
+        UUID bloodBankId
     ) {
         static UserSummary from(User user) {
             return new UserSummary(
-                user.getId(), user.getFullName(), user.getEmail(), user.getPhone(), user.getRole()
+                user.getId(), user.getFullName(), user.getEmail(), user.getPhone(), user.getRole(),
+                user.getBloodBank() == null ? null : user.getBloodBank().getId()
             );
         }
     }

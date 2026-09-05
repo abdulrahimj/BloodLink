@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import DonorPortal from './pages/DonorPortal.jsx';
+import BloodBankPortal from './pages/BloodBankPortal.jsx';
 import { clearSession, getUser, isSignedIn } from './auth/session.js';
 
 /* ================================================================
@@ -10,9 +11,9 @@ import { clearSession, getUser, isSignedIn } from './auth/session.js';
    Routes between the two auth screens and, once signed in, to a
    role-appropriate view. Routing is on the URL hash because that is
    what the mockups' own links already use (#login, #register) — no
-   router dependency needed for a handful of screens. Only DONOR has a
-   real portal so far; the other three roles still fall back to
-   SignedInPlaceholder until their phases land.
+   router dependency needed for a handful of screens. DONOR and
+   BLOOD_BANK_STAFF/ADMIN have real portals now; HOSPITAL_STAFF still falls
+   back to SignedInPlaceholder until the Hospital Portal's phase lands.
    ================================================================ */
 
 /** Reads the current screen from the hash, defaulting to login. */
@@ -46,9 +47,13 @@ export default function App() {
   }
 
   if (user) {
-    return user.role === 'DONOR'
-      ? <DonorPortal user={user} onSignOut={handleSignOut} />
-      : <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
+    if (user.role === 'DONOR') {
+      return <DonorPortal user={user} onSignOut={handleSignOut} />;
+    }
+    if (user.role === 'BLOOD_BANK_STAFF' || user.role === 'ADMIN') {
+      return <BloodBankPortal user={user} onSignOut={handleSignOut} />;
+    }
+    return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
   }
 
   return route === 'register'
