@@ -153,6 +153,13 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
    Fulfilment must decrement `BloodInventory.units_available` for the fulfilling blood bank.
 6. **A hospital's request can be fulfilled by any blood bank**, not only one tied to that hospital —
    there is no fixed hospital-to-blood-bank ownership.
+7. **When new stock accumulates onto an existing BloodInventory row** (same blood bank + blood type),
+   units add together, but the expiry date is kept as the **earlier** of the old and new expiry dates —
+   never extended. A newer batch never masks that some of the combined stock expires sooner.
+8. **A BLOOD_BANK_STAFF user is tied to exactly one blood bank** via a nullable `blood_bank_id` on
+   `User` (null for all other roles). Inventory writes are restricted to that staff member's own bank;
+   ADMIN can write to any bank. There is no self-registration path for HOSPITAL_STAFF,
+   BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
 
 ## Actors (roles) and what each can do
 
