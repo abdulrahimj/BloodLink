@@ -190,6 +190,23 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 
 ## Conventions
 
+- **`bloodlink_dev` holds real data. Testing must never delete or overwrite a row it did not itself create.**
+  This is not a style preference — it was violated in Phase 6 and destroyed the project owner's manually
+  entered stock batches, which were unrecoverable (no backup, `archive_mode` is off). The rules:
+  - **Never write a `DELETE` whose `WHERE` clause selects by a shared attribute** (`blood_bank_id`,
+    `hospital_id`, `status`, a date range). With only two blood banks and two hospitals seeded,
+    `where blood_bank_id in (...)` is the entire table wearing a disguise. Delete **only** by primary keys
+    captured from the test run's own inserts — use `insert ... returning id` and delete exactly those ids.
+  - **Never use `on conflict ... do update`** in a test seed. It silently overwrites live rows and reports
+    the same `INSERT 0 n` whether it inserted or clobbered, so the damage is invisible in the output.
+    A test seed must use plain `insert` and fail loudly if the row already exists.
+  - **Prefer not touching `bloodlink_dev` at all.** Create a throwaway database for the run
+    (`createdb bloodlink_smoke`, point `spring.datasource.url` at it, `dropdb` afterwards). Flyway builds
+    the schema from scratch, so this costs seconds and cannot damage anything.
+  - **Take a `pg_dump` before any manual write to `bloodlink_dev`**, and say in the summary where it was saved.
+  - **Never report "test data cleaned up" without evidence.** State the exact statements run and the row
+    counts they affected, and confirm the deleted count equals the count inserted. If those two numbers
+    disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.
 - **At the end of every task, list every file created or modified**, grouped as New / Modified, and for each new or changed method/function, give its name and a one-line purpose. This is a structured list in addition to any prose summary, not a replacement for it — the project owner reviews this list against `git status` before verifying anything in the browser.
 - **Work directly on the `main` branch.** Do not create feature branches, task branches, or any other branch unless explicitly instructed to. This is a two-person project working phase-by-phase in turns; branching adds coordination overhead we've deliberately chosen not to use.
