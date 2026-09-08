@@ -53,6 +53,15 @@ public class BloodRequest {
     @Column(name = "status", nullable = false, length = 16)
     private RequestStatus status;
 
+    /**
+     * Optional free-text ward / patient reference from the request form
+     * ("Maternity Ward — Bed 12"). Purely a label the requesting hospital uses to
+     * match delivered units back to the patient who needs them — this system holds
+     * no patient records, by design.
+     */
+    @Column(name = "patient_reference")
+    private String patientReference;
+
     /** Null until the request is approved; any blood bank may fulfil (Business Rule 6). */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "fulfilled_by_blood_bank_id")

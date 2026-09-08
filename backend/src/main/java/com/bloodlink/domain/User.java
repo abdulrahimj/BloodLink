@@ -64,6 +64,18 @@ public class User {
     @JoinColumn(name = "blood_bank_id")
     private BloodBank bloodBank;
 
+    /**
+     * Which hospital this account works at — only ever set for HOSPITAL_STAFF
+     * (added in V7, the exact counterpart of {@link #bloodBank} above). Null for
+     * every other role, and null is also valid for a not-yet-assigned staff
+     * account, since there is still no admin-managed account creation flow:
+     * RequestService treats "hospital staff with no hospital" as having access to
+     * nothing rather than failing to start up.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "hospital_id")
+    private Hospital hospital;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) {

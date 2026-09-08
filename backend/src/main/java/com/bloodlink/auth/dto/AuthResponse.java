@@ -30,12 +30,17 @@ public record AuthResponse(
          *  administrator has assigned one (see V5__add_staff_blood_bank_link.sql).
          *  Lets the Blood Bank portal jump straight to the right bank without a
          *  separate "who am I" call. */
-        UUID bloodBankId
+        UUID bloodBankId,
+        /** The same, for HOSPITAL_STAFF (see V7__blood_request_module.sql). Lets the
+         *  Hospital Portal open straight onto that hospital's own request desk
+         *  instead of asking which hospital this is. */
+        UUID hospitalId
     ) {
         static UserSummary from(User user) {
             return new UserSummary(
                 user.getId(), user.getFullName(), user.getEmail(), user.getPhone(), user.getRole(),
-                user.getBloodBank() == null ? null : user.getBloodBank().getId()
+                user.getBloodBank() == null ? null : user.getBloodBank().getId(),
+                user.getHospital() == null ? null : user.getHospital().getId()
             );
         }
     }

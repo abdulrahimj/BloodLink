@@ -94,6 +94,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/blood-banks/*/dashboard")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
                 .requestMatchers(HttpMethod.GET, "/api/blood-banks/**").authenticated()
+                // Hospitals are the same kind of fixed, seeded reference data as
+                // blood banks (V6) — readable by any signed-in role, and with no
+                // write path at all, since hospitals do not self-register.
+                .requestMatchers(HttpMethod.GET, "/api/hospitals/**").authenticated()
                 // Reading inventory is open to all signed-in staff (hospitals need a live
                 // view across banks); only bank staff may change it. Which bank a given
                 // BLOOD_BANK_STAFF member may write to is enforced in InventoryService,

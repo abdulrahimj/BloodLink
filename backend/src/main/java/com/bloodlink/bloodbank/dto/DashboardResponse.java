@@ -1,20 +1,26 @@
 package com.bloodlink.bloodbank.dto;
 
-import java.util.List;
 import java.util.UUID;
 
-/** Backs the stat cards and requests panel on the Blood Bank Dashboard (home view). */
+/**
+ * Backs the four stat cards on the Blood Bank Dashboard (home view).
+ *
+ * The "Incoming Hospital Requests" panel below them is fed by GET /api/requests
+ * instead, not from here: that panel now carries approve/reject/fulfil actions, and
+ * a request the operator can act on has to be the same object the action endpoint
+ * returns — one representation of a request, not a read-only copy that drifts out
+ * of step with the one the buttons post to.
+ */
 public record DashboardResponse(
     UUID bloodBankId,
     String bloodBankName,
     int totalUnits,
     /** Donations recorded at this bank so far this calendar month. */
     int donationsThisMonth,
-    /** Citywide PENDING count — see BloodRequestRepository: no bank owns a request
-     *  until it is fulfilled (Business Rule 6). */
+    /** Requests awaiting a decision that this bank could take — unclaimed ones plus
+     *  any it has already claimed. Scoped exactly like the panel's own feed, so the
+     *  card and the list underneath it never disagree. */
     int pendingRequestsCount,
     /** Donors who have given at least once at this bank (see DonationRepository). */
-    int registeredDonorsCount,
-    /** Most recent requests across every status, newest first, capped for the panel. */
-    List<PendingRequestItem> recentRequests
+    int registeredDonorsCount
 ) {}

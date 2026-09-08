@@ -16,12 +16,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.bloodlink.bloodbank.dto.DashboardResponse;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodRequest;
-import com.bloodlink.domain.Hospital;
-import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.StockStatus;
-import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.BloodBankRepository;
@@ -29,9 +25,10 @@ import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.DonationRepository;
 
 /**
- * Covers the one thing easy to get backwards in getDashboard: which numbers are
- * scoped to this bank (units, donations, registered donors) and which are
- * deliberately citywide (pending requests, per Business Rule 6).
+ * Covers the one thing easy to get backwards in getDashboard: every figure is
+ * scoped to this bank, including the pending-request count, which is counted over
+ * the same "unclaimed, or already ours" scope the requests panel lists (Business
+ * Rule 6) rather than citywide.
  */
 @ExtendWith(MockitoExtension.class)
 class BloodBankServiceTest {
@@ -51,7 +48,7 @@ class BloodBankServiceTest {
     }
 
     @Test
-    void dashboardCombinesBankScopedAndCitywideFigures() {
+    void dashboardScopesEveryFigureToThisBank() {
         BloodBank bank = new BloodBank();
         bank.setId(BANK_ID);
         bank.setName("Makeni Regional Blood Bank");
@@ -63,28 +60,17 @@ class BloodBankServiceTest {
 
         when(donationRepository.countByBloodBankIdAndDonationDateBetween(any(), any(), any())).thenReturn(12L);
         when(donationRepository.countDistinctDonorsByBloodBankId(BANK_ID)).thenReturn(512L);
-        when(bloodRequestRepository.countByStatus(RequestStatus.PENDING)).thenReturn(2L);
-
-        Hospital hospital = new Hospital();
-        hospital.setName("Makeni Regional Hospital");
-        BloodRequest request = new BloodRequest();
-        request.setHospital(hospital);
-        request.setBloodType(BloodType.O_NEGATIVE);
-        request.setUnitsRequested(2);
-        request.setUrgencyLevel(UrgencyLevel.EMERGENCY);
-        request.setStatus(RequestStatus.PENDING);
-        request.setCreatedAt(java.time.Instant.now());
-        when(bloodRequestRepository.findTop5ByOrderByCreatedAtDesc()).thenReturn(List.of(request));
+        when(bloodRequestRepository.countActionableForBankByStatus(BANK_ID, RequestStatus.PENDING)).thenReturn(2L);
 
         DashboardResponse dashboard = service.getDashboard(BANK_ID);
 
         assertThat(dashboard.bloodBankName()).isEqualTo("Makeni Regional Blood Bank");
-        assertThat(dashboard.totalUnits()).isEqualTo(89); // this bank's own stock only
+        assertThat(dashboard.totalUnits()).isEqualTo(89);
         assertThat(dashboard.donationsThisMonth()).isEqualTo(12);
         assertThat(dashboard.registeredDonorsCount()).isEqualTo(512);
-        assertThat(dashboard.pendingRequestsCount()).isEqualTo(2); // citywide, not bank-scoped
-        assertThat(dashboard.recentRequests()).hasSize(1);
-        assertThat(dashboard.recentRequests().get(0).hospitalName()).isEqualTo("Makeni Regional Hospital");
+        // Actionable-for-this-bank, matching the panel below the card — not every
+        // pending request in the city.
+        assertThat(dashboard.pendingRequestsCount()).isEqualTo(2);
     }
 
     @Test

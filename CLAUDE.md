@@ -53,6 +53,8 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | password_hash | varchar |
 | role | enum: DONOR, HOSPITAL_STAFF, BLOOD_BANK_STAFF, ADMIN |
 | phone | varchar |
+| blood_bank_id | UUID, FK -> BloodBank, nullable — set only for BLOOD_BANK_STAFF (V5) |
+| hospital_id | UUID, FK -> Hospital, nullable — set only for HOSPITAL_STAFF (V7) |
 | created_at | timestamp |
 
 ### Donor
@@ -85,7 +87,8 @@ Seeded, not self-registering: **Makeni Regional Blood Bank**, **Holy Spirit Bloo
 | location | varchar |
 | contact_phone | varchar |
 
-Seeded, not self-registering: **Makeni Regional Hospital**, **Holy Spirit Hospital**.
+Seeded, not self-registering: **Makeni Regional Hospital**, **Holy Spirit Hospital** (V6, fixed ids
+`3333…` and `4444…`, continuing V4's `1111…`/`2222…` for the blood banks).
 
 ### BloodInventory
 | field | type |
@@ -118,6 +121,7 @@ One row per (blood_bank_id, blood_type) — not one row per unit.
 | units_requested | int |
 | urgency_level | enum: ROUTINE, URGENT, EMERGENCY |
 | status | enum: PENDING, APPROVED, FULFILLED, REJECTED |
+| patient_reference | varchar, nullable — optional ward / patient label from the request form |
 | fulfilled_by_blood_bank_id | UUID, FK -> BloodBank, nullable until approved |
 | created_at | timestamp |
 
@@ -160,6 +164,22 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
    `User` (null for all other roles). Inventory writes are restricted to that staff member's own bank;
    ADMIN can write to any bank. There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
+9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`
+   (V7) — the exact counterpart of rule 8. A new request is stamped with the caller's own hospital;
+   `POST /api/requests` accepts no hospital id at all. A hospital sees only its own requests.
+10. **A blood bank's request feed is "unclaimed, or already ours".** Because any bank may fulfil any
+    request (rule 6), every bank sees every request still sitting at PENDING; approving sets
+    `fulfilled_by_blood_bank_id` and moves the request into that bank's feed alone. Only the bank
+    that approved a request may fulfil it.
+11. **Stock is checked at approval and re-checked at fulfilment; only fulfilment deducts.** Approving
+    without the units would strand the hospital behind a bank that took the request out of everyone
+    else's feed, so it is refused. The authoritative check is at fulfilment, against stock at that
+    moment: if the units have gone, the whole transition is refused (409) and nothing is deducted.
+    Both the request row and the inventory row are read under a pessimistic write lock, so two banks
+    acting at once cannot both pass the same check.
+12. **Rejection is terminal for every bank, not just the rejecting one.** `status` is a single field
+    with one REJECTED state (rule 5), so one bank's rejection closes the request; recording per-bank
+    refusals would need a table the schema does not have. The hospital raises a fresh request instead.
 
 ## Actors (roles) and what each can do
 

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { getInventory } from "../api/inventory.js";
 import { getBankDashboard } from "../api/bloodBanks.js";
+import { actOnRequest, getRequests } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 
 /* ================================================================
@@ -14,16 +15,18 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
    Stock figures are the Makeni Regional share of the citywide
    total shown on the Hospital Portal, so the two screens agree.
 
-   Wired to GET /api/inventory/{bloodBankId} and
-   GET /api/blood-banks/{bloodBankId}/dashboard. Layout, styling and
+   Wired to GET /api/inventory/{bloodBankId}, GET
+   /api/blood-banks/{bloodBankId}/dashboard, and — for the requests panel —
+   GET /api/requests plus PATCH /api/requests/{id}. Layout, styling and
    structure are the mockup's, unchanged; the STOCK/REQUESTS fixtures are
    replaced with fetched data, and a loading/error pair was added using the
    same idiom as the Donor Portal (tokens already in this file, nothing new).
 
-   "Approve" stays inert — approving/rejecting/fulfilling a request is
-   Business Rule 5's lifecycle, a later phase. This screen only reads
-   whatever BloodRequest rows already exist (there is no submission path
-   yet either, so the panel is realistically empty for now).
+   The panel is the blood bank half of Figure 3.5, and its buttons are real:
+   Approve and Reject on a pending request, Fulfil on one this bank has
+   approved. Fulfilling moves units out of this bank's stock, so the whole
+   screen is reloaded afterwards — the inventory table and the "Available
+   Units" card both change with it.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -38,35 +41,87 @@ function titleCase(status) {
 export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNavigate }) {
   const [stock, setStock] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
 
+  // Which request is mid-action, and the last action failure — both keyed to one
+  // row so a refusal ("not enough O- in stock") appears against the request it
+  // belongs to instead of as a page-level error.
+  const [actingOn, setActingOn] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  /**
+   * Loads the three calls behind this screen together. Extracted from the effect
+   * so an action can reuse it: approving or fulfilling changes the stat cards,
+   * and fulfilling changes the inventory table too, so the honest refresh is the
+   * whole screen rather than patching the one row that was clicked.
+   */
+  const load = useCallback(async () => {
+    const [inventory, dashboardData, requestList] = await Promise.all([
+      getInventory(bloodBankId),
+      getBankDashboard(bloodBankId),
+      getRequests(bloodBankId),
+    ]);
+    return { inventory, dashboardData, requestList };
+  }, [bloodBankId]);
+
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const [inventory, dashboardData] = await Promise.all([
-          getInventory(bloodBankId),
-          getBankDashboard(bloodBankId),
-        ]);
-        if (!cancelled) {
-          setStock(inventory);
-          setDashboard(dashboardData);
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
+    load()
+      .then(({ inventory, dashboardData, requestList }) => {
+        if (cancelled) return;
+        setStock(inventory);
+        setDashboard(dashboardData);
+        setRequests(requestList);
+      })
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
 
-    load();
     return () => { cancelled = true; };
-  }, [bloodBankId]);
+  }, [load]);
+
+  /**
+   * Drives one step of Business Rule 5's lifecycle from the panel.
+   *
+   * bloodBankId is passed through for the ADMIN case, where the backend needs to
+   * be told which bank is acting; for BLOOD_BANK_STAFF it is ignored server-side
+   * in favour of their own assigned bank, so sending it is harmless.
+   *
+   * A 409 here is an ordinary outcome, not a bug — the request was already taken
+   * by the other bank, or the stock moved since approval — so the message is
+   * shown against the row and the screen is reloaded to show the real state.
+   */
+  async function handleAction(requestId, action) {
+    setActingOn(requestId);
+    setActionError(null);
+    try {
+      await actOnRequest(requestId, action, bloodBankId);
+      const { inventory, dashboardData, requestList } = await load();
+      setStock(inventory);
+      setDashboard(dashboardData);
+      setRequests(requestList);
+    } catch (err) {
+      setActionError({ requestId, message: err.message });
+      // Re-read regardless: a refusal usually means this screen's copy of the
+      // request is stale, and leaving the old buttons up invites a second failure.
+      try {
+        const { inventory, dashboardData, requestList } = await load();
+        setStock(inventory);
+        setDashboard(dashboardData);
+        setRequests(requestList);
+      } catch {
+        // The action's own message is the useful one; a failed refresh on top of
+        // it would only replace it with something less specific.
+      }
+    } finally {
+      setActingOn(null);
+    }
+  }
 
   return (
     <div className="bb-root">
@@ -206,7 +261,10 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-b-rejected { background: var(--red); }
 
         /* request list */
-        .bb-list { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: clamp(4px, .8vh, 9px); }
+        /* overflow-y: auto rather than the mockup's hidden — the fixture was a
+           fixed five rows, but a real bank's feed keeps growing and requests
+           below the fold would otherwise be unreachable, not just unseen. */
+        .bb-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: clamp(4px, .8vh, 9px); }
         .bb-item { display: flex; align-items: center; gap: clamp(8px, .8vw, 12px); padding: clamp(5px, 1vh, 10px) clamp(7px, .7vw, 11px); border: 1px solid var(--line); border-radius: 8px; }
         .bb-item-grp {
           flex: 0 0 auto; width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
@@ -222,11 +280,23 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           padding: clamp(5px, .85vh, 8px) clamp(8px, .8vw, 13px);
         }
         .bb-act:hover { background: var(--red-dark); }
+        .bb-act:disabled { background: #C9CDD3; cursor: not-allowed; }
+        /* Reject is destructive but not the primary move, so it is outlined
+           rather than filled — the mockup's single red button stays the one the
+           operator's eye lands on first. */
+        .bb-act--ghost { background: transparent; color: var(--ink-muted); border: 1.5px solid var(--line); }
+        .bb-act--ghost:hover { background: #F6F7F8; color: var(--ink); border-color: #C9CDD3; }
+        .bb-act--ghost:disabled { background: transparent; color: #C9CDD3; }
+        /* Fulfil is the step that actually moves units, so it carries the navy
+           "settled" colour the Fulfilled badge already uses on this screen. */
+        .bb-act--go { background: var(--navy); }
+        .bb-act--go:hover { background: var(--navy-soft); }
 
         /* Wiring states — additive, same tokens, for real async data. */
         .bb-loading, .bb-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
         .bb-error-msg { color: var(--red); font-weight: 600; font-size: clamp(11px, 1.6vh, 14px); }
         .bb-empty { font-size: clamp(10px, 1.5vh, 13px); color: var(--ink-muted); padding: clamp(8px, 1.4vh, 14px) 2px; }
+        .bb-item-error { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--red); font-weight: 600; line-height: 1.35; white-space: normal; }
 
         @media (prefers-reduced-motion: reduce) { .bb-root * { transition: none !important; } }
       `}</style>
@@ -327,20 +397,53 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                   <div className="bb-panel-link">View All</div>
                 </div>
                 <div className="bb-list">
-                  {dashboard.recentRequests.length === 0 && (
+                  {requests.length === 0 && (
                     <div className="bb-empty">No requests yet.</div>
                   )}
-                  {dashboard.recentRequests.map((r) => (
-                    <div className="bb-item" key={r.id}>
-                      <div className="bb-item-grp">{r.bloodType}</div>
-                      <div className="bb-item-body">
-                        <div className="bb-item-main">{r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""} of {r.bloodType} · {titleCase(r.urgencyLevel)}</div>
-                        <div className="bb-item-sub">{r.hospitalName} · {formatRelativeTime(r.createdAt)}</div>
+                  {requests.map((r) => {
+                    const busy = actingOn === r.id;
+                    // Only the bank that approved a request may fulfil it, so the
+                    // button is not offered to anyone else — the backend refuses it
+                    // regardless, but a button that always fails is worse than none.
+                    const canFulfil = r.status === "APPROVED" && r.fulfilledByBloodBankId === bloodBankId;
+
+                    return (
+                      <div className="bb-item" key={r.id}>
+                        <div className="bb-item-grp">{r.bloodType}</div>
+                        <div className="bb-item-body">
+                          <div className="bb-item-main">{r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""} of {r.bloodType} · {titleCase(r.urgencyLevel)}</div>
+                          <div className="bb-item-sub">
+                            {r.hospitalName} · {formatRelativeTime(r.createdAt)}
+                            {r.patientReference ? ` · ${r.patientReference}` : ""}
+                          </div>
+                          {actionError?.requestId === r.id && (
+                            <div className="bb-item-error">{actionError.message}</div>
+                          )}
+                        </div>
+                        <span className={`bb-badge bb-b-${r.status.toLowerCase()}`}>{titleCase(r.status)}</span>
+
+                        {r.status === "PENDING" && (
+                          <>
+                            <button type="button" className="bb-act" disabled={busy}
+                                    onClick={() => handleAction(r.id, "APPROVE")}>
+                              {busy ? "…" : "Approve"}
+                            </button>
+                            <button type="button" className="bb-act bb-act--ghost" disabled={busy}
+                                    onClick={() => handleAction(r.id, "REJECT")}>
+                              Reject
+                            </button>
+                          </>
+                        )}
+
+                        {canFulfil && (
+                          <button type="button" className="bb-act bb-act--go" disabled={busy}
+                                  onClick={() => handleAction(r.id, "FULFIL")}>
+                            {busy ? "…" : "Fulfil"}
+                          </button>
+                        )}
                       </div>
-                      <span className={`bb-badge bb-b-${r.status.toLowerCase()}`}>{titleCase(r.status)}</span>
-                      {r.status === "PENDING" && <button type="button" className="bb-act">Approve</button>}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

@@ -9,9 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.bloodbank.dto.BloodBankResponse;
 import com.bloodlink.bloodbank.dto.DashboardResponse;
-import com.bloodlink.bloodbank.dto.PendingRequestItem;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.repository.BloodBankRepository;
@@ -20,10 +18,10 @@ import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Blood bank reference data, and the aggregate view behind the Dashboard home
- * screen — a mix of this bank's own inventory total plus citywide donation and
- * request figures (see the repository methods this pulls from for what "this
- * bank's" versus "citywide" means for each number).
+ * Blood bank reference data, and the stat-card figures behind the Dashboard home
+ * screen — this bank's own inventory and donation totals, plus the count of
+ * requests it could act on (see the repository methods this pulls from for what
+ * "this bank's" means in each case).
  */
 @Service
 public class BloodBankService {
@@ -53,7 +51,7 @@ public class BloodBankService {
             .toList();
     }
 
-    /** Everything the Dashboard home view needs in one call. */
+    /** The Dashboard home view's four stat cards. */
     @Transactional(readOnly = true)
     public DashboardResponse getDashboard(UUID bloodBankId) {
         BloodBank bank = bloodBankRepository.findById(bloodBankId)
@@ -68,28 +66,15 @@ public class BloodBankService {
             bloodBankId, thisMonth.atDay(1), thisMonth.atEndOfMonth()
         );
         long registeredDonors = donationRepository.countDistinctDonorsByBloodBankId(bloodBankId);
-        long pendingRequests = bloodRequestRepository.countByStatus(RequestStatus.PENDING);
-
-        List<PendingRequestItem> recentRequests = bloodRequestRepository.findTop5ByOrderByCreatedAtDesc().stream()
-            .map(this::toRequestItem)
-            .toList();
+        // Counted over the same scope the requests panel lists, so "2 Pending
+        // Requests" always matches the two rows the operator can see and act on.
+        long pendingRequests = bloodRequestRepository.countActionableForBankByStatus(
+            bloodBankId, RequestStatus.PENDING
+        );
 
         return new DashboardResponse(
             bank.getId(), bank.getName(), totalUnits,
-            (int) donationsThisMonth, (int) pendingRequests, (int) registeredDonors,
-            recentRequests
-        );
-    }
-
-    private PendingRequestItem toRequestItem(BloodRequest request) {
-        return new PendingRequestItem(
-            request.getId(),
-            request.getHospital().getName(),
-            request.getBloodType().getLabel(),
-            request.getUnitsRequested(),
-            request.getUrgencyLevel(),
-            request.getStatus(),
-            request.getCreatedAt()
+            (int) donationsThisMonth, (int) pendingRequests, (int) registeredDonors
         );
     }
 }

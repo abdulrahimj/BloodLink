@@ -3,6 +3,7 @@ import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import DonorPortal from './pages/DonorPortal.jsx';
 import BloodBankPortal from './pages/BloodBankPortal.jsx';
+import HospitalPortal from './pages/HospitalPortal.jsx';
 import { clearSession, getUser, isSignedIn } from './auth/session.js';
 
 /* ================================================================
@@ -11,9 +12,14 @@ import { clearSession, getUser, isSignedIn } from './auth/session.js';
    Routes between the two auth screens and, once signed in, to a
    role-appropriate view. Routing is on the URL hash because that is
    what the mockups' own links already use (#login, #register) — no
-   router dependency needed for a handful of screens. DONOR and
-   BLOOD_BANK_STAFF/ADMIN have real portals now; HOSPITAL_STAFF still falls
-   back to SignedInPlaceholder until the Hospital Portal's phase lands.
+   router dependency needed for a handful of screens. All three portals are
+   wired now; SignedInPlaceholder remains only as the fallback for a role
+   the backend might add before a screen exists for it.
+
+   ADMIN lands on the Blood Bank portal rather than the Hospital one: of the
+   two, that is where an administrator has actual authority (approving and
+   fulfilling on a named bank's behalf), whereas submitting a request
+   requires a hospital an administrator does not have.
    ================================================================ */
 
 /** Reads the current screen from the hash, defaulting to login. */
@@ -52,6 +58,9 @@ export default function App() {
     }
     if (user.role === 'BLOOD_BANK_STAFF' || user.role === 'ADMIN') {
       return <BloodBankPortal user={user} onSignOut={handleSignOut} />;
+    }
+    if (user.role === 'HOSPITAL_STAFF') {
+      return <HospitalPortal user={user} onSignOut={handleSignOut} />;
     }
     return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
   }
