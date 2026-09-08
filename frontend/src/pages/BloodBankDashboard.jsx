@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getInventory } from "../api/inventory.js";
 import { getBankDashboard } from "../api/bloodBanks.js";
 import { actOnRequest, getRequests } from "../api/requests.js";
@@ -27,6 +27,13 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
    approved. Fulfilling moves units out of this bank's stock, so the whole
    screen is reloaded afterwards — the inventory table and the "Available
    Units" card both change with it.
+
+   Reject goes through a confirmation step first. It is the one action here
+   whose blast radius is wider than the bank taking it: status is a single
+   field with one REJECTED state, so rejecting closes the request for every
+   blood bank in Makeni, not only this one, and the hospital has to start
+   again. That consequence is invisible from the button, so it is spelled out
+   before the click is submitted rather than explained after the fact.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -51,6 +58,12 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   // belongs to instead of as a page-level error.
   const [actingOn, setActingOn] = useState(null);
   const [actionError, setActionError] = useState(null);
+
+  // The request awaiting a confirmed Reject, or null when the dialog is closed.
+  // The whole request is held rather than just its id so the dialog can name what
+  // is about to be turned down without looking it back up.
+  const [confirmingReject, setConfirmingReject] = useState(null);
+  const cancelRejectRef = useRef(null);
 
   /**
    * Loads the three calls behind this screen together. Extracted from the effect
@@ -84,6 +97,26 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 
     return () => { cancelled = true; };
   }, [load]);
+
+  /**
+   * While the reject dialog is open: Escape closes it, and focus moves to Cancel.
+   *
+   * Cancel rather than the confirm button deliberately — this is a destructive,
+   * irreversible action, so the keyboard's default landing spot should be the way
+   * out of it, not the way through. Escape is wired at the document because the
+   * dialog is not a native <dialog> element and would otherwise only hear the key
+   * while something inside it happens to hold focus.
+   */
+  useEffect(() => {
+    if (!confirmingReject) return;
+
+    cancelRejectRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setConfirmingReject(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [confirmingReject]);
 
   /**
    * Drives one step of Business Rule 5's lifecycle from the panel.
@@ -121,6 +154,17 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
     } finally {
       setActingOn(null);
     }
+  }
+
+  /**
+   * Confirmed Reject. The dialog closes first so the panel is visible while the
+   * request goes out — the row's own busy state and any refusal message belong
+   * behind it, not stacked under a dialog the operator has already finished with.
+   */
+  function handleConfirmReject() {
+    const requestId = confirmingReject.id;
+    setConfirmingReject(null);
+    handleAction(requestId, "REJECT");
   }
 
   return (
@@ -298,6 +342,52 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-empty { font-size: clamp(10px, 1.5vh, 13px); color: var(--ink-muted); padding: clamp(8px, 1.4vh, 14px) 2px; }
         .bb-item-error { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--red); font-weight: 600; line-height: 1.35; white-space: normal; }
 
+        /* ===== REJECT CONFIRMATION ===== */
+        /* Fixed to the viewport, not the panel: .bb-list scrolls and .bb-root is
+           overflow:hidden, so anything absolutely positioned inside the panel
+           would be clipped or would scroll away with the row it belongs to. */
+        .bb-scrim {
+          position: fixed; inset: 0; z-index: 50;
+          background: rgba(17, 17, 17, .45);
+          display: grid; place-items: center;
+          padding: 20px;
+        }
+        .bb-dialog {
+          background: var(--card-bg); border-radius: var(--radius);
+          box-shadow: 0 12px 40px rgba(0,0,0,.22);
+          width: min(440px, 100%);
+          padding: clamp(16px, 2.4vh, 24px) clamp(16px, 1.6vw, 26px);
+          display: flex; flex-direction: column; gap: clamp(8px, 1.2vh, 13px);
+        }
+        .bb-dialog-head { display: flex; align-items: center; gap: 11px; }
+        .bb-dialog-icon {
+          flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%;
+          background: var(--red); display: grid; place-items: center;
+        }
+        .bb-dialog-icon svg { width: 52%; height: 52%; }
+        .bb-dialog-title { font-size: clamp(14px, 2vh, 17px); font-weight: 800; letter-spacing: -.02em; }
+        .bb-dialog-body { font-size: clamp(11px, 1.55vh, 13.5px); line-height: 1.5; color: #3A3A3A; }
+        /* The consequence the operator cannot see from the button — given the
+           same amber the "needs attention" states already use on this screen. */
+        .bb-dialog-warn {
+          font-size: clamp(10.5px, 1.5vh, 13px); line-height: 1.5; font-weight: 600;
+          color: #8A5510; background: #FBF1E3;
+          border-left: 3px solid var(--amber); border-radius: 6px;
+          padding: clamp(8px, 1.2vh, 12px) clamp(10px, 1vw, 14px);
+        }
+        .bb-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: clamp(2px, .6vh, 6px); }
+        .bb-dialog-actions button {
+          font-family: inherit; font-weight: 700; cursor: pointer;
+          font-size: clamp(11px, 1.55vh, 13.5px);
+          padding: clamp(8px, 1.15vh, 11px) clamp(13px, 1.3vw, 20px);
+          border-radius: 7px; border: 1.5px solid transparent;
+        }
+        .bb-dialog-cancel { background: #FFF; border-color: var(--line); color: #3A3A3A; }
+        .bb-dialog-cancel:hover { background: #F6F7F8; border-color: #C9CDD3; }
+        .bb-dialog-confirm { background: var(--red); color: #FFF; }
+        .bb-dialog-confirm:hover { background: var(--red-dark); }
+        .bb-dialog-actions button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
         @media (prefers-reduced-motion: reduce) { .bb-root * { transition: none !important; } }
       `}</style>
 
@@ -428,8 +518,10 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                                     onClick={() => handleAction(r.id, "APPROVE")}>
                               {busy ? "…" : "Approve"}
                             </button>
+                            {/* Confirmed first — rejecting closes the request for
+                                every bank, which the button alone cannot convey. */}
                             <button type="button" className="bb-act bb-act--ghost" disabled={busy}
-                                    onClick={() => handleAction(r.id, "REJECT")}>
+                                    onClick={() => setConfirmingReject(r)}>
                               Reject
                             </button>
                           </>
@@ -450,6 +542,72 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           </>
         )}
       </main>
+
+      {confirmingReject && (
+        <RejectConfirmation
+          request={confirmingReject}
+          cancelRef={cancelRejectRef}
+          onCancel={() => setConfirmingReject(null)}
+          onConfirm={handleConfirmReject}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Asks before a Reject is submitted, and says what the operator cannot see from
+ * the button: rejection is terminal for every blood bank, not only this one.
+ *
+ * Deliberately a styled dialog rather than window.confirm — the browser's own
+ * prompt cannot carry the warning with any emphasis, names the page rather than
+ * the request, and looks nothing like the rest of the system in a screenshot.
+ *
+ * Clicking the scrim cancels, matching Escape. The guard on event.target keeps a
+ * click that starts inside the dialog and drifts onto the backdrop (selecting the
+ * warning text, say) from being read as a dismissal.
+ */
+function RejectConfirmation({ request, cancelRef, onCancel, onConfirm }) {
+  const units = `${request.unitsRequested} unit${request.unitsRequested > 1 ? "s" : ""}`;
+
+  return (
+    <div
+      className="bb-scrim"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
+    >
+      <div
+        className="bb-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bb-reject-title"
+        aria-describedby="bb-reject-body"
+      >
+        <div className="bb-dialog-head">
+          <div className="bb-dialog-icon"><AlertIcon /></div>
+          <div className="bb-dialog-title" id="bb-reject-title">Reject this request?</div>
+        </div>
+
+        <div className="bb-dialog-body" id="bb-reject-body">
+          {request.hospitalName} asked for <strong>{units} of {request.bloodType}</strong>
+          {request.patientReference ? <> for {request.patientReference}</> : null}
+          {" "}({titleCase(request.urgencyLevel).toLowerCase()}).
+        </div>
+
+        <div className="bb-dialog-warn">
+          Rejecting closes this request for <strong>every blood bank in Makeni</strong>, not
+          only this one — no other bank will be able to approve or fulfil it afterwards, and
+          the hospital will have to submit a new request. This cannot be undone.
+        </div>
+
+        <div className="bb-dialog-actions">
+          <button type="button" className="bb-dialog-cancel" ref={cancelRef} onClick={onCancel}>
+            Keep request
+          </button>
+          <button type="button" className="bb-dialog-confirm" onClick={onConfirm}>
+            Reject request
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -486,3 +644,6 @@ function DropletIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M
 function GiftIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><rect x="3" y="9" width="18" height="12" rx="2"/><path d="M3 13h18M12 9v12M12 9S9.5 3 7 5.5 12 9 12 9zM12 9s2.5-6 5-3.5S12 9 12 9z"/></svg>); }
 function HourglassIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><path d="M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9s8 4 8 9"/></svg>); }
 function UsersFillIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><circle cx="9" cy="8" r="3.4"/><circle cx="17" cy="9" r="2.7"/><path d="M2 20c0-3.6 3.1-5.8 7-5.8s7 2.2 7 5.8z"/><path d="M16.5 14.4c3 .3 5.5 2.3 5.5 5.6h-5.2c0-2-.4-3.9-.3-5.6z"/></svg>); }
+/* The reject dialog's badge — the same warning triangle the Hospital Portal
+   already uses for its "Emergency Cases" card, so the two screens agree. */
+function AlertIcon() { return (<svg viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17.5v.01"/></svg>); }
