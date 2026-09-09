@@ -37,7 +37,7 @@ client→server messages:
 | type | pushed to | raised when |
 |---|---|---|
 | LOW_STOCK_ALERT | that bank's BLOOD_BANK_STAFF | a stock change drops a group into Low or Critical |
-| DONATION_APPEAL | donors whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
+| DONATION_APPEAL | **eligible** donors (Business Rule 2) whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
 | NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
 | REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | a request is approved, rejected or fulfilled |
 
@@ -48,6 +48,11 @@ Delivery is per-user via `/user/queue/notifications` — nothing is broadcast.
 **Every push is also a Notification row, written first, in the same transaction as the event.** The
 socket is an accelerator; the row is the record. A client that was offline reads what it missed from
 `GET /api/notifications`, so no feature may depend on a push having been received.
+
+**A donation appeal never reaches an ineligible donor.** The Business Rule 2 filter is a donor-safety
+gate, not targeting: someone inside their 90-day recovery window must not be prompted toward another
+donation. Preview (`GET /api/appeals/reach`) and send (`POST /api/appeals`) share one audience
+calculation so the count shown before confirming is the set actually notified.
 
 ## Design System (frontend)
 
@@ -206,6 +211,7 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 
 ## Conventions
 
+- **At the end of every task, after listing files changed, commit and push as the closing step — not optional.** Run `git add`, then `git commit` with a clear, specific message describing what changed, then `git push`. A task is not finished until it is committed and pushed to `origin/main`. State in the summary that this was done, including the resulting commit hash.
 - **`bloodlink_dev` holds real data. Testing must never delete or overwrite a row it did not itself create.**
   This is not a style preference — it was violated in Phase 6 and destroyed the project owner's manually
   entered stock batches, which were unrecoverable (no backup, `archive_mode` is off). The rules:
