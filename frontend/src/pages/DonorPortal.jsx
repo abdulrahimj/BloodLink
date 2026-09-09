@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
+import NotificationBell from "../components/NotificationBell.jsx";
+import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
    BloodLink — Donor Portal
@@ -20,8 +22,14 @@ import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
    variant of the eligibility banner — all built from tokens already
    declared in this file, never a new visual language.
 
-   Donation Appeals stays a built-in empty state this phase (appeals are
-   a later phase); its panel head and layout are untouched.
+   Donation Appeals is now live. The panel is filled from this donor's own
+   DONATION_APPEAL notifications, which arrive over the WebSocket the moment a
+   blood bank sends one and are read back from GET /api/notifications on load
+   for any that came while the browser was closed. Per Business Rule 1 the
+   source named in an appeal is always a blood bank — hospitals request from
+   banks, they never reach a donor directly, and the backend has no path that
+   could produce one saying otherwise. The panel head and layout are the
+   mockup's, unchanged; only the empty fixture became real rows.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -63,6 +71,24 @@ function formatHeaderDate(date) {
   return `${MONTH_NAMES[date.getMonth()]} ${date.getDate()} ${date.getFullYear()}`;
 }
 
+/**
+ * "2 hrs ago" for a recent appeal, a plain date once it is old enough that a
+ * relative phrase stops being informative. Takes an Instant (with a time), unlike
+ * the LocalDate helpers above — an appeal sent this morning and one sent last week
+ * need to be told apart, which a date alone cannot do.
+ */
+function formatAppealTime(instantIso) {
+  const minutes = Math.floor((Date.now() - new Date(instantIso).getTime()) / 60000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return formatFullDate(instantIso.slice(0, 10));
+}
+
 /** "RB" from "Rahim Barrie" — first letter of up to the first two words. */
 function initials(fullName) {
   return fullName
@@ -91,6 +117,15 @@ export default function DonorPortal({ user, onSignOut }) {
   const [error, setError] = useState(null);
   // Only the header date needs "now"; computed once per mount rather than ticking.
   const [today] = useState(() => new Date());
+
+  // The bell, and the appeals panel below it, are both fed from here: one live
+  // socket per screen rather than one per feature.
+  const { notifications, unreadCount, connected, markAllRead } = useNotifications();
+
+  // A donor's appeals are exactly their DONATION_APPEAL notifications — the schema
+  // has no separate appeals table, and deliberately so (an appeal is an event, not
+  // a record). Capped at the same handful the panel's fixed height can show.
+  const appeals = notifications.filter((item) => item.type === "DONATION_APPEAL").slice(0, 4);
 
   useEffect(() => {
     let cancelled = false;
@@ -218,13 +253,11 @@ export default function DonorPortal({ user, onSignOut }) {
         .dn-top-right { display: flex; align-items: center; gap: clamp(10px, 1vw, 16px); }
         .dn-date { display: flex; align-items: center; gap: 8px; font-size: clamp(10px, 1.5vh, 13px); font-weight: 600; color: #3A3A3A; }
         .dn-date svg { width: clamp(14px, 2vh, 17px); height: clamp(14px, 2vh, 17px); }
-        .dn-bell { position: relative; display: grid; place-items: center; }
-        .dn-bell svg { width: clamp(16px, 2.3vh, 20px); height: clamp(16px, 2.3vh, 20px); }
-        .dn-bell::after {
-          content: ''; position: absolute; top: 0; right: 0;
-          width: 7px; height: 7px; border-radius: 50%;
-          background: var(--red); border: 1.5px solid var(--page-bg);
-        }
+        /* The bell moved to <NotificationBell>, which brings its own styles and
+           inherits the tokens declared above. The mockup's .dn-bell rules were a
+           fixed red dot that was always on; a count that is sometimes zero cannot
+           be drawn with a ::after pseudo-element, and leaving them here would mean
+           two sets of bell styles with only one bell. */
         .dn-avatar {
           width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
           border-radius: 50%; background: var(--navy);
@@ -404,7 +437,12 @@ export default function DonorPortal({ user, onSignOut }) {
           </div>
           <div className="dn-top-right">
             <div className="dn-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            <div className="dn-bell"><BellIcon /></div>
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              connected={connected}
+              onMarkAllRead={markAllRead}
+            />
             <div className="dn-avatar">{displayName ? initials(displayName) : ""}</div>
           </div>
         </div>
@@ -506,13 +544,34 @@ export default function DonorPortal({ user, onSignOut }) {
                     <div className="dn-panel-title">Donation Appeals</div>
                     <div className="dn-panel-link">From Makeni blood banks</div>
                   </div>
-                  {/* Appeals (blood bank → donor) are a later phase — built-in empty
-                      state for now, per Business Rule 1: never sourced from a hospital. */}
+                  {/* Real appeals, pushed by a blood bank (Business Rule 1: never
+                      sourced from a hospital). The badge carries the donor's own
+                      group rather than one parsed out of the message text —
+                      the message is written for a human, not for a parser, and
+                      an appeal only ever reaches donors of the group it names. */}
                   <div className="dn-list">
-                    <div className="dn-empty">
-                      No active appeals right now. Blood banks will appeal here when
-                      your group is needed.
-                    </div>
+                    {appeals.length === 0 && (
+                      <div className="dn-empty">
+                        No active appeals right now. Blood banks will appeal here when
+                        your group is needed.
+                      </div>
+                    )}
+                    {appeals.map((appeal) => (
+                      <div className="dn-item" key={appeal.id}>
+                        <div className="dn-item-badge">{profile.bloodType ?? "?"}</div>
+                        <div className="dn-item-body">
+                          <div className="dn-item-main">{appeal.message}</div>
+                          <div className="dn-item-sub">{formatAppealTime(appeal.createdAt)}</div>
+                        </div>
+                        {/* The backend no longer sends appeals to a donor inside
+                            their 90-day recovery window (Business Rule 2), so this
+                            guard is not what keeps them out — it covers the case
+                            where an appeal arrived while eligible and the donor has
+                            since donated. The appeal stays in their list; the
+                            invitation to act on it does not. */}
+                        {isEligible && <button type="button" className="dn-help">Respond</button>}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -556,7 +615,6 @@ function AwardIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><circle cx="12
 function GearIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><circle cx="12" cy="12" r="3.4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>); }
 function LogoutIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>); }
 function CalendarIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>); }
-function BellIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>); }
 function DropletIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M12 2S5 10 5 14.5a7 7 0 0 0 14 0C19 10 12 2 12 2z"/></svg>); }
 function GiftIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><rect x="3" y="9" width="18" height="12" rx="2"/><path d="M3 13h18M12 9v12M12 9S9.5 3 7 5.5 12 9 12 9zM12 9s2.5-6 5-3.5S12 9 12 9z"/></svg>); }
 function HeartFillIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M20.8 6.6a5 5 0 0 0-7.1 0L12 8.3l-1.7-1.7a5 5 0 0 0-7.1 7.1l8.8 8.8 8.8-8.8a5 5 0 0 0 0-7.1z"/></svg>); }

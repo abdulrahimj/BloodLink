@@ -8,7 +8,9 @@
 
 import { clearSession, getToken } from '../auth/session.js';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+/** Exported so the WebSocket client can open its socket against the same origin
+ *  the REST calls use — two base URLs would eventually disagree. */
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 
 /**
  * Error carrying the backend's ApiError payload.

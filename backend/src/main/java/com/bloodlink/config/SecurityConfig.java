@@ -2,6 +2,7 @@ package com.bloodlink.config;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -44,15 +45,20 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
+    /** Shared with WebSocketConfig via bloodlink.cors.allowed-origins, so REST and
+     *  the WebSocket handshake can never end up trusting different origins. */
+    private final List<String> allowedOrigins;
 
     SecurityConfig(
         JwtAuthenticationFilter jwtAuthenticationFilter,
         RestAuthenticationEntryPoint authenticationEntryPoint,
-        RestAccessDeniedHandler accessDeniedHandler
+        RestAccessDeniedHandler accessDeniedHandler,
+        @Value("${bloodlink.cors.allowed-origins}") List<String> allowedOrigins
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.accessDeniedHandler = accessDeniedHandler;
+        this.allowedOrigins = allowedOrigins;
     }
 
     @Bean
@@ -83,6 +89,16 @@ public class SecurityConfig {
                 // so without this it is refused and every unhandled 500 reaches the
                 // client disguised as a 401 — which hides the real fault.
                 .requestMatchers("/error").permitAll()
+                // The WebSocket handshake (and SockJS's /ws/info probe and fallback
+                // transports) cannot carry an Authorization header — the browser's
+                // WebSocket API provides no way to set one — so this filter chain has
+                // nothing to authenticate at that point and would reject every socket.
+                // Permitting the handshake is not permitting the socket: the token is
+                // required on the STOMP CONNECT frame immediately afterwards, and
+                // StompAuthChannelInterceptor closes the session if it is missing or
+                // invalid. A connection that gets past this line and no further can
+                // subscribe to nothing and receives nothing.
+                .requestMatchers("/ws/**").permitAll()
 
                 // --- Administrator: account management and aggregate reporting ---
                 .requestMatchers("/api/users/**", "/api/reports/**").hasRole(Role.ADMIN.name())
@@ -162,7 +178,7 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:5174", "http://localhost:5175"));
+        config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

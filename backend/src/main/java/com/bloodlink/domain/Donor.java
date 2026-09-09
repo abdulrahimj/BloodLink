@@ -62,16 +62,39 @@ public class Donor {
     private String address;
 
     /**
+     * The recovery period between donations (CLAUDE.md Business Rule 2).
+     *
+     * Lives here, on the entity that owns the rule, because three things now depend
+     * on it agreeing exactly: the status a donor is shown, the date their portal
+     * says they become eligible again, and — since it became a safety filter —
+     * which donors an appeal is allowed to reach. It was previously written out in
+     * two places; a change to one and not the other would have quietly let an
+     * appeal reach someone the same system was telling "you cannot donate yet".
+     */
+    public static final int ELIGIBILITY_WINDOW_DAYS = 90;
+
+    /**
      * Derived, never stored (CLAUDE.md Business Rule 2): eligible when the last
      * donation was more than 90 days ago, or there has never been one.
+     *
+     * "More than" is strict, so the boundary day is still ineligible and eligibility
+     * begins on day 91 — which is what DonorService.eligibleSince reports back to
+     * the donor, and why it adds one to the window.
      */
     @Transient
     public EligibilityStatus getEligibilityStatus() {
         if (lastDonationDate == null) {
             return EligibilityStatus.ELIGIBLE;
         }
-        return lastDonationDate.isBefore(LocalDate.now().minusDays(90))
+        return lastDonationDate.isBefore(LocalDate.now().minusDays(ELIGIBILITY_WINDOW_DAYS))
             ? EligibilityStatus.ELIGIBLE
             : EligibilityStatus.INELIGIBLE;
+    }
+
+    /** Reads as a sentence at the call sites that gate on this, and keeps the
+     *  comparison against the enum in one place rather than at each of them. */
+    @Transient
+    public boolean isEligibleToDonate() {
+        return getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
     }
 }

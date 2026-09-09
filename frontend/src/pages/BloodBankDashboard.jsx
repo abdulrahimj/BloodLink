@@ -3,6 +3,8 @@ import { getInventory } from "../api/inventory.js";
 import { getBankDashboard } from "../api/bloodBanks.js";
 import { actOnRequest, getRequests } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import NotificationBell from "../components/NotificationBell.jsx";
+import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
    BloodLink — Blood Bank Dashboard (home view)
@@ -34,6 +36,15 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
    blood bank in Makeni, not only this one, and the hospital has to start
    again. That consequence is invisible from the button, so it is spelled out
    before the click is submitted rather than explained after the fact.
+
+   The screen is also live. A WebSocket session (see realtime/useNotifications)
+   feeds the bell in the header, and two of the notification types it carries
+   change what the rest of the page should be showing: a NEW_REQUEST means a
+   row belongs in the requests panel, and a LOW_STOCK_ALERT means a figure in
+   the inventory table has moved. Both trigger the same full reload the action
+   buttons already use, so the panels are refreshed from the API rather than
+   patched from the notification's wording — the alert is what says something
+   changed, never what the new state is.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -79,6 +90,39 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
     ]);
     return { inventory, dashboardData, requestList };
   }, [bloodBankId]);
+
+  /**
+   * Reloads and applies, without touching the page-level loading or error state.
+   *
+   * Used by the live notification handler below, where the reload is something the
+   * screen did on its own rather than something the operator asked for: blanking a
+   * populated dashboard to "Loading…" because a notification arrived, or replacing
+   * it with an error banner because one background refresh failed, would both be
+   * far more disruptive than briefly showing figures a few seconds out of date.
+   */
+  const refresh = useCallback(async () => {
+    try {
+      const { inventory, dashboardData, requestList } = await load();
+      setStock(inventory);
+      setDashboard(dashboardData);
+      setRequests(requestList);
+    } catch {
+      // Left as it was; the next action or notification will try again.
+    }
+  }, [load]);
+
+  // The header bell, plus the live trigger for the refresh above. Notifications
+  // about this bank's own stock and about newly raised hospital requests are the
+  // two that make what is on screen out of date; a request status change is this
+  // bank's own action echoed back, and the panel has already been reloaded by the
+  // click that caused it.
+  const { notifications, unreadCount, connected, markAllRead } = useNotifications({
+    onNotification: (notification) => {
+      if (notification.type === "NEW_REQUEST" || notification.type === "LOW_STOCK_ALERT") {
+        refresh();
+      }
+    },
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -243,9 +287,11 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-top-right { display: flex; align-items: center; gap: clamp(10px, 1vw, 16px); }
         .bb-date { display: flex; align-items: center; gap: 8px; font-size: clamp(10px, 1.5vh, 13px); font-weight: 600; color: #3A3A3A; }
         .bb-date svg { width: clamp(14px, 2vh, 17px); height: clamp(14px, 2vh, 17px); }
-        .bb-bell { position: relative; display: grid; place-items: center; }
-        .bb-bell svg { width: clamp(16px, 2.3vh, 20px); height: clamp(16px, 2.3vh, 20px); }
-        .bb-bell::after { content:''; position:absolute; top:0; right:0; width:7px; height:7px; border-radius:50%; background:var(--red); border:1.5px solid var(--page-bg); }
+        /* The bell moved to <NotificationBell>, which brings its own styles and
+           inherits the tokens declared above. The mockup's .bb-bell rules were a
+           fixed red dot that was always on; a count that is sometimes zero cannot
+           be drawn with a ::after pseudo-element, and leaving them here would mean
+           two sets of bell styles with only one bell. */
         .bb-avatar {
           width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
           border-radius: 50%; background: var(--navy); display: grid; place-items: center;
@@ -427,7 +473,12 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           </div>
           <div className="bb-top-right">
             <div className="bb-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            <div className="bb-bell"><BellIcon /></div>
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              connected={connected}
+              onMarkAllRead={markAllRead}
+            />
             <div className="bb-avatar">{initials(user.fullName)}</div>
           </div>
         </div>
@@ -639,7 +690,6 @@ function ChartIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M4 20
 function GearIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><circle cx="12" cy="12" r="3.4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>); }
 function LogoutIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>); }
 function CalendarIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>); }
-function BellIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>); }
 function DropletIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M12 2S5 10 5 14.5a7 7 0 0 0 14 0C19 10 12 2 12 2z"/></svg>); }
 function GiftIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><rect x="3" y="9" width="18" height="12" rx="2"/><path d="M3 13h18M12 9v12M12 9S9.5 3 7 5.5 12 9 12 9zM12 9s2.5-6 5-3.5S12 9 12 9z"/></svg>); }
 function HourglassIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><path d="M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9s8 4 8 9"/></svg>); }

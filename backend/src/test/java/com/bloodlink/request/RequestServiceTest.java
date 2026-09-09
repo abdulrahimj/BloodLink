@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
@@ -28,6 +29,7 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -58,13 +60,22 @@ class RequestServiceTest {
     @Mock private BloodInventoryRepository bloodInventoryRepository;
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private UserRepository userRepository;
+    @Mock private NotificationService notificationService;
 
     private RequestService service;
 
     @BeforeEach
     void setUp() {
+        // A real ActingBankResolver over the mocked repositories, not a mock of it.
+        // "Which bank is this caller acting as" moved out of RequestService when
+        // donation appeals needed the same rule, and stubbing it here would quietly
+        // delete the coverage the "who may act" tests below already give it.
         service = new RequestService(
-            bloodRequestRepository, bloodInventoryRepository, bloodBankRepository, userRepository
+            bloodRequestRepository,
+            bloodInventoryRepository,
+            userRepository,
+            new ActingBankResolver(userRepository, bloodBankRepository),
+            notificationService
         );
     }
 

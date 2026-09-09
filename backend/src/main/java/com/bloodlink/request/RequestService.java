@@ -7,6 +7,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
@@ -15,7 +16,7 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
-import com.bloodlink.repository.BloodBankRepository;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
@@ -45,19 +46,22 @@ public class RequestService {
 
     private final BloodRequestRepository bloodRequestRepository;
     private final BloodInventoryRepository bloodInventoryRepository;
-    private final BloodBankRepository bloodBankRepository;
     private final UserRepository userRepository;
+    private final ActingBankResolver actingBankResolver;
+    private final NotificationService notificationService;
 
     RequestService(
         BloodRequestRepository bloodRequestRepository,
         BloodInventoryRepository bloodInventoryRepository,
-        BloodBankRepository bloodBankRepository,
-        UserRepository userRepository
+        UserRepository userRepository,
+        ActingBankResolver actingBankResolver,
+        NotificationService notificationService
     ) {
         this.bloodRequestRepository = bloodRequestRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
-        this.bloodBankRepository = bloodBankRepository;
         this.userRepository = userRepository;
+        this.actingBankResolver = actingBankResolver;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -99,7 +103,15 @@ public class RequestService {
         request.setPatientReference(blankToNull(payload.patientReference()));
         // createdAt is set by the entity's @PrePersist.
 
-        return BloodRequestResponse.from(bloodRequestRepository.save(request));
+        BloodRequest saved = bloodRequestRepository.save(request);
+
+        // Puts the request in front of blood bank staff without waiting for them to
+        // refresh the dashboard. This is the whole point of the request being
+        // real-time: an EMERGENCY request that sits unseen until someone happens to
+        // reload the page is a paper process with extra steps.
+        notificationService.notifyNewRequest(saved);
+
+        return BloodRequestResponse.from(saved);
     }
 
     /**
@@ -116,7 +128,7 @@ public class RequestService {
      * bank's feed, exactly as the Blood Bank portal's bank picker already does for
      * inventory. Assigned staff ignore it entirely — their own bank always wins, so
      * passing another bank's id cannot widen what they see. Acting on any of it is a
-     * separate check in {@link #resolveActingBank}.
+     * separate check, made by ActingBankResolver.
      */
     @Transactional(readOnly = true)
     public List<BloodRequestResponse> listRequests(AuthenticatedUser principal, UUID bloodBankId) {
@@ -157,7 +169,7 @@ public class RequestService {
      */
     @Transactional
     public BloodRequestResponse act(UUID requestId, RequestActionPayload payload, AuthenticatedUser principal) {
-        BloodBank actingBank = resolveActingBank(payload, principal);
+        BloodBank actingBank = actingBankResolver.resolve(payload.bloodBankId(), principal, "act on a blood request");
 
         BloodRequest request = bloodRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new NotFoundException("No blood request found for this id."));
@@ -168,7 +180,16 @@ public class RequestService {
             case FULFIL -> fulfil(request, actingBank);
         }
 
-        return BloodRequestResponse.from(bloodRequestRepository.save(request));
+        BloodRequest saved = bloodRequestRepository.save(request);
+
+        // Told to the hospital that raised it, and only after the transition above
+        // has succeeded — an illegal transition or a stock shortfall throws before
+        // reaching here, so a hospital is never told a request was approved when the
+        // approval was refused. The push itself waits for the commit as well; see
+        // NotificationPublisher.
+        notificationService.notifyRequestStatusChange(saved);
+
+        return BloodRequestResponse.from(saved);
     }
 
     /**
@@ -234,43 +255,20 @@ public class RequestService {
             throw insufficientStock(request, stock.getUnitsAvailable());
         }
 
-        stock.setUnitsAvailable(stock.getUnitsAvailable() - request.getUnitsRequested());
+        int unitsBefore = stock.getUnitsAvailable();
+        stock.setUnitsAvailable(unitsBefore - request.getUnitsRequested());
         // touch() on the entity's @PreUpdate refreshes lastUpdated.
         bloodInventoryRepository.save(stock);
 
         request.setStatus(RequestStatus.FULFILLED);
-    }
 
-    /**
-     * Which bank the caller is acting as.
-     *
-     * BLOOD_BANK_STAFF act as their own bank and nothing else — the body's
-     * bloodBankId is ignored outright, so it cannot be used to act on another bank's
-     * behalf. ADMIN belongs to no bank and so must name one, which is the same split
-     * InventoryService already applies to inventory writes. Anyone else (hospital
-     * staff, and donors if the URL rules ever loosened) is refused: hospitals raise
-     * requests, they do not decide their own request's fate.
-     */
-    private BloodBank resolveActingBank(RequestActionPayload payload, AuthenticatedUser principal) {
-        if (principal.getRole() == Role.BLOOD_BANK_STAFF) {
-            User user = requireUser(principal);
-            if (user.getBloodBank() == null) {
-                throw new AccessDeniedException("This account is not assigned to a blood bank.");
-            }
-            return user.getBloodBank();
-        }
-
-        if (principal.getRole() == Role.ADMIN) {
-            if (payload.bloodBankId() == null) {
-                // 400, not 403: an administrator may do this, they just have not said
-                // which bank they are acting for.
-                throw new IllegalArgumentException("A blood bank must be named when acting as an administrator.");
-            }
-            return bloodBankRepository.findById(payload.bloodBankId())
-                .orElseThrow(() -> new NotFoundException("No blood bank found for this id."));
-        }
-
-        throw new AccessDeniedException("Only blood bank staff can act on a blood request.");
+        // Issuing units is the ordinary way a group falls into Low or Critical, so
+        // this is the low-stock alert's main trigger. Raised here rather than inside
+        // the inventory save so the alert reflects the deduction that actually
+        // happened, after every check above has passed.
+        notificationService.notifyStockCrossing(
+            actingBank, request.getBloodType(), unitsBefore, stock.getUnitsAvailable()
+        );
     }
 
     /** Guards one lifecycle edge, naming both the current and required state so the

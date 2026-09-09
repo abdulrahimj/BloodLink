@@ -24,6 +24,7 @@ import com.bloodlink.inventory.dto.AddBatchRequest;
 import com.bloodlink.inventory.dto.CompositionSlice;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.inventory.dto.InventorySummaryResponse;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -48,17 +49,20 @@ public class InventoryService {
     private final BloodInventoryRepository bloodInventoryRepository;
     private final UserRepository userRepository;
     private final BloodRequestRepository bloodRequestRepository;
+    private final NotificationService notificationService;
 
     InventoryService(
         BloodBankRepository bloodBankRepository,
         BloodInventoryRepository bloodInventoryRepository,
         UserRepository userRepository,
-        BloodRequestRepository bloodRequestRepository
+        BloodRequestRepository bloodRequestRepository,
+        NotificationService notificationService
     ) {
         this.bloodBankRepository = bloodBankRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
         this.userRepository = userRepository;
         this.bloodRequestRepository = bloodRequestRepository;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -149,7 +153,8 @@ public class InventoryService {
                 return created;
             });
 
-        row.setUnitsAvailable(row.getUnitsAvailable() + request.unitsToAdd());
+        int unitsBefore = row.getUnitsAvailable();
+        row.setUnitsAvailable(unitsBefore + request.unitsToAdd());
         row.setExpiryDate(
             row.getExpiryDate() == null
                 ? request.expiryDate()
@@ -157,6 +162,13 @@ public class InventoryService {
         );
         // touch() on the entity's @PrePersist/@PreUpdate sets lastUpdated.
         BloodInventory saved = bloodInventoryRepository.save(row);
+
+        // Every path that changes a stock figure reports the change, so the
+        // low-stock rule lives in one place rather than being re-derived per caller.
+        // Adding units can only improve a level, so in practice this raises nothing
+        // today — it is here so that a future path through addBatch which lowers a
+        // count (a correction, a write-off) cannot silently skip the alert.
+        notificationService.notifyStockCrossing(bank, bloodType, unitsBefore, saved.getUnitsAvailable());
 
         return toResponse(bloodType, saved);
     }

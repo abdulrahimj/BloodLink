@@ -1,0 +1,403 @@
+package com.bloodlink.notification;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.UUID;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodRequest;
+import com.bloodlink.domain.Donor;
+import com.bloodlink.domain.Hospital;
+import com.bloodlink.domain.Notification;
+import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.BloodType;
+import com.bloodlink.domain.enums.NotificationType;
+import com.bloodlink.domain.enums.RequestStatus;
+import com.bloodlink.domain.enums.Role;
+import com.bloodlink.domain.enums.UrgencyLevel;
+import com.bloodlink.notification.NotificationService.AppealReach;
+import com.bloodlink.notification.dto.NotificationResponse;
+import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.DonorRepository;
+import com.bloodlink.repository.NotificationRepository;
+import com.bloodlink.repository.UserRepository;
+
+/**
+ * Covers the decisions this service makes that a screen cannot show you were wrong
+ * until it is too late: whether a stock alert fires at all, who receives it, and the
+ * two rules governing appeals — Business Rule 1, that one can only ever name a blood
+ * bank as its source, and Business Rule 2, that one must never reach a donor still
+ * inside their recovery window.
+ *
+ * The recovery-window tests deliberately pin both sides of the boundary. "More than
+ * 90 days" is the kind of wording an off-by-one hides inside, and here an off-by-one
+ * means prompting a donor to give a day too early.
+ */
+@ExtendWith(MockitoExtension.class)
+class NotificationServiceTest {
+
+    private static final UUID BANK_ID = UUID.randomUUID();
+    private static final UUID OTHER_BANK_ID = UUID.randomUUID();
+    private static final UUID HOSPITAL_ID = UUID.randomUUID();
+
+    @Mock private NotificationRepository notificationRepository;
+    @Mock private UserRepository userRepository;
+    @Mock private DonorRepository donorRepository;
+    @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private NotificationPublisher publisher;
+
+    private NotificationService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new NotificationService(
+            notificationRepository, userRepository, donorRepository, bloodInventoryRepository, publisher
+        );
+    }
+
+    // ---------- fixtures ----------
+
+    private static BloodBank bank(UUID id, String name) {
+        BloodBank bank = new BloodBank();
+        bank.setId(id);
+        bank.setName(name);
+        return bank;
+    }
+
+    private static User user(String fullName) {
+        User user = new User();
+        user.setId(UUID.randomUUID());
+        user.setFullName(fullName);
+        return user;
+    }
+
+    /** A donor who has never given blood — eligible from the day they registered. */
+    private static Donor donor(User user) {
+        Donor donor = new Donor();
+        donor.setId(UUID.randomUUID());
+        donor.setUser(user);
+        return donor;
+    }
+
+    /** A donor whose last donation was {@code daysAgo} days back. */
+    private static Donor donorWhoGave(User user, int daysAgo) {
+        Donor donor = donor(user);
+        donor.setLastDonationDate(LocalDate.now().minusDays(daysAgo));
+        return donor;
+    }
+
+    private static BloodRequest request(RequestStatus status, BloodBank fulfiller) {
+        Hospital hospital = new Hospital();
+        hospital.setId(HOSPITAL_ID);
+        hospital.setName("Makeni Regional Hospital");
+
+        BloodRequest request = new BloodRequest();
+        request.setId(UUID.randomUUID());
+        request.setHospital(hospital);
+        request.setBloodType(BloodType.O_NEGATIVE);
+        request.setUnitsRequested(4);
+        request.setUrgencyLevel(UrgencyLevel.EMERGENCY);
+        request.setStatus(status);
+        request.setFulfilledByBloodBank(fulfiller);
+        return request;
+    }
+
+    /** saveAll() returns what it was given, as the real repository does. Ids stay
+     *  null, which is fine — nothing under test reads them back. */
+    private void echoSavedNotifications() {
+        when(notificationRepository.saveAll(any()))
+            .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    /** The rows one trigger wrote, in the order they were written. */
+    private List<Notification> capturedRows() {
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Notification>> captor = ArgumentCaptor.forClass(List.class);
+        verify(notificationRepository).saveAll(captor.capture());
+        return captor.getValue();
+    }
+
+    // ---------- LOW_STOCK_ALERT ----------
+
+    @Test
+    void aDropIntoLowAlertsThatBanksOwnStaff() {
+        User staff = user("Aminata Kamara");
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+            .thenReturn(List.of(staff));
+        echoSavedNotifications();
+
+        // 42 -> 38 crosses the 40-unit Low threshold.
+        service.notifyStockCrossing(bank(BANK_ID, "Makeni Regional Blood Bank"), BloodType.O_NEGATIVE, 42, 38);
+
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.LOW_STOCK_ALERT);
+        assertThat(rows.get(0).getRecipient()).isEqualTo(staff);
+        assertThat(rows.get(0).getMessage())
+            .contains("O-", "Makeni Regional Blood Bank", "38 units", "Low");
+    }
+
+    @Test
+    void aDropIntoCriticalIsNamedAsCritical() {
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+            .thenReturn(List.of(user("Aminata Kamara")));
+        echoSavedNotifications();
+
+        // 20 -> 12 skips Low entirely and lands below the 15-unit Critical threshold.
+        service.notifyStockCrossing(bank(BANK_ID, "Makeni Regional Blood Bank"), BloodType.A_POSITIVE, 20, 12);
+
+        assertThat(capturedRows().get(0).getMessage()).contains("Critical");
+    }
+
+    @Test
+    void fallingFurtherWithinTheSameLevelRaisesNothing() {
+        // Already Critical at 12, still Critical at 10. Staff have been told once;
+        // repeating it on every issue is what makes an alert worth ignoring.
+        service.notifyStockCrossing(bank(BANK_ID, "Makeni Regional Blood Bank"), BloodType.O_NEGATIVE, 12, 10);
+
+        verify(notificationRepository, never()).saveAll(any());
+        verifyNoInteractions(publisher);
+    }
+
+    @Test
+    void restockingRaisesNothing() {
+        // 10 -> 50 crosses two thresholds upwards. An alert here would tell staff
+        // their stock had "fallen" immediately after they added to it.
+        service.notifyStockCrossing(bank(BANK_ID, "Makeni Regional Blood Bank"), BloodType.O_NEGATIVE, 10, 50);
+
+        verify(notificationRepository, never()).saveAll(any());
+    }
+
+    // ---------- DONATION_APPEAL ----------
+
+    @Test
+    void anAppealReachesEveryEligibleDonorOfThatGroupAndNamesTheBank() {
+        User first = user("Fatmata Sesay");
+        User second = user("Ibrahim Conteh");
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+            .thenReturn(List.of(donor(first), donorWhoGave(second, 200)));
+        echoSavedNotifications();
+
+        AppealReach reach = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, "Drive at the lab on Saturday."
+        );
+
+        assertThat(reach.notified()).isEqualTo(2);
+        assertThat(reach.skippedIneligible()).isZero();
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(2);
+        assertThat(rows).allSatisfy(row -> {
+            assertThat(row.getType()).isEqualTo(NotificationType.DONATION_APPEAL);
+            // Business Rule 1: the source a donor sees is a blood bank, never a hospital.
+            assertThat(row.getMessage()).startsWith("Holy Spirit Blood Bank needs O- donors");
+            assertThat(row.getMessage()).endsWith("Drive at the lab on Saturday.");
+        });
+        assertThat(rows).extracting(Notification::getRecipient).containsExactly(first, second);
+    }
+
+    @Test
+    void anAppealNeverReachesADonorStillInsideTheRecoveryWindow() {
+        User eligible = user("Fatmata Sesay");
+        User recovering = user("Ibrahim Conteh");
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+            .thenReturn(List.of(donor(eligible), donorWhoGave(recovering, 10)));
+        echoSavedNotifications();
+
+        AppealReach reach = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
+        );
+
+        // The safety rule: a donor who gave ten days ago is not prompted toward
+        // another donation, matching blood group or not.
+        assertThat(reach.notified()).isEqualTo(1);
+        assertThat(reach.skippedIneligible()).isEqualTo(1);
+        assertThat(capturedRows()).extracting(Notification::getRecipient).containsExactly(eligible);
+    }
+
+    @Test
+    void theRecoveryWindowsLastDayIsStillIneligible() {
+        // Business Rule 2 says "more than 90 days", so day 90 is inside the window
+        // and day 91 is the first day out of it. An off-by-one here would prompt a
+        // donor a day early, which is the whole failure this rule exists to prevent.
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+            .thenReturn(List.of(donorWhoGave(user("Day 90"), 90)));
+        echoSavedNotifications();
+
+        AppealReach onTheBoundary = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
+        );
+
+        assertThat(onTheBoundary.notified()).isZero();
+        assertThat(onTheBoundary.skippedIneligible()).isEqualTo(1);
+        verify(notificationRepository).saveAll(List.of());
+    }
+
+    @Test
+    void aDonorOneDayPastTheWindowIsReached() {
+        User justEligible = user("Day 91");
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+            .thenReturn(List.of(donorWhoGave(justEligible, 91)));
+        echoSavedNotifications();
+
+        AppealReach reach = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
+        );
+
+        assertThat(reach.notified()).isEqualTo(1);
+        assertThat(capturedRows()).extracting(Notification::getRecipient).containsExactly(justEligible);
+    }
+
+    @Test
+    void anAppealWhereEveryMatchingDonorIsRecoveringWritesNothingButSaysWhy() {
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+            .thenReturn(List.of(donorWhoGave(user("A"), 5), donorWhoGave(user("B"), 40)));
+        echoSavedNotifications();
+
+        AppealReach reach = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
+        );
+
+        // Distinguishable from "no donors have this group at all", which is what the
+        // second figure exists for — the two need opposite responses from the bank.
+        assertThat(reach.notified()).isZero();
+        assertThat(reach.skippedIneligible()).isEqualTo(2);
+    }
+
+    @Test
+    void anAppealWithNoMatchingDonorsReportsZeroRatherThanFailing() {
+        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE)).thenReturn(List.of());
+        echoSavedNotifications();
+
+        AppealReach reach = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.AB_NEGATIVE, null
+        );
+
+        assertThat(reach.notified()).isZero();
+        assertThat(reach.skippedIneligible()).isZero();
+    }
+
+    // ---------- NEW_REQUEST ----------
+
+    @Test
+    void aNewRequestAlertsOnlyTheBanksThatCouldCoverIt() {
+        User capableStaff = user("Aminata Kamara");
+        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+            .thenReturn(List.of(BANK_ID));
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+            .thenReturn(List.of(capableStaff));
+        echoSavedNotifications();
+
+        service.notifyNewRequest(request(RequestStatus.PENDING, null));
+
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.NEW_REQUEST);
+        assertThat(rows.get(0).getRecipient()).isEqualTo(capableStaff);
+        assertThat(rows.get(0).getMessage()).contains("Makeni Regional Hospital", "4 units", "O-", "Emergency");
+        // The bank that could not cover it was never looked up, let alone written to.
+        verify(userRepository, never()).findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID);
+    }
+
+    @Test
+    void aRequestNoBankCanCoverStillAlertsEveryBank() {
+        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+            .thenReturn(List.of());
+        when(userRepository.findByRole(Role.BLOOD_BANK_STAFF))
+            .thenReturn(List.of(user("Aminata Kamara"), user("Mohamed Bangura")));
+        echoSavedNotifications();
+
+        service.notifyNewRequest(request(RequestStatus.PENDING, null));
+
+        // The alternative is silence on exactly the request that most needs a human.
+        assertThat(capturedRows()).hasSize(2);
+    }
+
+    // ---------- REQUEST_STATUS_CHANGE ----------
+
+    @Test
+    void anApprovalTellsTheRaisingHospitalWhichBankTookIt() {
+        User hospitalStaff = user("Isatu Turay");
+        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+            .thenReturn(List.of(hospitalStaff));
+        echoSavedNotifications();
+
+        service.notifyRequestStatusChange(
+            request(RequestStatus.APPROVED, bank(BANK_ID, "Makeni Regional Blood Bank"))
+        );
+
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.REQUEST_STATUS_CHANGE);
+        assertThat(rows.get(0).getRecipient()).isEqualTo(hospitalStaff);
+        assertThat(rows.get(0).getMessage()).contains("approved by Makeni Regional Blood Bank");
+    }
+
+    @Test
+    void aRejectionSaysItClosesTheRequestForEveryBank() {
+        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+            .thenReturn(List.of(user("Isatu Turay")));
+        echoSavedNotifications();
+
+        // Rejection leaves no fulfilling bank, so the message cannot name one — and
+        // the consequence the hospital must act on is that no other bank can either.
+        service.notifyRequestStatusChange(request(RequestStatus.REJECTED, null));
+
+        assertThat(capturedRows().get(0).getMessage())
+            .contains("rejected", "every blood bank", "submit a new request");
+    }
+
+    @Test
+    void aRequestStillPendingNotifiesNobody() {
+        service.notifyRequestStatusChange(request(RequestStatus.PENDING, null));
+
+        verify(notificationRepository, never()).saveAll(any());
+        verifyNoInteractions(publisher);
+    }
+
+    // ---------- delivery ----------
+
+    @Test
+    void everyWrittenRowIsAlsoHandedToThePublisher() {
+        User staff = user("Aminata Kamara");
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+            .thenReturn(List.of(staff));
+        echoSavedNotifications();
+
+        service.notifyStockCrossing(bank(BANK_ID, "Makeni Regional Blood Bank"), BloodType.O_NEGATIVE, 42, 38);
+
+        // The row is the record; the push is the accelerator. Both, or the live
+        // screen and the database disagree about what happened.
+        verify(publisher).publish(eq(staff.getId()), any(NotificationResponse.class));
+    }
+
+    @Test
+    void oneRecipientReachedByTwoBanksIsWrittenToOnce() {
+        User shared = user("Aminata Kamara");
+        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+            .thenReturn(List.of(BANK_ID, OTHER_BANK_ID));
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+            .thenReturn(List.of(shared));
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+            .thenReturn(List.of(shared));
+        echoSavedNotifications();
+
+        service.notifyNewRequest(request(RequestStatus.PENDING, null));
+
+        assertThat(capturedRows()).hasSize(1);
+    }
+}

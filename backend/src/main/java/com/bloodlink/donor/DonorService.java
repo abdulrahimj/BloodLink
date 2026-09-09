@@ -29,9 +29,6 @@ public class DonorService {
      *  each of which can go to a different patient, hence "up to 3 per donation". */
     private static final int LIVES_PER_UNIT = 3;
 
-    /** Business Rule 2: eligible once more than 90 days have passed, i.e. from day 91. */
-    private static final int ELIGIBILITY_WINDOW_DAYS = 90;
-
     private final DonorRepository donorRepository;
     private final DonationRepository donationRepository;
 
@@ -101,7 +98,9 @@ public class DonorService {
         if (donor.getLastDonationDate() == null) {
             return donor.getUser().getCreatedAt().atZone(ZoneOffset.UTC).toLocalDate();
         }
-        return donor.getLastDonationDate().plusDays(ELIGIBILITY_WINDOW_DAYS + 1);
+        // +1 because Business Rule 2's "more than" is strict: the window's last day
+        // is still ineligible, so eligibility begins the day after it.
+        return donor.getLastDonationDate().plusDays(Donor.ELIGIBILITY_WINDOW_DAYS + 1);
     }
 
     /**

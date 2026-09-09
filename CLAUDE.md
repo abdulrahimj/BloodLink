@@ -30,8 +30,24 @@ Application Layer Spring Boot: REST API (controllers/services) + WebSocket serve
 Data Layer         PostgreSQL, accessed via Spring Data JPA
 ```
 
-REST is synchronous (requests, CRUD). WebSocket is one-directional server→client push, used only for:
-low-stock alerts to blood bank staff, and donation appeals to donors.
+REST is synchronous (requests, CRUD). WebSocket is one-directional server→client push, carrying all
+four Notification types and nothing else — there are no `@MessageMapping` handlers and no
+client→server messages:
+
+| type | pushed to | raised when |
+|---|---|---|
+| LOW_STOCK_ALERT | that bank's BLOOD_BANK_STAFF | a stock change drops a group into Low or Critical |
+| DONATION_APPEAL | donors whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
+| NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
+| REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | a request is approved, rejected or fulfilled |
+
+STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
+it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
+Delivery is per-user via `/user/queue/notifications` — nothing is broadcast.
+
+**Every push is also a Notification row, written first, in the same transaction as the event.** The
+socket is an accelerator; the row is the record. A client that was offline reads what it missed from
+`GET /api/notifications`, so no feature may depend on a push having been received.
 
 ## Design System (frontend)
 

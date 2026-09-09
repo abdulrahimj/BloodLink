@@ -3,6 +3,8 @@ import { getBloodBanks } from "../api/bloodBanks.js";
 import { getInventory } from "../api/inventory.js";
 import { getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import NotificationBell from "../components/NotificationBell.jsx";
+import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
    BloodLink — Hospital Portal
@@ -22,6 +24,15 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
    REQUESTS fixtures are replaced with fetched data, the stat cards are derived
    from the real request list, and a loading/error/submitting set of states was
    added using the same idiom (and the same tokens) as the other wired portals.
+
+   The screen is live. A WebSocket session (see realtime/useNotifications) feeds
+   the bell in the header, and the one type a hospital receives —
+   REQUEST_STATUS_CHANGE — is precisely the news this screen exists to show: a
+   request the clerk raised has been approved, rejected or fulfilled by a blood
+   bank. That is a decision taken on another screen in another building, so
+   without the push it would sit unnoticed until someone thought to refresh.
+   Arrival triggers a reload rather than patching the row from the message text:
+   the notification is what says something changed, never what the new state is.
    ================================================================ */
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
@@ -95,6 +106,9 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
    * loaded once here rather than refreshed after every submission — submitting a
    * request does not change stock (only a bank fulfilling it does), so there
    * would be nothing new to show.
+   *
+   * A bank fulfilling one is exactly the case that clause names, and it now has a
+   * trigger: see refresh below, which a REQUEST_STATUS_CHANGE calls.
    */
   const load = useCallback(async () => {
     const [myRequests, banks] = await Promise.all([getRequests(), getBloodBanks()]);
@@ -103,6 +117,42 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
     const inventories = await Promise.all(banks.map((bank) => getInventory(bank.id)));
     return { myRequests, inventories };
   }, []);
+
+  /**
+   * Reloads and applies, without touching the page-level loading or error state.
+   *
+   * This reload is something the screen did on its own rather than something the
+   * clerk asked for, so it must not blank a populated desk to "Loading…", and must
+   * not replace it with an error banner if one background refresh fails. Either
+   * would be far more disruptive than briefly showing a status a few seconds out
+   * of date. Same reasoning, and same shape, as the Blood Bank Dashboard's.
+   *
+   * A half-typed request in the form is untouched — none of the form's state is
+   * written here, so a notification arriving mid-typing cannot clear the ward
+   * field or reset the blood group under the clerk's hands.
+   */
+  const refresh = useCallback(async () => {
+    try {
+      const { myRequests, inventories } = await load();
+      setRequests(myRequests);
+      setAvailability(citywideAvailability(inventories));
+    } catch {
+      // Left as it was; the next notification or page load will try again.
+    }
+  }, [load]);
+
+  /**
+   * The header bell, plus the live trigger for the refresh above.
+   *
+   * Every type this account can receive is acted on, which is why there is no
+   * type check here as there is on the Blood Bank Dashboard: a hospital is only
+   * ever sent REQUEST_STATUS_CHANGE, and that always makes both the tracking list
+   * and — when the change was a fulfilment — the citywide availability panel
+   * stale at once. Reloading both is the honest response to either.
+   */
+  const { notifications, unreadCount, connected, markAllRead } = useNotifications({
+    onNotification: () => refresh(),
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -276,13 +326,11 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
           font-size: clamp(10px, 1.5vh, 13px); font-weight: 600; color: #3A3A3A;
         }
         .hp-date svg { width: clamp(14px, 2vh, 17px); height: clamp(14px, 2vh, 17px); }
-        .hp-bell { position: relative; display: grid; place-items: center; }
-        .hp-bell svg { width: clamp(16px, 2.3vh, 20px); height: clamp(16px, 2.3vh, 20px); }
-        .hp-bell::after {
-          content: ''; position: absolute; top: 0; right: 0;
-          width: 7px; height: 7px; border-radius: 50%;
-          background: var(--red); border: 1.5px solid var(--page-bg);
-        }
+        /* The bell moved to <NotificationBell>, which brings its own styles and
+           inherits the tokens declared above. The mockup's .hp-bell rules were a
+           fixed red dot that was always on; a count that is sometimes zero cannot
+           be drawn with a ::after pseudo-element, and leaving them here would mean
+           two sets of bell styles with only one bell. */
         .hp-avatar {
           width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
           border-radius: 50%; background: var(--navy);
@@ -470,7 +518,12 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
           </div>
           <div className="hp-top-right">
             <div className="hp-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            <div className="hp-bell"><BellIcon /></div>
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              connected={connected}
+              onMarkAllRead={markAllRead}
+            />
             <div className="hp-avatar">{initials(user.fullName)}</div>
           </div>
         </div>
@@ -631,7 +684,6 @@ function ChartIcon() { return (<svg viewBox="0 0 24 24" {...S}><path d="M4 20V10
 function GearIcon() { return (<svg viewBox="0 0 24 24" {...S}><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7.5a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1.6z" transform="scale(0.86) translate(2 2)"/></svg>); }
 function LogoutIcon() { return (<svg viewBox="0 0 24 24" {...S}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>); }
 function CalendarIcon() { return (<svg viewBox="0 0 24 24" {...S}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>); }
-function BellIcon() { return (<svg viewBox="0 0 24 24" {...S}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>); }
 function FileIcon() { return (<svg viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 14h6M9 18h4"/></svg>); }
 function HourglassIcon() { return (<svg viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9s8 4 8 9"/></svg>); }
 function CheckIcon() { return (<svg viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12.5 9.5 18 20 7"/></svg>); }

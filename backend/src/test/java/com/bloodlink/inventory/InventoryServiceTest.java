@@ -27,6 +27,7 @@ import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.inventory.dto.AddBatchRequest;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.inventory.dto.InventorySummaryResponse;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -49,12 +50,15 @@ class InventoryServiceTest {
     @Mock private BloodInventoryRepository bloodInventoryRepository;
     @Mock private UserRepository userRepository;
     @Mock private BloodRequestRepository bloodRequestRepository;
+    @Mock private NotificationService notificationService;
 
     private InventoryService service;
 
     @BeforeEach
     void setUp() {
-        service = new InventoryService(bloodBankRepository, bloodInventoryRepository, userRepository, bloodRequestRepository);
+        service = new InventoryService(
+            bloodBankRepository, bloodInventoryRepository, userRepository, bloodRequestRepository, notificationService
+        );
     }
 
     private static BloodBank bank(UUID id) {

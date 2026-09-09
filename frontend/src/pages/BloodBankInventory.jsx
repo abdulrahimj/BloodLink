@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getInventory, getInventorySummary, addInventoryBatch } from "../api/inventory.js";
 import { formatDateTime, formatHeaderDate } from "../lib/dates.js";
+import NotificationBell from "../components/NotificationBell.jsx";
+import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
    BloodLink — Blood Bank: Blood Inventory (detail view)
@@ -19,6 +21,18 @@ import { formatDateTime, formatHeaderDate } from "../lib/dates.js";
    Batch" opens a small form — the mockup's own button did nothing, so this
    is new UI, built from the file's own tokens (same navy/red/shadow/radius),
    not a deviation from an existing design.
+
+   The header carries the same live notification bell as the Dashboard, so an
+   alert is not missed purely because a staff member happened to be on this
+   screen rather than that one — the two are views of one portal and a bank has
+   one set of alerts, not one per page.
+
+   A LOW_STOCK_ALERT also refreshes the figures. It means this bank's stock has
+   just moved (a fulfilment on the Dashboard, or another staff member issuing
+   units), and a bell reading "O- has fallen to 37 units" beside a table still
+   showing 45 would be worse than no bell at all. A NEW_REQUEST does not: a
+   raised request changes nothing about stock until a bank fulfils it, and
+   reloading the charts underneath someone reading them earns nothing.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -73,6 +87,38 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bloodBankId]);
+
+  /**
+   * Re-fetches without the loading placeholder or the error banner.
+   *
+   * load() above sets loading true, which blanks the whole screen — right when a
+   * staff member asks for the data, wrong when the screen decides to refresh
+   * itself. A live alert must not make the charts someone is reading disappear,
+   * and a failed background fetch must not replace them with an error; leaving
+   * figures a few seconds stale is the smaller harm in both cases.
+   */
+  async function refreshQuietly() {
+    try {
+      const [inventory, summaryData] = await Promise.all([
+        getInventory(bloodBankId),
+        getInventorySummary(bloodBankId),
+      ]);
+      if (!mountedRef.current) return;
+      setStock(inventory);
+      setSummary(summaryData);
+    } catch {
+      // Left as it was; the next alert or a manual reload will try again.
+    }
+  }
+
+  // The header bell — the same one the Dashboard shows, fed by the same session.
+  // Only a stock alert refreshes this screen; see the note at the top of the file
+  // for why a new request deliberately does not.
+  const { notifications, unreadCount, connected, markAllRead } = useNotifications({
+    onNotification: (notification) => {
+      if (notification.type === "LOW_STOCK_ALERT") refreshQuietly();
+    },
+  });
 
   const total = summary?.totalUnits ?? 0;
   const expiring = summary?.expiringSoonUnits ?? 0;
@@ -287,6 +333,16 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           </div>
           <div className="bi-top-right">
             <div className="bi-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
+            {/* Between the date and the primary action, so the bell sits in the
+                same place relative to the date as it does on the other three
+                screens, and "Add New Batch" stays the rightmost thing in the
+                header where this page's own work begins. */}
+            <NotificationBell
+              notifications={notifications}
+              unreadCount={unreadCount}
+              connected={connected}
+              onMarkAllRead={markAllRead}
+            />
             <button type="button" className="bi-addbtn" disabled={loading} onClick={() => setBatchModalOpen(true)}>
               <PlusIcon /> Add New Batch
             </button>

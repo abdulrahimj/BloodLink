@@ -41,4 +41,26 @@ public interface BloodInventoryRepository extends JpaRepository<BloodInventory, 
         @Param("bloodBankId") UUID bloodBankId,
         @Param("bloodType") BloodType bloodType
     );
+
+    /**
+     * Which banks currently hold at least {@code units} of one blood group — the
+     * banks a newly raised hospital request could actually be met from, and so the
+     * ones whose staff are alerted about it (see NotificationService.notifyNewRequest).
+     *
+     * Returns ids rather than whole rows because the caller only needs to know which
+     * banks to look up staff for; the stock figures themselves are read again, under
+     * a lock, if and when a bank approves.
+     *
+     * A snapshot, not a promise: stock can move between this query and the moment a
+     * bank opens the request, which is exactly why approval re-checks availability
+     * rather than trusting that it was alerted.
+     */
+    @Query("""
+        select i.bloodBank.id from BloodInventory i
+        where i.bloodType = :bloodType and i.unitsAvailable >= :units
+        """)
+    List<UUID> findBankIdsHoldingAtLeast(
+        @Param("bloodType") BloodType bloodType,
+        @Param("units") int units
+    );
 }
