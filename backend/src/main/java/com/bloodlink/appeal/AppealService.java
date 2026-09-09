@@ -3,6 +3,7 @@ package com.bloodlink.appeal;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.appeal.dto.AppealReachResponse;
 import com.bloodlink.appeal.dto.DonationAppealPayload;
 import com.bloodlink.appeal.dto.DonationAppealResponse;
 import com.bloodlink.bloodbank.ActingBankResolver;
@@ -39,6 +40,24 @@ public class AppealService {
     }
 
     /**
+     * How far an appeal for one blood group would reach, sending nothing.
+     *
+     * Deliberately takes no blood bank. Donors are not attached to a bank in this
+     * schema, so the eligible audience for a group is the same figure whichever bank
+     * asks; requiring one would be friction that changes no answer. Who may ask at
+     * all is still settled — SecurityConfig limits /api/appeals/** to bank staff and
+     * administrators, and this returns counts, never a donor's identity.
+     */
+    @Transactional(readOnly = true)
+    public AppealReachResponse previewReach(String bloodTypeLabel) {
+        // Propagates IllegalArgumentException for an unrecognised label -> 400.
+        BloodType bloodType = BloodType.fromLabel(bloodTypeLabel.trim());
+        NotificationService.AppealReach reach = notificationService.previewAppealReach(bloodType);
+
+        return new AppealReachResponse(bloodType.getLabel(), reach.eligible(), reach.inRecovery());
+    }
+
+    /**
      * Sends one appeal and reports how many donors it was written to.
      *
      * The whole thing is one transaction so the appeal is all-or-nothing: either
@@ -60,7 +79,7 @@ public class AppealService {
 
         return new DonationAppealResponse(
             bank.getId(), bank.getName(), bloodType.getLabel(),
-            reach.notified(), reach.skippedIneligible()
+            reach.eligible(), reach.inRecovery()
         );
     }
 

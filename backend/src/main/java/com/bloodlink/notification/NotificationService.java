@@ -161,15 +161,66 @@ public class NotificationService {
     // ================================================================
 
     /**
-     * How far one appeal actually reached: the donors written to, and the ones held
-     * back because they are still inside their recovery window.
+     * How far an appeal for one blood group reaches: the donors it goes to, and the
+     * ones held back because they are still inside their recovery window.
      *
-     * The second number is not decoration. Without it a bank that appeals and
+     * The field names are deliberately tense-neutral, because the same record
+     * answers both "how many would this reach?" before sending and "how many did
+     * it reach?" after. Those two numbers must be the same number, and sharing one
+     * record is part of how that stays true.
+     *
+     * The second figure is not decoration. Without it a bank that appeals and
      * reaches three people cannot tell whether only three donors have that group —
      * a recruitment problem — or whether twenty do and most gave recently, which
      * needs patience instead. Those call for opposite responses.
      */
-    public record AppealReach(int notified, int skippedIneligible) {}
+    public record AppealReach(int eligible, int inRecovery) {}
+
+    /** The eligible recipients for one group, and how many were held back. */
+    private record AppealAudience(List<User> recipients, int inRecovery) {}
+
+    /**
+     * Works out who an appeal for one blood group may go to.
+     *
+     * The single place that answer is computed, so the count a staff member is
+     * shown before confirming and the set of donors actually written to on confirm
+     * cannot disagree. Two separate implementations would be free to drift, and the
+     * direction that matters — a preview that undercounts, or worse, a send that
+     * reaches someone the preview excluded — is exactly the one nobody would notice.
+     *
+     * Eligibility is asked of {@link Donor#isEligibleToDonate()} rather than
+     * recomputed from a date here, so this and the "You are eligible" banner on the
+     * donor's own dashboard remain the same judgement.
+     *
+     * Filtered in memory rather than as a cutoff in the query, for the same reason:
+     * Business Rule 2 is a moving date, and a JPQL clause would be a second copy of
+     * the rule free to drift from the entity's. At this scale — one city's donor
+     * register — reading the group and discarding the ineligible costs a few rows;
+     * a filter that silently diverged would cost a donor's safety.
+     */
+    private AppealAudience appealAudienceFor(BloodType bloodType) {
+        List<Donor> matchingGroup = donorRepository.findByBloodTypeWithUser(bloodType);
+        List<User> recipients = matchingGroup.stream()
+            .filter(Donor::isEligibleToDonate)
+            .map(Donor::getUser)
+            .toList();
+
+        return new AppealAudience(recipients, matchingGroup.size() - recipients.size());
+    }
+
+    /**
+     * How far an appeal for this group would reach, without sending anything.
+     *
+     * Backs the confirmation step on the Blood Inventory screen: a staff member
+     * about to appeal should know whether they are reaching twelve donors or none
+     * before they commit, not afterwards. Read-only — no Notification row is
+     * written and nothing is pushed.
+     */
+    @Transactional(readOnly = true)
+    public AppealReach previewAppealReach(BloodType bloodType) {
+        AppealAudience audience = appealAudienceFor(bloodType);
+        return new AppealReach(audience.recipients().size(), audience.inRecovery());
+    }
 
     /**
      * Sends a blood bank's appeal to every *eligible* donor recorded as having the
@@ -200,20 +251,13 @@ public class NotificationService {
             note == null ? "" : " " + note
         );
 
-        List<Donor> matchingGroup = donorRepository.findByBloodTypeWithUser(bloodType);
-        List<User> eligibleUsers = matchingGroup.stream()
-            .filter(Donor::isEligibleToDonate)
-            .map(Donor::getUser)
-            .toList();
+        // The same audience calculation the preview uses, so what a staff member was
+        // shown before confirming is what actually happens on confirm.
+        AppealAudience audience = appealAudienceFor(bloodType);
 
-        dispatch(eligibleUsers, message, NotificationType.DONATION_APPEAL);
+        dispatch(audience.recipients(), message, NotificationType.DONATION_APPEAL);
 
-        // Filtered here rather than in the query on purpose. Business Rule 2 is a
-        // moving date, and expressing it as a JPQL cutoff would be a second copy of
-        // the rule that could drift from the entity's. At this scale — one city's
-        // donor register — reading the group and discarding the ineligible costs a
-        // few rows; a filter that silently diverged would cost a donor's safety.
-        return new AppealReach(eligibleUsers.size(), matchingGroup.size() - eligibleUsers.size());
+        return new AppealReach(audience.recipients().size(), audience.inRecovery());
     }
 
     // ================================================================

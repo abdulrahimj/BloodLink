@@ -197,8 +197,8 @@ class NotificationServiceTest {
             bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, "Drive at the lab on Saturday."
         );
 
-        assertThat(reach.notified()).isEqualTo(2);
-        assertThat(reach.skippedIneligible()).isZero();
+        assertThat(reach.eligible()).isEqualTo(2);
+        assertThat(reach.inRecovery()).isZero();
         List<Notification> rows = capturedRows();
         assertThat(rows).hasSize(2);
         assertThat(rows).allSatisfy(row -> {
@@ -224,8 +224,8 @@ class NotificationServiceTest {
 
         // The safety rule: a donor who gave ten days ago is not prompted toward
         // another donation, matching blood group or not.
-        assertThat(reach.notified()).isEqualTo(1);
-        assertThat(reach.skippedIneligible()).isEqualTo(1);
+        assertThat(reach.eligible()).isEqualTo(1);
+        assertThat(reach.inRecovery()).isEqualTo(1);
         assertThat(capturedRows()).extracting(Notification::getRecipient).containsExactly(eligible);
     }
 
@@ -242,8 +242,8 @@ class NotificationServiceTest {
             bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
         );
 
-        assertThat(onTheBoundary.notified()).isZero();
-        assertThat(onTheBoundary.skippedIneligible()).isEqualTo(1);
+        assertThat(onTheBoundary.eligible()).isZero();
+        assertThat(onTheBoundary.inRecovery()).isEqualTo(1);
         verify(notificationRepository).saveAll(List.of());
     }
 
@@ -258,7 +258,7 @@ class NotificationServiceTest {
             bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
         );
 
-        assertThat(reach.notified()).isEqualTo(1);
+        assertThat(reach.eligible()).isEqualTo(1);
         assertThat(capturedRows()).extracting(Notification::getRecipient).containsExactly(justEligible);
     }
 
@@ -274,8 +274,37 @@ class NotificationServiceTest {
 
         // Distinguishable from "no donors have this group at all", which is what the
         // second figure exists for — the two need opposite responses from the bank.
-        assertThat(reach.notified()).isZero();
-        assertThat(reach.skippedIneligible()).isEqualTo(2);
+        assertThat(reach.eligible()).isZero();
+        assertThat(reach.inRecovery()).isEqualTo(2);
+    }
+
+    @Test
+    void thePreviewCountsWhatTheSendWouldReachAndWritesNothing() {
+        // The confirmation dialog promises a number; sending must honour exactly it.
+        // The two are computed by one shared method precisely so they cannot drift,
+        // and this is the test that would fail if someone split them apart again.
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE)).thenReturn(List.of(
+            donor(user("Never donated")),
+            donorWhoGave(user("Gave 200 days ago"), 200),
+            donorWhoGave(user("Gave 30 days ago"), 30),
+            donorWhoGave(user("Gave 90 days ago"), 90)
+        ));
+
+        AppealReach preview = service.previewAppealReach(BloodType.O_NEGATIVE);
+
+        assertThat(preview.eligible()).isEqualTo(2);
+        assertThat(preview.inRecovery()).isEqualTo(2);
+        // Read-only: a preview must never leave a notification behind.
+        verify(notificationRepository, never()).saveAll(any());
+        verifyNoInteractions(publisher);
+
+        echoSavedNotifications();
+        AppealReach sent = service.sendDonationAppeal(
+            bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.O_NEGATIVE, null
+        );
+
+        assertThat(sent).isEqualTo(preview);
+        assertThat(capturedRows()).hasSize(preview.eligible());
     }
 
     @Test
@@ -287,8 +316,8 @@ class NotificationServiceTest {
             bank(BANK_ID, "Holy Spirit Blood Bank"), BloodType.AB_NEGATIVE, null
         );
 
-        assertThat(reach.notified()).isZero();
-        assertThat(reach.skippedIneligible()).isZero();
+        assertThat(reach.eligible()).isZero();
+        assertThat(reach.inRecovery()).isZero();
     }
 
     // ---------- NEW_REQUEST ----------

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getInventory, getInventorySummary, addInventoryBatch } from "../api/inventory.js";
+import { getAppealReach, sendDonationAppeal } from "../api/appeals.js";
 import { formatDateTime, formatHeaderDate } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
@@ -33,6 +34,21 @@ import { useNotifications } from "../realtime/useNotifications.js";
    showing 45 would be worse than no bell at all. A NEW_REQUEST does not: a
    raised request changes nothing about stock until a bank fulfils it, and
    reloading the charts underneath someone reading them earns nothing.
+
+   Each inventory row carries a "Send Appeal" action — the blood bank's answer
+   to its own shortage, and the counterpart of the hospital's blood request.
+   It appears only on rows the table already marks Low or Critical: appealing
+   for a group that is Sufficient spends donor goodwill on blood nobody needs,
+   and the register only tolerates so many asks before people stop reading them.
+
+   Confirming is one lightweight step, not the Dashboard's full Reject dialog.
+   The two are weighed differently on purpose: rejecting a request is terminal
+   for every bank in Makeni and cannot be undone, so it earns a warning block
+   and a deliberate pause. Sending an appeal asks some donors to consider coming
+   in — its worst outcome is a wasted message, and the honest way to say that is
+   a small confirmation, not borrowed alarm. What it does show is the number of
+   donors who will actually be contacted, because that is the one fact a staff
+   member cannot see from the button and would otherwise learn only afterwards.
    ================================================================ */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -45,6 +61,18 @@ function titleCase(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
+/** "1 donor" / "12 donors" — the count and its noun, so the sentences built from
+ *  it below don't each have to remember the singular case. */
+function donorCount(n) {
+  return `${n} donor${n === 1 ? "" : "s"}`;
+}
+
+/** Which statuses justify asking donors to come in. Sufficient does not: an
+ *  appeal for blood the bank already has spends goodwill it will need later. */
+function needsDonors(status) {
+  return status === "LOW" || status === "CRITICAL";
+}
+
 export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNavigate }) {
   const [stock, setStock] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -52,6 +80,15 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
   const [batchModalOpen, setBatchModalOpen] = useState(false);
+
+  // The appeal awaiting confirmation, or null when no dialog is open. Holds the
+  // group, its fetched reach (null until it arrives), any failure, and whether
+  // the send is in flight — one object rather than four useStates, so the dialog
+  // can never be half-open with another group's numbers in it.
+  const [appeal, setAppeal] = useState(null);
+  // What the last appeal did, shown in the header until the next one. Cleared on
+  // a reload so a stale "Appeal sent" is not left sitting over refreshed figures.
+  const [appealNotice, setAppealNotice] = useState(null);
 
   // Guards setState after unmount — shared between the mount-time fetch and the
   // manual reload after "Add New Batch" succeeds. Reset to true on every mount,
@@ -132,6 +169,67 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   async function handleBatchAdded() {
     setBatchModalOpen(false);
     await load();
+  }
+
+  /**
+   * Opens the appeal confirmation for one blood group and fetches its reach.
+   *
+   * The dialog opens straight away, before the count arrives, rather than after:
+   * a button that appears to do nothing for a moment reads as broken, and the
+   * dialog has something honest to show meanwhile ("Checking how many donors…").
+   * The confirm button stays disabled until the number is in — nobody should be
+   * able to send an appeal without seeing who it reaches, which is the whole
+   * reason this step exists.
+   */
+  function openAppeal(bloodType) {
+    setAppeal({ bloodType, reach: null, error: null, sending: false });
+
+    getAppealReach(bloodType)
+      .then((reach) => {
+        if (!mountedRef.current) return;
+        // Guard against a stale response: a staff member can close this dialog
+        // and open another group's before the first request comes back, and
+        // showing O-'s count under an A+ heading would be a lie the operator
+        // has no way of catching.
+        setAppeal((current) =>
+          current && current.bloodType === bloodType ? { ...current, reach } : current);
+      })
+      .catch((err) => {
+        if (!mountedRef.current) return;
+        setAppeal((current) =>
+          current && current.bloodType === bloodType ? { ...current, error: err.message } : current);
+      });
+  }
+
+  /**
+   * Sends the appeal the dialog is showing.
+   *
+   * bloodBankId is passed for the ADMIN case, where the backend needs telling
+   * which bank is appealing; for BLOOD_BANK_STAFF it is ignored server-side in
+   * favour of their own assigned bank, so sending it is harmless.
+   *
+   * On success the dialog closes and a notice reports what actually happened,
+   * using the figures from the response rather than the preview's — they should
+   * agree, and if a donor's eligibility changed in between, the receipt is the
+   * one that tells the truth.
+   */
+  async function confirmAppeal() {
+    const { bloodType } = appeal;
+    setAppeal((current) => ({ ...current, sending: true, error: null }));
+
+    try {
+      const receipt = await sendDonationAppeal({ bloodType, bloodBankId });
+      if (!mountedRef.current) return;
+      setAppeal(null);
+      setAppealNotice(
+        receipt.donorsNotified === 0
+          ? `No appeal was delivered — no eligible ${bloodType} donor is on the register right now.`
+          : `Appeal sent — ${donorCount(receipt.donorsNotified)} of ${bloodType} notified.`
+      );
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setAppeal((current) => (current ? { ...current, sending: false, error: err.message } : current));
+    }
   }
 
   return (
@@ -249,6 +347,55 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         .bi-b-critical { background: var(--red); }
         .bi-muted { color: var(--ink-muted); }
 
+        /* Send Appeal — a row-level action, so it is sized and weighted below the
+           header's "Add New Batch" and outlined rather than filled. Two solid red
+           buttons on one screen would read as two equally primary actions, when
+           adding stock is the page's main job and appealing is a response to a
+           particular row. */
+        .bi-appealbtn {
+          background: transparent; color: var(--red);
+          border: 1.5px solid rgba(200,16,46,.35); border-radius: 6px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(9px, 1.28vh, 11.5px);
+          padding: clamp(4px, .7vh, 7px) clamp(7px, .7vw, 11px);
+          white-space: nowrap;
+        }
+        .bi-appealbtn:hover { background: rgba(200,16,46,.07); border-color: var(--red); }
+        .bi-appealbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+        /* What the last appeal did. Green because it reports a completed action,
+           matching how this design system already uses green for success. */
+        .bi-notice {
+          flex: 0 0 auto;
+          background: rgba(30,127,69,.08); border: 1.5px solid rgba(30,127,69,.28); color: #146034;
+          border-radius: 8px; padding: clamp(7px, 1.2vh, 10px) clamp(10px, 1vw, 14px);
+          font-size: clamp(10px, 1.42vh, 12.5px); font-weight: 600;
+          display: flex; align-items: center; gap: 10px;
+        }
+        .bi-notice button {
+          margin-left: auto; background: transparent; border: none; cursor: pointer;
+          font-family: inherit; font-size: clamp(10px, 1.42vh, 12.5px); font-weight: 700;
+          color: #146034; opacity: .7; padding: 0 2px;
+        }
+        .bi-notice button:hover { opacity: 1; }
+
+        /* The appeal confirmation reuses the batch modal's shell, then deliberately
+           stops there: no warning block, no red confirm. It is a lighter step than
+           the Dashboard's Reject dialog because it is a lighter action. */
+        .bi-confirm-fact {
+          background: #F6F7F8; border: 1.5px solid var(--line); border-radius: 8px;
+          padding: clamp(9px, 1.5vh, 13px) clamp(11px, 1.1vw, 15px);
+          margin-bottom: clamp(10px, 1.7vh, 16px);
+        }
+        .bi-confirm-count { font-size: clamp(12.5px, 1.85vh, 15px); font-weight: 800; letter-spacing: -.01em; }
+        .bi-confirm-note { font-size: clamp(9.5px, 1.35vh, 12px); color: var(--ink-muted); margin-top: 4px; line-height: 1.45; }
+        .bi-confirm-send {
+          flex: 1 1 auto; background: var(--navy); color: #FFF; border: none; border-radius: 8px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(11px, 1.6vh, 13.5px);
+          padding: clamp(9px, 1.5vh, 12px);
+        }
+        .bi-confirm-send:hover { background: var(--navy-soft); }
+        .bi-confirm-send:disabled { background: #C9CDD3; cursor: not-allowed; }
+
         /* Wiring states — additive, same tokens, for real async data. */
         .bi-loading, .bi-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
         .bi-error-msg { color: var(--red); font-weight: 600; font-size: clamp(11px, 1.6vh, 14px); }
@@ -349,6 +496,16 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           </div>
         </div>
 
+        {/* Sits above the panels rather than inside the dialog, because the dialog
+            is gone by the time this appears — the confirmation is over and what is
+            left is a receipt for something that already happened. */}
+        {appealNotice && (
+          <div className="bi-notice" role="status">
+            {appealNotice}
+            <button type="button" onClick={() => setAppealNotice(null)} aria-label="Dismiss">Dismiss</button>
+          </div>
+        )}
+
         {loading && (
           <div className="bi-loading"><div className="bi-sub">Loading inventory…</div></div>
         )}
@@ -404,11 +561,12 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
               <table className="bi-table">
                 <thead>
                   <tr>
-                    <th style={{ width: "13%" }}>Blood Group</th>
-                    <th style={{ width: "17%" }}>Available Units</th>
-                    <th style={{ width: "17%" }}>Expiring Soon</th>
-                    <th style={{ width: "23%" }}>Status</th>
-                    <th style={{ width: "30%" }}>Last Updated</th>
+                    <th style={{ width: "12%" }}>Blood Group</th>
+                    <th style={{ width: "15%" }}>Available Units</th>
+                    <th style={{ width: "15%" }}>Expiring Soon</th>
+                    <th style={{ width: "19%" }}>Status</th>
+                    <th style={{ width: "24%" }}>Last Updated</th>
+                    <th style={{ width: "15%" }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -423,6 +581,22 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
                         </td>
                         <td><span className={`bi-badge bi-b-${s.status.toLowerCase()}`}>{titleCase(s.status)}</span></td>
                         <td className="bi-muted">{s.lastUpdated ? formatDateTime(s.lastUpdated) : "Never stocked"}</td>
+                        <td>
+                          {/* Left empty rather than showing a greyed-out button on a
+                              Sufficient row. Five disabled buttons in an eight-row
+                              table is noise, and the Status cell immediately to the
+                              left already says why there is nothing to do here. */}
+                          {needsDonors(s.status) && (
+                            <button
+                              type="button"
+                              className="bi-appealbtn"
+                              onClick={() => openAppeal(s.bloodType)}
+                              aria-label={`Send a donation appeal for ${s.bloodType}`}
+                            >
+                              Send Appeal
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -440,6 +614,104 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           onAdded={handleBatchAdded}
         />
       )}
+
+      {appeal && (
+        <AppealConfirmation
+          appeal={appeal}
+          onCancel={() => setAppeal(null)}
+          onConfirm={confirmAppeal}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The one step between "Send Appeal" and the appeal going out.
+ *
+ * Its whole job is to answer the question the button cannot: how many donors will
+ * this actually reach? An appeal cannot be recalled, and one sent into an empty
+ * audience looks exactly like one that worked, so a staff member who only learns
+ * the number afterwards has learned it too late to act on.
+ *
+ * The count comes from GET /api/appeals/reach, which applies the same Business
+ * Rule 2 filter the send does and is computed by the same method on the backend —
+ * so the number promised here is the number contacted, not an estimate.
+ *
+ * Deliberately lighter than the Dashboard's Reject dialog: no warning block, and a
+ * navy confirm rather than a red one. Rejecting a request is terminal for every
+ * bank in Makeni; sending an appeal asks some people to consider donating. Dressing
+ * the second in the first's alarm would devalue the warning where it is earned.
+ */
+function AppealConfirmation({ appeal, onCancel, onConfirm }) {
+  const { bloodType, reach, error, sending } = appeal;
+  const cancelRef = useRef(null);
+
+  // Escape closes, and focus lands on Cancel. Cancel rather than the confirm
+  // button because a dialog should not be dismissible into an action by reflex,
+  // even a mild one — and it is the only control that is never disabled here.
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && !sending) onCancel();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onCancel, sending]);
+
+  // Nothing to send to. Blocked rather than allowed as a no-op: the request would
+  // succeed, report zero, and leave the operator believing an appeal went out.
+  const noOneToReach = reach !== null && reach.eligibleDonors === 0;
+  const canSend = reach !== null && !noOneToReach && !sending;
+
+  return (
+    <div
+      className="bi-modal-backdrop"
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !sending) onCancel(); }}
+    >
+      <div className="bi-modal" role="dialog" aria-modal="true" aria-labelledby="bi-appeal-title">
+        <div className="bi-modal-title" id="bi-appeal-title">Send appeal for {bloodType}?</div>
+        <div className="bi-modal-sub">
+          Donors of this group will be asked to come in and give.
+        </div>
+
+        {error && <div className="bi-modal-alert" role="alert">{error}</div>}
+
+        <div className="bi-confirm-fact">
+          {reach === null && !error && (
+            <div className="bi-confirm-note">Checking how many donors can be contacted…</div>
+          )}
+
+          {reach !== null && (
+            <>
+              <div className="bi-confirm-count">
+                {noOneToReach
+                  ? `No eligible ${bloodType} donors`
+                  : `${donorCount(reach.eligibleDonors)} will be notified`}
+              </div>
+              <div className="bi-confirm-note">
+                {/* Says what the filter did, rather than quietly shrinking the
+                    audience. A small number reads very differently once you know
+                    it is nine people recovering rather than nine people missing. */}
+                {reach.donorsInRecovery > 0
+                  ? `${donorCount(reach.donorsInRecovery)} of this group ${reach.donorsInRecovery === 1 ? "is" : "are"} `
+                    + "within the 90-day recovery window and will not be contacted."
+                  : `Every ${bloodType} donor on the register is currently eligible.`}
+                {noOneToReach && " There is nobody to appeal to right now."}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="bi-modal-actions">
+          <button type="button" className="bi-modal-cancel" ref={cancelRef} onClick={onCancel} disabled={sending}>
+            Cancel
+          </button>
+          <button type="button" className="bi-confirm-send" onClick={onConfirm} disabled={!canSend}>
+            {sending ? "Sending…" : "Send appeal"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
