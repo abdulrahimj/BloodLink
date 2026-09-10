@@ -101,7 +101,10 @@ public class SecurityConfig {
                 .requestMatchers("/ws/**").permitAll()
 
                 // --- Administrator: account management and aggregate reporting ---
-                .requestMatchers("/api/users/**", "/api/reports/**").hasRole(Role.ADMIN.name())
+                // Everything under one prefix, since every route here needs the same
+                // rule: an administrator, and nothing scoped to their own facility
+                // (an admin has none) the way the blood-bank and hospital rules below do.
+                .requestMatchers("/api/admin/**").hasRole(Role.ADMIN.name())
 
                 // --- Blood banks: reference data (name/location) and inventory ---
                 // The dashboard summary is an operational, staff-facing view (pending

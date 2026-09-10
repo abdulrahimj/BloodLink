@@ -4,6 +4,7 @@ import Register from './pages/Register.jsx';
 import DonorPortal from './pages/DonorPortal.jsx';
 import BloodBankPortal from './pages/BloodBankPortal.jsx';
 import HospitalPortal from './pages/HospitalPortal.jsx';
+import AdminConsole from './pages/AdminConsole.jsx';
 import { clearSession, getUser, isSignedIn } from './auth/session.js';
 
 /* ================================================================
@@ -12,14 +13,20 @@ import { clearSession, getUser, isSignedIn } from './auth/session.js';
    Routes between the two auth screens and, once signed in, to a
    role-appropriate view. Routing is on the URL hash because that is
    what the mockups' own links already use (#login, #register) — no
-   router dependency needed for a handful of screens. All three portals are
+   router dependency needed for a handful of screens. All four portals are
    wired now; SignedInPlaceholder remains only as the fallback for a role
    the backend might add before a screen exists for it.
 
-   ADMIN lands on the Blood Bank portal rather than the Hospital one: of the
-   two, that is where an administrator has actual authority (approving and
-   fulfilling on a named bank's behalf), whereas submitting a request
-   requires a hospital an administrator does not have.
+   ADMIN now lands on the Admin Console rather than the Blood Bank portal.
+   That was a stopgap from before the console existed — of the two, the
+   Blood Bank portal was where an administrator had actual authority — and
+   it is retired now that the console itself does real account management
+   and reporting. The trade-off worth knowing: an administrator can no
+   longer reach the Blood Bank/Hospital portals' bank-picker flow (approving
+   or fulfilling a request, adding stock) by simply signing in, since routing
+   here is by role rather than by an in-app switcher between portals. Those
+   actions are all still reachable over the API exactly as before; only the
+   one-click UI path from a fresh sign-in has moved.
    ================================================================ */
 
 /** Reads the current screen from the hash, defaulting to login. */
@@ -56,11 +63,14 @@ export default function App() {
     if (user.role === 'DONOR') {
       return <DonorPortal user={user} onSignOut={handleSignOut} />;
     }
-    if (user.role === 'BLOOD_BANK_STAFF' || user.role === 'ADMIN') {
+    if (user.role === 'BLOOD_BANK_STAFF') {
       return <BloodBankPortal user={user} onSignOut={handleSignOut} />;
     }
     if (user.role === 'HOSPITAL_STAFF') {
       return <HospitalPortal user={user} onSignOut={handleSignOut} />;
+    }
+    if (user.role === 'ADMIN') {
+      return <AdminConsole user={user} onSignOut={handleSignOut} />;
     }
     return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
   }

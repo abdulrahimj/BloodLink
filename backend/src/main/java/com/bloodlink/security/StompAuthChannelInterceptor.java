@@ -10,7 +10,9 @@ import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
 
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.repository.UserRepository;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -29,6 +31,18 @@ import io.jsonwebtoken.JwtException;
  * an unauthenticated HTTP request can still legitimately be served a public
  * endpoint, whereas an unidentified socket has no purpose at all here — every
  * message this server pushes is addressed to one named recipient.
+ *
+ * A suspended account is refused here too, for the same reason
+ * {@link JwtAuthenticationFilter} checks it on every REST request: the token stays
+ * cryptographically valid long after an administrator turns the account off. This
+ * only stops a *new* CONNECT — a socket already open when the suspension happens
+ * keeps receiving pushes until it disconnects, since closing an open session would
+ * need a registry of live sessions this class does not keep. That gap is
+ * considerably narrower than doing nothing: it closes the moment the tab is
+ * reloaded, reconnects (this client auto-reconnects every five seconds), or is
+ * closed, and every push it could still receive is an ordinary notification, never
+ * a way to act on anything — no @MessageMapping handler accepts a message from a
+ * client on this server.
  */
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
@@ -37,9 +51,11 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
-    StompAuthChannelInterceptor(JwtService jwtService) {
+    StompAuthChannelInterceptor(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -59,6 +75,14 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             Claims claims = jwtService.parseClaims(token);
             UUID userId = jwtService.extractUserId(claims);
             Role role = Role.valueOf(jwtService.extractRole(claims));
+
+            boolean active = userRepository.findStatusById(userId)
+                .map(status -> status == AccountStatus.ACTIVE)
+                .orElse(false);
+            if (!active) {
+                throw new StompAuthenticationException("This account has been suspended. Sign in again.");
+            }
+
             // What every later /user/queue/... delivery is routed by.
             accessor.setUser(new StompPrincipal(userId, role));
         } catch (JwtException | IllegalArgumentException ex) {

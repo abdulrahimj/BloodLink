@@ -12,12 +12,14 @@ import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.auth.dto.RegisterRequest;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.security.JwtService;
+import com.bloodlink.web.error.AccountSuspendedException;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.InvalidCredentialsException;
 
@@ -109,6 +111,15 @@ public class AuthService {
      * (DaoAuthenticationProvider + BCrypt) rather than done by hand, so it benefits
      * from the framework's constant-time comparison and its protection against timing
      * differences between "no such user" and "wrong password".
+     *
+     * The suspension check happens after that authentication succeeds, and
+     * deliberately not before it: checking status first would mean a caller who
+     * does not even know the password can tell a suspended account from an active
+     * one purely by which error comes back, which is exactly the kind of account
+     * enumeration InvalidCredentialsException's single vague message exists to
+     * prevent. Once the password is proven correct, there is nothing left to
+     * protect by staying vague, so AccountSuspendedException is free to say
+     * plainly what happened.
      */
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
@@ -124,6 +135,12 @@ public class AuthService {
             AuthenticatedUser principal = (AuthenticatedUser) authentication.getPrincipal();
             User user = userRepository.findById(principal.getId())
                 .orElseThrow(() -> new InvalidCredentialsException("Invalid phone number or password."));
+
+            if (user.getStatus() != AccountStatus.ACTIVE) {
+                throw new AccountSuspendedException(
+                    "This account has been suspended. Contact an administrator."
+                );
+            }
 
             return AuthResponse.of(jwtService.issueToken(user), jwtService.getExpirySeconds(), user);
 

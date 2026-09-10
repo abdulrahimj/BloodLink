@@ -77,6 +77,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | blood_bank_id | UUID, FK -> BloodBank, nullable — set only for BLOOD_BANK_STAFF |
 | hospital_id | UUID, FK -> Hospital, nullable — set only for HOSPITAL_STAFF |
 | created_at | timestamp |
+| status | enum: ACTIVE, SUSPENDED — added in V8 for the Admin module's activate/suspend use case, the same kind of confirmed addition as blood_bank_id/hospital_id above. Every account starts ACTIVE. A suspension is enforced immediately, not just at the next login: `JwtAuthenticationFilter` checks it on every authenticated request (one indexed lookup by primary key), and `AuthService.login` checks it again after the password is verified. |
 
 ### Donor
 | field | type |

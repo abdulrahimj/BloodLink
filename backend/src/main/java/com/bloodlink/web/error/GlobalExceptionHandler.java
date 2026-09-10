@@ -112,6 +112,17 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    /** A correct password on a suspended account. See AccountSuspendedException for
+     *  why this is 403 (not 401) and why it is allowed to be specific. */
+    @ExceptionHandler(AccountSuspendedException.class)
+    public ResponseEntity<ApiError> handleAccountSuspended(AccountSuspendedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiError.of(
+            HttpStatus.FORBIDDEN.value(),
+            "Forbidden",
+            ex.getMessage()
+        ));
+    }
+
     /**
      * Authenticated, but the role is not permitted here. 403 rather than 401:
      * re-authenticating would not help.

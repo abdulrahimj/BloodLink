@@ -25,6 +25,24 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     List<BloodRequest> findByHospitalIdOrderByCreatedAtDesc(UUID hospitalId);
 
     /**
+     * Every request's status, counted — the aggregate behind the Admin Console's
+     * "Request Outcomes" chart, citywide across every hospital and bank.
+     *
+     * One grouped query rather than four separate counts (one per RequestStatus),
+     * because the four figures are always shown together and a single round trip
+     * is honest about that: there is no scenario where a caller wants "Fulfilled"
+     * without also wanting the other three to compare it against.
+     */
+    @Query("select r.status as status, count(r) as total from BloodRequest r group by r.status")
+    List<StatusCount> countGroupedByStatus();
+
+    /** One status's count, from {@link #countGroupedByStatus}. */
+    interface StatusCount {
+        RequestStatus getStatus();
+        long getTotal();
+    }
+
+    /**
      * "Incoming Hospital Requests" for one blood bank: everything this bank could
      * still act on, plus everything it has already acted on, newest first.
      *

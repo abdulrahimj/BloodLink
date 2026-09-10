@@ -3,6 +3,7 @@ package com.bloodlink.domain;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 
 import jakarta.persistence.Column;
@@ -51,6 +52,20 @@ public class User {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /**
+     * Whether this account may currently sign in and act (V8, added for the Admin
+     * module's activate/suspend use case — not part of the original CLAUDE.md schema
+     * table, the same kind of confirmed addition as {@link #bloodBank} below).
+     *
+     * Defaults to ACTIVE in Java as well as at the database default, so every path
+     * that creates a User — registration today, an admin-managed creation flow
+     * later — starts a new account able to sign in without having to remember to
+     * set this explicitly.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 16)
+    private AccountStatus status = AccountStatus.ACTIVE;
 
     /**
      * Which blood bank this account works at — only ever set for BLOOD_BANK_STAFF

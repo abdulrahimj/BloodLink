@@ -5,14 +5,30 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
 
     /** Phone is the login credential, so this is the lookup every authentication runs. */
     Optional<User> findByPhone(String phone);
+
+    /**
+     * Just the status column, by primary key — what JwtAuthenticationFilter checks
+     * on every authenticated request to enforce a suspension immediately rather
+     * than only at the next login.
+     *
+     * Deliberately not the whole User: the filter runs on every request and needs
+     * nothing else from this row, so selecting one column off an indexed primary
+     * key is the cheapest honest way to ask "is this account still allowed to act
+     * right now?" without pulling back facility associations it will not use.
+     */
+    @Query("select u.status from User u where u.id = :id")
+    Optional<AccountStatus> findStatusById(@Param("id") UUID id);
 
     /** Pre-flight uniqueness checks at registration, so we can return a friendly
      *  409 instead of letting the database's unique constraints surface as a 500. */
@@ -43,4 +59,18 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * user-facing should be scoped to a facility.
      */
     List<User> findByRole(Role role);
+
+    /**
+     * Every account, across all four roles, with its facility eagerly loaded —
+     * the Admin Console's "User Accounts" table.
+     *
+     * bloodBank and hospital are both lazy associations, and open-in-view is off
+     * (application.properties), so without the fetch join, mapping each row to
+     * its response DTO outside this method's own transaction would either throw
+     * (LazyInitializationException) or, inside it, issue one extra query per row.
+     * A left join keeps a donor or administrator — who has neither — in the
+     * result with both columns null, rather than dropping them from an inner join.
+     */
+    @Query("select u from User u left join fetch u.bloodBank left join fetch u.hospital order by u.fullName asc")
+    List<User> findAllWithFacilitiesOrderByFullNameAsc();
 }
