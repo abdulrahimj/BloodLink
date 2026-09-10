@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,14 +38,16 @@ import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * The three effects of recording a donation, and the two rules that are easiest
- * to get wrong here: the stored blood group must be the one tested today rather
- * than the donor's profile value (Business Rule 4), and the donor's eligibility
- * clock must actually be reset, or the appeal filter will invite them straight
- * back.
+ * The three effects of recording a donation, and the rules that are easiest to
+ * get wrong here: the stored blood group must be the one tested today rather than
+ * the donor's profile value (Business Rule 4), and a donor still inside their
+ * 90-day recovery window must be refused outright with nothing written (Business
+ * Rule 2) — including on the boundary, where an off-by-one would let someone
+ * donate a day early.
  */
 @ExtendWith(MockitoExtension.class)
 class DonationServiceTest {
@@ -51,6 +55,7 @@ class DonationServiceTest {
     private static final UUID BANK_ID = UUID.randomUUID();
     private static final UUID DONOR_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
+    private static final DateTimeFormatter LONG_DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
 
     @Mock private DonationRepository donationRepository;
     @Mock private DonorRepository donorRepository;
@@ -97,9 +102,20 @@ class DonationServiceTest {
         return new RecordDonationPayload(DONOR_ID, testedGroup, units, null);
     }
 
-    /** Stands in for the real accumulation, which InventoryService owns and its
-     *  own tests already cover — here we only care what it was asked to do. */
-    private void stubInventoryAccepting(int resultingUnits) {
+    /** The lookup every path makes — the bank, then the donor under its lock. */
+    private void stubBankAndDonor(Donor donor) {
+        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        when(donorRepository.findByIdForUpdate(DONOR_ID)).thenReturn(Optional.of(donor));
+    }
+
+    /** Only the paths that get past the eligibility check reach the writes, so
+     *  these stubs are set up separately rather than for every test. */
+    private void stubWritesAccepting(int resultingUnits) {
+        when(donationRepository.save(any(Donation.class))).thenAnswer(inv -> {
+            Donation d = inv.getArgument(0);
+            d.setId(UUID.randomUUID());
+            return d;
+        });
         when(inventoryService.addBatch(any(), any(), any(), any()))
             .thenAnswer(inv -> new InventoryItemResponse(
                 inv.getArgument(1), resultingUnits, LocalDate.now().plusDays(30),
@@ -107,14 +123,10 @@ class DonationServiceTest {
             ));
     }
 
-    private void stubDonorAndBank(Donor donor) {
-        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
-        when(donorRepository.findById(DONOR_ID)).thenReturn(Optional.of(donor));
-        when(donationRepository.save(any(Donation.class))).thenAnswer(inv -> {
-            Donation d = inv.getArgument(0);
-            d.setId(UUID.randomUUID());
-            return d;
-        });
+    private void verifyNothingWasWritten() {
+        verify(donationRepository, never()).save(any());
+        verify(donorRepository, never()).save(any());
+        verify(inventoryService, never()).addBatch(any(), any(), any(), any());
     }
 
     // ---------- the three effects ----------
@@ -122,8 +134,8 @@ class DonationServiceTest {
     @Test
     void recordingWritesTheDonationResetsTheDonorsClockAndAddsTheUnitsToStock() {
         Donor donor = donorWithProfileGroup(LocalDate.now().minusYears(1));
-        stubDonorAndBank(donor);
-        stubInventoryAccepting(46);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(46);
 
         DonationRecordedResponse response = service.recordDonation(payload("O+", 1), principal());
 
@@ -150,8 +162,8 @@ class DonationServiceTest {
         // Business Rule 4: the donor's profile says A+, today's test says O-.
         // The donation — and the stock it creates — must follow the test.
         Donor donor = donorWithProfileGroup(null);
-        stubDonorAndBank(donor);
-        stubInventoryAccepting(12);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(12);
 
         service.recordDonation(payload("O-", 1), principal());
 
@@ -170,8 +182,8 @@ class DonationServiceTest {
     @Test
     void unitsEnterStockWithTheDefaultShelfLife() {
         Donor donor = donorWithProfileGroup(null);
-        stubDonorAndBank(donor);
-        stubInventoryAccepting(3);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(3);
 
         service.recordDonation(payload("AB-", 2), principal());
 
@@ -183,36 +195,67 @@ class DonationServiceTest {
             .isEqualTo(LocalDate.now().plusDays(DonationService.SHELF_LIFE_DAYS));
     }
 
-    // ---------- eligibility is documented, not enforced ----------
+    // ---------- Business Rule 2: a hard block ----------
 
     @Test
-    void aDonationFromADonorInsideTheirRecoveryWindowIsStillRecorded() {
-        // The draw has already happened. Refusing the record would leave the units
-        // unaccounted for on the shelf and the donor's history wrong — see the
-        // reasoning on recordDonation. The screen warns; the service records.
-        Donor recentDonor = donorWithProfileGroup(LocalDate.now().minusDays(10));
-        assertThat(recentDonor.isEligibleToDonate()).isFalse();
-        stubDonorAndBank(recentDonor);
-        stubInventoryAccepting(20);
+    void aDonorInsideTheirRecoveryWindowIsRefusedAndNothingIsWritten() {
+        LocalDate lastDonation = LocalDate.now().minusDays(10);
+        Donor recentDonor = donorWithProfileGroup(lastDonation);
+        stubBankAndDonor(recentDonor);
 
-        DonationRecordedResponse response = service.recordDonation(payload("O+", 1), principal());
+        assertThatThrownBy(() -> service.recordDonation(payload("O+", 1), principal()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("Rahim Barrie cannot donate yet")
+            .hasMessageContaining("90 days")
+            // The date a donation becomes possible is quoted from eligibleFrom(),
+            // the same calculation the donor's own dashboard shows them.
+            .hasMessageContaining(LONG_DATE.format(recentDonor.eligibleFrom()));
 
-        assertThat(response.donationId()).isNotNull();
-        assertThat(recentDonor.getLastDonationDate()).isEqualTo(LocalDate.now());
+        verifyNothingWasWritten();
+        // Their eligibility clock is untouched — a refusal must not reset it.
+        assertThat(recentDonor.getLastDonationDate()).isEqualTo(lastDonation);
     }
 
-    // ---------- failure ----------
+    @Test
+    void theLastDayOfTheWindowIsStillRefused() {
+        // "More than 90 days" is strict: day 90 is inside the window. An off-by-one
+        // here would let a donor be drawn a day before they are ready.
+        stubBankAndDonor(donorWithProfileGroup(LocalDate.now().minusDays(90)));
+
+        assertThatThrownBy(() -> service.recordDonation(payload("O+", 1), principal()))
+            .isInstanceOf(ConflictException.class);
+
+        verifyNothingWasWritten();
+    }
+
+    @Test
+    void theFirstEligibleDayIsAccepted() {
+        // Day 91 — the date eligibleFrom() names — is the first day it goes through.
+        stubBankAndDonor(donorWithProfileGroup(LocalDate.now().minusDays(91)));
+        stubWritesAccepting(10);
+
+        assertThat(service.recordDonation(payload("O+", 1), principal()).donationId()).isNotNull();
+    }
+
+    @Test
+    void aDonorWhoHasNeverDonatedIsAccepted() {
+        stubBankAndDonor(donorWithProfileGroup(null));
+        stubWritesAccepting(10);
+
+        assertThat(service.recordDonation(payload("O+", 1), principal()).donationId()).isNotNull();
+    }
+
+    // ---------- other failures ----------
 
     @Test
     void anUnknownDonorIsRefusedAndNothingIsWritten() {
         when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
-        when(donorRepository.findById(DONOR_ID)).thenReturn(Optional.empty());
+        when(donorRepository.findByIdForUpdate(DONOR_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.recordDonation(payload("O+", 1), principal()))
             .isInstanceOf(NotFoundException.class);
 
-        verify(donationRepository, never()).save(any());
-        verify(inventoryService, never()).addBatch(any(), any(), any(), any());
+        verifyNothingWasWritten();
     }
 
     @Test
@@ -222,7 +265,6 @@ class DonationServiceTest {
         assertThatThrownBy(() -> service.recordDonation(payload("Z+", 1), principal()))
             .isInstanceOf(IllegalArgumentException.class);
 
-        verify(donationRepository, never()).save(any());
-        verify(inventoryService, never()).addBatch(any(), any(), any(), any());
+        verifyNothingWasWritten();
     }
 }

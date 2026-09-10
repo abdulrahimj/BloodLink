@@ -41,7 +41,8 @@ public class DonationController {
 
     /**
      * Records a donation, updates the donor's eligibility clock, and adds the
-     * units to stock — all or nothing.
+     * units to stock — all or nothing. Refused with 409, and nothing written, if
+     * the donor is still inside Business Rule 2's 90-day recovery window.
      *
      * 201 with a receipt that includes the resulting stock figure, so the screen
      * can confirm the inventory half of the action actually landed rather than

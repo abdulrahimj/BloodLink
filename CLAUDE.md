@@ -169,6 +169,10 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
    show a hospital as the source of an appeal. (This was a deliberate architecture correction — see
    Chapter 3, Section 3.5.1 rationale, if narrative context is ever needed.)
 2. **Donor eligibility** = `last_donation_date` is more than 90 days ago (or null = always eligible).
+   Enforced as a **hard block**, never a warning, in two places: an ineligible donor is never sent a
+   donation appeal, and a donation cannot be recorded for one (`POST /api/donations` returns 409 with
+   nothing written, and the Record Donation form locks). Both read `Donor.isEligibleToDonate()` and
+   `Donor.eligibleFrom()` — the same calculation the donor's own dashboard shows — so they cannot drift.
 3. **Stock status thresholds** (per blood group, per blood bank): below 15 units = Critical,
    below 40 units = Low, otherwise Sufficient. Confirm with project owner before changing these numbers.
 4. **`Donation.blood_type` is independently recorded, not copied from `Donor.blood_type`.** Blood type

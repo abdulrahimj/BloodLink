@@ -34,6 +34,11 @@ export function lookupDonorByPhone(phone) {
  * `bloodBankId` is required only for an ADMIN, who belongs to no single bank;
  * bank staff act as their own bank and the backend ignores it for them.
  * Returns a receipt including the resulting stock figure for that group.
+ *
+ * Fails with a 409 (ApiError.status) if the donor is still inside the 90-day
+ * recovery window (Business Rule 2) — nothing is written, and the message says
+ * when a donation can be recorded. The form locks for such a donor anyway; this
+ * is the enforcement behind that lock, not a case the UI expects to reach.
  */
 export function recordDonation({ donorId, bloodType, unitsDonated, bloodBankId }) {
   return apiRequest('/api/donations', {

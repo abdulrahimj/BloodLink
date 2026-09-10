@@ -353,9 +353,9 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         }
         .bi-donor-name { font-size: clamp(12px, 1.75vh, 14.5px); font-weight: 800; letter-spacing: -.01em; }
         .bi-donor-meta { font-size: clamp(9.5px, 1.35vh, 12px); color: var(--ink-muted); margin-top: 3px; line-height: 1.45; }
-        /* The one fact a staff member must weigh before drawing blood. Amber, not
-           red: this warns, it does not forbid — the service records the donation
-           either way, because a draw that already happened must not go unrecorded. */
+        /* Shown when the donor is still inside their recovery window, as the reason
+           the form below it is locked. Amber to match this app's other "not yet"
+           states; the refusal itself is enforced by the backend (409), not by this. */
         .bi-donor-warn {
           margin-top: 8px; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; line-height: 1.45;
           color: #8A5510; background: #FBF1E3;
@@ -841,11 +841,12 @@ function Stat({ tone, icon, figure, label, note }) {
  * "Record Donation" — find the donor, record what was drawn and tested.
  *
  * Two steps in one dialog. The donor has to be found first because everything
- * below depends on knowing who this is, and because their eligibility is the one
- * fact the staff member should weigh before drawing blood. That warning is amber
- * rather than blocking: the backend records the donation either way, since a draw
- * that has already happened must not go unrecorded (see DonationService), and a
- * screen that refused would only leave the units unaccounted for on the shelf.
+ * below depends on knowing who this is — and on whether they may donate at all.
+ * A donor still inside Business Rule 2's 90-day recovery window locks the form:
+ * the group, the units and the confirm button are all disabled, and the amber
+ * message says why and from what date a donation can be recorded. The backend
+ * refuses the same request independently with a 409, so this lock explains the
+ * refusal in advance rather than being the thing that enforces it.
  *
  * The tested blood group starts empty and is never seeded from the donor's stored
  * profile group. Business Rule 4: the group is re-tested at every donation and the
@@ -877,6 +878,12 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
     setError(null);
     try {
       setDonor(await lookupDonorByPhone(trimmed));
+      // A new donor starts a new form. The group in particular must not carry
+      // over: a result tested for the previous donor sitting pre-selected under
+      // this one is exactly the Business Rule 4 slip the empty default prevents.
+      setBloodType("");
+      setUnitsDonated("1");
+      setFieldErrors({});
     } catch (err) {
       // Clear any previously found donor: leaving the last one on screen beside a
       // "not found" message is how the wrong person gets a donation recorded.
@@ -889,7 +896,9 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (!donor || submitting) return;
+    // `locked` as well as the disabled button: pressing Enter in the units field
+    // submits a form without ever touching that button.
+    if (!donor || locked || submitting) return;
 
     setError(null);
     setFieldErrors({});
@@ -911,6 +920,8 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
   }
 
   const eligible = donor?.eligibilityStatus === "ELIGIBLE";
+  // Found, but inside the recovery window: nothing below may be filled in.
+  const locked = Boolean(donor) && !eligible;
   const groupMismatch = donor?.profileBloodType && bloodType && donor.profileBloodType !== bloodType;
 
   return (
@@ -957,10 +968,10 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
             {eligible ? (
               <div className="bi-donor-ok">Eligible to donate</div>
             ) : (
-              <div className="bi-donor-warn">
-                Not yet eligible — inside the 90-day recovery window, eligible again from{" "}
-                {formatFullDate(donor.eligibleFrom)}. Recording a donation now is still possible,
-                but check this is right before you do.
+              <div className="bi-donor-warn" role="alert">
+                <strong>Donation locked.</strong> {donor.fullName} last donated on{" "}
+                {formatFullDate(donor.lastDonationDate)} and is still inside the 90-day recovery
+                window. A donation can be recorded from {formatFullDate(donor.eligibleFrom)}.
               </div>
             )}
           </div>
@@ -969,7 +980,7 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
         <div className="bi-field">
           <label htmlFor="donation-group">Blood Group (as tested today)</label>
           <select
-            id="donation-group" value={bloodType} disabled={!donor}
+            id="donation-group" value={bloodType} disabled={!donor || locked}
             onChange={(e) => setBloodType(e.target.value)}
           >
             <option value="">Select tested group…</option>
@@ -987,7 +998,7 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
         <div className="bi-field">
           <label htmlFor="donation-units">Units Donated</label>
           <input
-            id="donation-units" type="number" min="1" max="10" step="1" disabled={!donor}
+            id="donation-units" type="number" min="1" max="10" step="1" disabled={!donor || locked}
             value={unitsDonated} onChange={(e) => setUnitsDonated(e.target.value)}
           />
           {fieldErrors.unitsDonated && <span className="bi-field-err">{fieldErrors.unitsDonated}</span>}
@@ -995,7 +1006,7 @@ function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
 
         <div className="bi-modal-actions">
           <button type="button" className="bi-modal-cancel" onClick={onClose}>Cancel</button>
-          <button type="submit" className="bi-modal-submit" disabled={submitting || !donor || !bloodType}>
+          <button type="submit" className="bi-modal-submit" disabled={submitting || !donor || locked || !bloodType}>
             {submitting ? "Recording…" : "Record Donation"}
           </button>
         </div>

@@ -1,6 +1,8 @@
 package com.bloodlink.donation;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +20,7 @@ import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -60,6 +63,10 @@ public class DonationService {
      */
     static final int SHELF_LIFE_DAYS = 42;
 
+    /** "10 December 2026" — the same long form the frontend's formatFullDate
+     *  uses, so the refusal reads like the rest of the app's dates. */
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
+
     private final DonationRepository donationRepository;
     private final DonorRepository donorRepository;
     private final ActingBankResolver actingBankResolver;
@@ -78,17 +85,33 @@ public class DonationService {
     }
 
     /**
-     * Records one donation and everything that follows from it.
+     * Records one donation and everything that follows from it — for an eligible
+     * donor only.
      *
-     * Eligibility is deliberately not enforced. Business Rule 2 governs whether a
-     * donor should be *invited* to give — which is why the appeal filter refuses
-     * to prompt someone inside their recovery window — but this method documents
-     * a draw that has already happened. Refusing it would not un-draw the blood;
-     * it would leave those units unaccounted for on the shelf and the donor's
-     * record still showing they last gave months ago, which is the more dangerous
-     * of the two errors. The screening decision belongs with the staff member
-     * before the needle, and the Record Donation screen puts the donor's
-     * eligibility in front of them so they make it with the facts in view.
+     * A donor still inside Business Rule 2's 90-day recovery window is refused
+     * outright with a 409, and nothing is written: no Donation row, no change to
+     * their last-donation date, no units added. This is the enforcement point.
+     * The Record Donation screen locks its form for the same donor, but that is a
+     * courtesy that explains the refusal in advance; a request made directly
+     * against this endpoint meets the same rule.
+     *
+     * The check asks {@link Donor#isEligibleToDonate()}, and the refusal quotes
+     * {@link Donor#eligibleFrom()} — both on the entity, both built on the one
+     * ELIGIBILITY_WINDOW_DAYS constant, and the same pair the donor's own
+     * dashboard reads. The decision is taken from the status method rather than
+     * by comparing today against eligibleFrom(), because for a donor who has
+     * never given blood eligibleFrom() is their registration date in UTC, which
+     * near midnight can fall on "tomorrow" in local time — comparing against it
+     * would wrongly lock out a donor registered minutes ago. The status method
+     * has no such edge; for everyone else the two are exactly equivalent.
+     *
+     * The donor row is read under a write lock before the check. The check
+     * ("are they eligible?") and the write ("they donated today") are separate
+     * statements, so without the lock two submissions for the same donor at the
+     * same moment — a double-click, or two staff at two desks — would both read
+     * an eligible donor, both pass, and record two donations. With it, the second
+     * waits, re-reads a last-donation date of today, and is refused like any
+     * other ineligible request.
      */
     @Transactional
     public DonationRecordedResponse recordDonation(RecordDonationPayload payload, AuthenticatedUser principal) {
@@ -96,8 +119,10 @@ public class DonationService {
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType testedBloodType = BloodType.fromLabel(payload.bloodType().trim());
 
-        Donor donor = donorRepository.findById(payload.donorId())
+        Donor donor = donorRepository.findByIdForUpdate(payload.donorId())
             .orElseThrow(() -> new NotFoundException("No donor found for this id."));
+
+        requireEligible(donor);
 
         LocalDate today = LocalDate.now();
 
@@ -113,7 +138,7 @@ public class DonationService {
         Donation saved = donationRepository.save(donation);
 
         // 2. The clock Business Rule 2 measures from. Without this the donor stays
-        //    "eligible" and could be appealed to again the same week.
+        //    "eligible" and could be appealed to — or recorded — again the same week.
         donor.setLastDonationDate(today);
         donorRepository.save(donor);
 
@@ -140,6 +165,27 @@ public class DonationService {
             stock.unitsAvailable(),
             stock.expiryDate(),
             stock.status()
+        );
+    }
+
+    /**
+     * Refuses a donor inside their recovery window, saying when and why.
+     *
+     * 409 rather than 400 or 403: the request is well-formed and the caller is
+     * allowed to record donations — it is the donor's current state that clashes,
+     * the same category as a request that can no longer be approved because
+     * another bank already took it. The message names the date a donation
+     * becomes possible, so the staff member has something to act on rather than
+     * a bare "not allowed".
+     */
+    private void requireEligible(Donor donor) {
+        if (donor.isEligibleToDonate()) {
+            return;
+        }
+        throw new ConflictException(
+            "%s cannot donate yet — they last donated on %s, and 90 days must pass between donations. "
+                .formatted(donor.getUser().getFullName(), DATE.format(donor.getLastDonationDate()))
+            + "A donation can be recorded from %s.".formatted(DATE.format(donor.eligibleFrom()))
         );
     }
 }
