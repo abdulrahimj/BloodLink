@@ -30,4 +30,17 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
      */
     @Query("select d from Donor d join fetch d.user where d.bloodType = :bloodType")
     List<Donor> findByBloodTypeWithUser(@Param("bloodType") BloodType bloodType);
+
+    /**
+     * The donor registered against one phone number — the lookup a blood bank
+     * staff member runs before recording a donation.
+     *
+     * Phone rather than name because V2 made users.phone unique, so this can
+     * only ever match one person: a name search would return several and leave
+     * staff guessing which is the donor in front of them. The user is
+     * join-fetched because every field the lookup returns except blood type
+     * lives on that row.
+     */
+    @Query("select d from Donor d join fetch d.user u where u.phone = :phone")
+    Optional<Donor> findByUserPhoneWithUser(@Param("phone") String phone);
 }

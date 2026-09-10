@@ -131,6 +131,15 @@ public class SecurityConfig {
                 .requestMatchers("/api/requests/**").hasAnyRole(
                     Role.HOSPITAL_STAFF.name(), Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
 
+                // --- Donor lookup for "Record Donation" ---
+                // The one route on /api/donors that is NOT the caller's own record,
+                // and so the one with the opposite rule: bank staff must be able to
+                // find the donor in front of them, and a donor must never be able to
+                // look up another donor. Matched before the rule below, since Spring
+                // applies the first rule that matches.
+                .requestMatchers(HttpMethod.GET, "/api/donors/lookup")
+                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+
                 // --- Donor's own profile, history and eligibility ---
                 .requestMatchers("/api/donors/**")
                     .hasAnyRole(Role.DONOR.name(), Role.ADMIN.name())

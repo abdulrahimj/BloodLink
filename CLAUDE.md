@@ -181,6 +181,12 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 7. **When new stock accumulates onto an existing BloodInventory row** (same blood bank + blood type),
    units add together, but the expiry date is kept as the **earlier** of the old and new expiry dates —
    never extended. A newer batch never masks that some of the combined stock expires sooner.
+   Both paths into inventory go through `InventoryService.addBatch`, which owns this rule: "Add New
+   Batch" on the Inventory screen, and "Record Donation", which folds a donor's units in the same way.
+   A donation's units are given a default expiry of **donation date + 42 days** (`DonationService.SHELF_LIFE_DAYS`),
+   the usual shelf life of red cells in additive solution — a default, not a measured date, since
+   BloodInventory holds one expiry per (bank, group) and cannot carry a per-bag label.
+   **Flagged for review:** confirm 42 days matches the preparation Makeni's labs actually use.
 8. **A BLOOD_BANK_STAFF user is tied to exactly one blood bank** via a nullable `blood_bank_id` on
    `User` (null for all other roles). Inventory writes are restricted to that staff member's own bank;
    ADMIN can write to any bank. There is no self-registration path for HOSPITAL_STAFF,

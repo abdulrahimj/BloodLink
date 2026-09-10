@@ -1,6 +1,7 @@
 package com.bloodlink.domain;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import com.bloodlink.domain.enums.BloodType;
@@ -96,5 +97,29 @@ public class Donor {
     @Transient
     public boolean isEligibleToDonate() {
         return getEligibilityStatus() == EligibilityStatus.ELIGIBLE;
+    }
+
+    /**
+     * The date eligibility began (already past, if they are eligible now) or
+     * begins — the "eligible again from …" date both the donor's own dashboard
+     * and the blood bank's Record Donation lookup show.
+     *
+     * A donor who has never given blood is eligible from the day they registered;
+     * User.createdAt is the closest thing to that date the schema records.
+     * Otherwise it is exactly one day past the window, because Business Rule 2's
+     * "more than 90 days" is strict — the window's last day is still ineligible,
+     * so eligibility starts on day 91.
+     *
+     * Lives on the entity rather than in a service so that this arithmetic and
+     * {@link #getEligibilityStatus()} can never disagree about the same donor:
+     * one of them saying "eligible" while the other names a future date would be
+     * exactly the kind of silent contradiction a second copy of the rule invites.
+     */
+    @Transient
+    public LocalDate eligibleFrom() {
+        if (lastDonationDate == null) {
+            return user.getCreatedAt().atZone(ZoneOffset.UTC).toLocalDate();
+        }
+        return lastDonationDate.plusDays(ELIGIBILITY_WINDOW_DAYS + 1);
     }
 }

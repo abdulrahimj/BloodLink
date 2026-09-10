@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { getInventory, getInventorySummary, addInventoryBatch } from "../api/inventory.js";
 import { getAppealReach, sendDonationAppeal } from "../api/appeals.js";
-import { formatDateTime, formatHeaderDate } from "../lib/dates.js";
+import { lookupDonorByPhone, recordDonation } from "../api/donations.js";
+import { formatDateTime, formatFullDate, formatHeaderDate } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
@@ -80,6 +81,12 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
   const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [donationModalOpen, setDonationModalOpen] = useState(false);
+  // Kept separate from appealNotice rather than sharing one banner: the two
+  // report different actions, and a donation receipt overwriting an appeal
+  // receipt the operator has not read yet would lose the more consequential of
+  // the two messages.
+  const [donationNotice, setDonationNotice] = useState(null);
 
   // The appeal awaiting confirmation, or null when no dialog is open. Holds the
   // group, its fetched reach (null until it arrives), any failure, and whether
@@ -168,6 +175,24 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
    *  and risking it drifting from what the server actually stored. */
   async function handleBatchAdded() {
     setBatchModalOpen(false);
+    await load();
+  }
+
+  /**
+   * After a donation is recorded, reload for the same reason a batch does — the
+   * units are now in stock and every card, chart and row moves with them.
+   *
+   * The receipt's own figure is what the notice quotes rather than anything read
+   * back afterwards: it is the number the server returned from the write itself,
+   * so it cannot disagree with what was actually stored.
+   */
+  async function handleDonationRecorded(receipt) {
+    setDonationModalOpen(false);
+    setDonationNotice(
+      `Donation recorded — ${receipt.unitsDonated} unit${receipt.unitsDonated === 1 ? "" : "s"} `
+      + `of ${receipt.bloodType} from ${receipt.donorName}. `
+      + `${receipt.bloodType} stock is now ${receipt.stockAfter} units.`
+    );
     await load();
   }
 
@@ -297,6 +322,50 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         .bi-addbtn:hover { background: var(--red-dark); }
         .bi-addbtn:disabled { opacity: .6; cursor: not-allowed; }
         .bi-addbtn svg { width: clamp(13px, 1.8vh, 16px); height: clamp(13px, 1.8vh, 16px); }
+
+        /* Record Donation — the second way units enter this bank. */
+        .bi-donatebtn {
+          background: transparent; color: var(--navy);
+          border: 1.5px solid rgba(28,58,94,.35); border-radius: 7px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(10.5px, 1.5vh, 13px);
+          padding: clamp(8px, 1.25vh, 11px) clamp(12px, 1.2vw, 18px);
+          display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+        }
+        .bi-donatebtn:hover { background: rgba(28,58,94,.06); border-color: var(--navy); }
+        .bi-donatebtn:disabled { opacity: .6; cursor: not-allowed; }
+        .bi-donatebtn svg { width: clamp(13px, 1.8vh, 16px); height: clamp(13px, 1.8vh, 16px); }
+
+        /* donor lookup inside the Record Donation modal */
+        .bi-lookup { display: flex; gap: 8px; align-items: flex-start; }
+        .bi-lookup input { flex: 1 1 auto; }
+        .bi-lookup-btn {
+          flex: 0 0 auto; background: var(--navy); color: #FFF; border: none; border-radius: 8px;
+          cursor: pointer; font-family: inherit; font-weight: 700; font-size: clamp(11px, 1.55vh, 13px);
+          padding: clamp(8px, 1.35vh, 11px) clamp(11px, 1.1vw, 15px); white-space: nowrap;
+        }
+        .bi-lookup-btn:hover { background: var(--navy-soft); }
+        .bi-lookup-btn:disabled { background: #C9CDD3; cursor: not-allowed; }
+
+        .bi-donor-card {
+          background: #F6F7F8; border: 1.5px solid var(--line); border-radius: 8px;
+          padding: clamp(9px, 1.5vh, 13px) clamp(11px, 1.1vw, 15px);
+          margin-bottom: clamp(10px, 1.7vh, 16px);
+        }
+        .bi-donor-name { font-size: clamp(12px, 1.75vh, 14.5px); font-weight: 800; letter-spacing: -.01em; }
+        .bi-donor-meta { font-size: clamp(9.5px, 1.35vh, 12px); color: var(--ink-muted); margin-top: 3px; line-height: 1.45; }
+        /* The one fact a staff member must weigh before drawing blood. Amber, not
+           red: this warns, it does not forbid — the service records the donation
+           either way, because a draw that already happened must not go unrecorded. */
+        .bi-donor-warn {
+          margin-top: 8px; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; line-height: 1.45;
+          color: #8A5510; background: #FBF1E3;
+          border-left: 3px solid var(--amber); border-radius: 6px;
+          padding: clamp(7px, 1.1vh, 10px) clamp(9px, .9vw, 12px);
+        }
+        .bi-donor-ok {
+          margin-top: 8px; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600;
+          color: var(--green);
+        }
 
         .bi-stats { flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(9px, 1.1vw, 18px); }
         .bi-stat {
@@ -490,6 +559,15 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
               connected={connected}
               onMarkAllRead={markAllRead}
             />
+            {/* Recording a donation and adding a batch are the two ways units
+                enter this bank, so they sit together. Outlined rather than
+                filled: both add stock, but "Add New Batch" was this page's
+                established primary action and two solid red buttons would read
+                as a choice between equals. */}
+            <button type="button" className="bi-donatebtn" disabled={loading}
+                    onClick={() => setDonationModalOpen(true)}>
+              <DropletOutlineIcon /> Record Donation
+            </button>
             <button type="button" className="bi-addbtn" disabled={loading} onClick={() => setBatchModalOpen(true)}>
               <PlusIcon /> Add New Batch
             </button>
@@ -503,6 +581,13 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           <div className="bi-notice" role="status">
             {appealNotice}
             <button type="button" onClick={() => setAppealNotice(null)} aria-label="Dismiss">Dismiss</button>
+          </div>
+        )}
+
+        {donationNotice && (
+          <div className="bi-notice" role="status">
+            {donationNotice}
+            <button type="button" onClick={() => setDonationNotice(null)} aria-label="Dismiss">Dismiss</button>
           </div>
         )}
 
@@ -612,6 +697,14 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           bloodBankId={bloodBankId}
           onClose={() => setBatchModalOpen(false)}
           onAdded={handleBatchAdded}
+        />
+      )}
+
+      {donationModalOpen && (
+        <RecordDonationModal
+          bloodBankId={bloodBankId}
+          onClose={() => setDonationModalOpen(false)}
+          onRecorded={handleDonationRecorded}
         />
       )}
 
@@ -744,6 +837,173 @@ function Stat({ tone, icon, figure, label, note }) {
  * radius/Inter), styled as a small centered modal since no such surface existed
  * to reuse.
  */
+/**
+ * "Record Donation" — find the donor, record what was drawn and tested.
+ *
+ * Two steps in one dialog. The donor has to be found first because everything
+ * below depends on knowing who this is, and because their eligibility is the one
+ * fact the staff member should weigh before drawing blood. That warning is amber
+ * rather than blocking: the backend records the donation either way, since a draw
+ * that has already happened must not go unrecorded (see DonationService), and a
+ * screen that refused would only leave the units unaccounted for on the shelf.
+ *
+ * The tested blood group starts empty and is never seeded from the donor's stored
+ * profile group. Business Rule 4: the group is re-tested at every donation and the
+ * record must reflect that test, so pre-filling it — even "helpfully" — would let
+ * one mistyped profile follow a donor into every donation and into the stock
+ * issued from it. The profile group is shown beside it for recognition, and a
+ * mismatch is called out rather than hidden.
+ */
+function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
+  const [phone, setPhone] = useState("");
+  const [donor, setDonor] = useState(null);
+  const [lookupError, setLookupError] = useState(null);
+  const [lookingUp, setLookingUp] = useState(false);
+
+  // Empty by design — see the note above. Not BLOOD_GROUPS[0], and not the
+  // donor's profile group.
+  const [bloodType, setBloodType] = useState("");
+  const [unitsDonated, setUnitsDonated] = useState("1");
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleLookup() {
+    const trimmed = phone.trim();
+    if (!trimmed || lookingUp) return;
+
+    setLookingUp(true);
+    setLookupError(null);
+    setError(null);
+    try {
+      setDonor(await lookupDonorByPhone(trimmed));
+    } catch (err) {
+      // Clear any previously found donor: leaving the last one on screen beside a
+      // "not found" message is how the wrong person gets a donation recorded.
+      setDonor(null);
+      setLookupError(err.message);
+    } finally {
+      setLookingUp(false);
+    }
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (!donor || submitting) return;
+
+    setError(null);
+    setFieldErrors({});
+    setSubmitting(true);
+    try {
+      const receipt = await recordDonation({
+        donorId: donor.donorId,
+        bloodType,
+        unitsDonated: Number(unitsDonated),
+        bloodBankId,
+      });
+      await onRecorded(receipt);
+    } catch (err) {
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const eligible = donor?.eligibilityStatus === "ELIGIBLE";
+  const groupMismatch = donor?.profileBloodType && bloodType && donor.profileBloodType !== bloodType;
+
+  return (
+    <div className="bi-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="bi-modal" onSubmit={handleSubmit} noValidate>
+        <div className="bi-modal-title">Record Donation</div>
+        <div className="bi-modal-sub">
+          Records the donation, updates the donor&rsquo;s eligibility, and adds the units to stock.
+        </div>
+
+        {error && <div className="bi-modal-alert" role="alert">{error}</div>}
+
+        <div className="bi-field">
+          <label htmlFor="donation-phone">Donor Phone Number</label>
+          <div className="bi-lookup">
+            <input
+              id="donation-phone" type="tel" placeholder="e.g. +232 76 000 001"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              // Enter looks the donor up rather than submitting a form that has
+              // no donor yet — the natural key press at this point in the flow.
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleLookup(); } }}
+            />
+            <button type="button" className="bi-lookup-btn" disabled={lookingUp || !phone.trim()}
+                    onClick={handleLookup}>
+              {lookingUp ? "Finding…" : "Find donor"}
+            </button>
+          </div>
+          {lookupError && <span className="bi-field-err">{lookupError}</span>}
+        </div>
+
+        {donor && (
+          <div className="bi-donor-card">
+            <div className="bi-donor-name">{donor.fullName}</div>
+            <div className="bi-donor-meta">
+              {donor.profileBloodType
+                ? `Profile group ${donor.profileBloodType}`
+                : "No group on file — never typed"}
+              {" · "}
+              {donor.lastDonationDate
+                ? `Last donated ${formatFullDate(donor.lastDonationDate)}`
+                : "No previous donation"}
+            </div>
+            {eligible ? (
+              <div className="bi-donor-ok">Eligible to donate</div>
+            ) : (
+              <div className="bi-donor-warn">
+                Not yet eligible — inside the 90-day recovery window, eligible again from{" "}
+                {formatFullDate(donor.eligibleFrom)}. Recording a donation now is still possible,
+                but check this is right before you do.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="bi-field">
+          <label htmlFor="donation-group">Blood Group (as tested today)</label>
+          <select
+            id="donation-group" value={bloodType} disabled={!donor}
+            onChange={(e) => setBloodType(e.target.value)}
+          >
+            <option value="">Select tested group…</option>
+            {BLOOD_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+          {groupMismatch && (
+            <span className="bi-field-err">
+              Differs from this donor&rsquo;s profile group ({donor.profileBloodType}). Today&rsquo;s
+              test is what will be recorded.
+            </span>
+          )}
+          {fieldErrors.bloodType && <span className="bi-field-err">{fieldErrors.bloodType}</span>}
+        </div>
+
+        <div className="bi-field">
+          <label htmlFor="donation-units">Units Donated</label>
+          <input
+            id="donation-units" type="number" min="1" max="10" step="1" disabled={!donor}
+            value={unitsDonated} onChange={(e) => setUnitsDonated(e.target.value)}
+          />
+          {fieldErrors.unitsDonated && <span className="bi-field-err">{fieldErrors.unitsDonated}</span>}
+        </div>
+
+        <div className="bi-modal-actions">
+          <button type="button" className="bi-modal-cancel" onClick={onClose}>Cancel</button>
+          <button type="submit" className="bi-modal-submit" disabled={submitting || !donor || !bloodType}>
+            {submitting ? "Recording…" : "Record Donation"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function AddBatchModal({ bloodBankId, onClose, onAdded }) {
   const [bloodType, setBloodType] = useState(BLOOD_GROUPS[0]);
   const [unitsToAdd, setUnitsToAdd] = useState("");

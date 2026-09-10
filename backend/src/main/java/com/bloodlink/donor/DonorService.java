@@ -1,7 +1,6 @@
 package com.bloodlink.donor;
 
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -64,7 +63,9 @@ public class DonorService {
             donor.getAddress(),
             donor.getEligibilityStatus(),
             donor.getLastDonationDate(),
-            eligibleSince(donor),
+            // Business Rule 2's date arithmetic lives on the entity, so this and
+            // the blood bank's donor lookup cannot drift apart.
+            donor.eligibleFrom(),
             donations.size(),
             totalUnits,
             totalUnits * LIVES_PER_UNIT,
@@ -84,23 +85,6 @@ public class DonorService {
                 donation.getBloodBank().getName()
             ))
             .toList();
-    }
-
-    /**
-     * The date eligibility began (already eligible, if in the past) or begins.
-     *
-     * A donor who has never given blood is eligible from the day they registered —
-     * User.createdAt is the closest thing to that date the schema records.
-     * Otherwise it is exactly 91 days after the last donation: the first day
-     * Donor.getEligibilityStatus() reads as ELIGIBLE.
-     */
-    private LocalDate eligibleSince(Donor donor) {
-        if (donor.getLastDonationDate() == null) {
-            return donor.getUser().getCreatedAt().atZone(ZoneOffset.UTC).toLocalDate();
-        }
-        // +1 because Business Rule 2's "more than" is strict: the window's last day
-        // is still ineligible, so eligibility begins the day after it.
-        return donor.getLastDonationDate().plusDays(Donor.ELIGIBILITY_WINDOW_DAYS + 1);
     }
 
     /**
