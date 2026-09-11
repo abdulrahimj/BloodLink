@@ -2,7 +2,10 @@ package com.bloodlink.appeal.dto;
 
 import java.util.UUID;
 
+import com.bloodlink.domain.enums.BloodType;
+
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -20,6 +23,7 @@ public record DonationAppealPayload(
     /** Clinical label ("A+", "O-") rather than the enum constant, matching how blood
      *  type crosses the wire everywhere else in this API (see BloodTypeConverter). */
     @NotBlank(message = "Blood group is required")
+    @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\"")
     String bloodType,
 
     /**

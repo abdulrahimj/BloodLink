@@ -3,6 +3,7 @@ package com.bloodlink.inventory.dto;
 import java.time.LocalDate;
 
 import jakarta.validation.constraints.FutureOrPresent;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
@@ -19,8 +20,16 @@ import jakarta.validation.constraints.NotNull;
  */
 public record AddBatchRequest(
 
+    /**
+     * Bounded at 1000 as a typo guard, not a clinical rule — the same framing
+     * RecordDonationPayload.unitsDonated already gives its own, much smaller cap.
+     * A regional blood bank's single batch is realistically dozens to low
+     * hundreds of units; 1000 leaves generous room for a genuine large shipment
+     * while still catching a stray extra digit before it enters issuable stock.
+     */
     @NotNull(message = "Units to add is required")
     @Min(value = 1, message = "Must add at least 1 unit")
+    @Max(value = 1000, message = "That is more units than a single batch should carry — please check the figure")
     Integer unitsToAdd,
 
     @NotNull(message = "Expiry date is required")

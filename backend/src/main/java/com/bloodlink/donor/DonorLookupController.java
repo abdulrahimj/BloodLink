@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.bloodlink.donor.dto.DonorLookupResponse;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
 /**
  * Donor lookup for the "Record Donation" flow.
  *
@@ -30,9 +33,28 @@ public class DonorLookupController {
         this.donorLookupService = donorLookupService;
     }
 
-    /** GET /api/donors/lookup?phone=... — exact match, 404 when nobody matches. */
+    /**
+     * GET /api/donors/lookup?phone=... — exact match, 404 when nobody matches.
+     *
+     * A blank or missing phone is refused with its own 400 rather than reaching
+     * the service to become a slightly misleading 404 ("no donor found" for a
+     * number nobody typed) — the two failures mean different things, and only one
+     * of them is "search again with a different number".
+     *
+     * No @Validated on this class — see the identical note on AppealController.
+     * reach, which found out the hard way that it is not needed and actively
+     * wrong: Spring MVC validates an annotated @RequestParam like this one
+     * natively (6.1+), and @Validated would only divert it through the older
+     * AOP-based mechanism instead, which this project's GlobalExceptionHandler
+     * does not shape the same way.
+     */
     @GetMapping("/lookup")
-    public DonorLookupResponse lookup(@RequestParam String phone) {
+    public DonorLookupResponse lookup(
+        @RequestParam
+        @NotBlank(message = "Phone number is required")
+        @Size(max = 32, message = "Phone number must be 32 characters or fewer")
+        String phone
+    ) {
         return donorLookupService.lookupByPhone(phone);
     }
 }

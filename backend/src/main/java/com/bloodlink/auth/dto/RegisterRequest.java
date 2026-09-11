@@ -2,12 +2,14 @@ package com.bloodlink.auth.dto;
 
 import java.time.LocalDate;
 
+import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Gender;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Past;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -43,7 +45,14 @@ public record RegisterRequest(
     @NotNull(message = "Gender is required")
     Gender gender,
 
-    // Nullable by design: "I don't know yet".
+    /**
+     * Nullable by design: "I don't know yet". When given, bounded to the shape a
+     * real label can take ("A+", "AB-") — the service still resolves the exact
+     * value via BloodType.fromLabel (whose failure is also a 400), but catching an
+     * obviously-wrong value here means a garbage string gets a field-level message
+     * pointing at "bloodType" specifically, rather than a generic one.
+     */
+    @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\", or leave blank")
     String bloodType,
 
     @NotBlank(message = "Area / community is required")

@@ -240,6 +240,12 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
   - **Never report "test data cleaned up" without evidence.** State the exact statements run and the row
     counts they affected, and confirm the deleted count equals the count inserted. If those two numbers
     disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
+  - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
+    it is a dedicated, *persistent* fixture for exactly one test, `BloodRequestLifecycleIT`, which is
+    `@Transactional` and rolls back everything it writes, so re-running it never leaves residue to clean up.
+    Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
+    Never point it at `bloodlink_dev`, and never use it for anything but that one test — a second,
+    non-transactional consumer would break the "always safe to rerun" guarantee this convention exists for.
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.
 - **At the end of every task, list every file created or modified**, grouped as New / Modified, and for each new or changed method/function, give its name and a one-line purpose. This is a structured list in addition to any prose summary, not a replacement for it — the project owner reviews this list against `git status` before verifying anything in the browser.
 - **Work directly on the `main` branch.** Do not create feature branches, task branches, or any other branch unless explicitly instructed to. This is a two-person project working phase-by-phase in turns; branching adds coordination overhead we've deliberately chosen not to use.

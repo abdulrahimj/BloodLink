@@ -2,10 +2,13 @@ package com.bloodlink.donation.dto;
 
 import java.util.UUID;
 
+import com.bloodlink.domain.enums.BloodType;
+
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 
 /**
  * POST /api/donations — a blood bank recording a donation it has just taken.
@@ -32,6 +35,7 @@ public record RecordDonationPayload(
      * it. The staff member must state today's result.
      */
     @NotBlank(message = "The tested blood group is required")
+    @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\"")
     String bloodType,
 
     /**

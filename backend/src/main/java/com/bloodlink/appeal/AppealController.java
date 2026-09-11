@@ -13,9 +13,12 @@ import org.springframework.web.bind.annotation.RestController;
 import com.bloodlink.appeal.dto.AppealReachResponse;
 import com.bloodlink.appeal.dto.DonationAppealPayload;
 import com.bloodlink.appeal.dto.DonationAppealResponse;
+import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.security.AuthenticatedUser;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 
 /**
  * "Send donation appeal" — the blood bank / lab staff use case from CLAUDE.md.
@@ -50,8 +53,23 @@ public class AppealController {
      * un-encoded "A+" would arrive as "A " and be rejected as an unknown group.
      * encodeURIComponent turns it into "A%2B", which decodes back correctly.
      */
+    // Deliberately no @Validated on this class. Spring MVC has validated
+    // constraint-annotated @RequestParam/@PathVariable values natively since
+    // 6.1 — no class-level marker needed, since spring-boot-starter-validation
+    // already supplies the Validator bean that mechanism looks for — and it is
+    // what GlobalExceptionHandler.handleParameterValidation expects. Adding
+    // @Validated here would not add coverage: it would redirect the very same
+    // constraints through Spring's older, general-purpose AOP-based method
+    // validation instead, which throws a plain jakarta.validation.
+    // ConstraintViolationException that reached this project's catch-all
+    // handler as an opaque 500 until this was caught and fixed here.
     @GetMapping("/reach")
-    public AppealReachResponse reach(@RequestParam String bloodType) {
+    public AppealReachResponse reach(
+        @RequestParam
+        @NotBlank(message = "Blood group is required")
+        @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\"")
+        String bloodType
+    ) {
         return appealService.previewReach(bloodType);
     }
 

@@ -101,6 +101,16 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Spring Boot 4's modularised auto-configuration again (see the Flyway
+             comment above): MockMvc's test support — @AutoConfigureMockMvc and
+             friends — moved out of spring-boot-starter-test into its own starter,
+             needed only by BloodRequestLifecycleIT. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
