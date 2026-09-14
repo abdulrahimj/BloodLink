@@ -44,7 +44,8 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
 
     /**
      * "Incoming Hospital Requests" for one blood bank: everything this bank could
-     * still act on, plus everything it has already acted on, newest first.
+     * still act on, plus everything it has already acted on, newest first — minus
+     * anything it has already declined.
      *
      * The two halves of the OR are what Business Rule 6 means in practice.
      * fulfilled_by_blood_bank_id is null exactly while a request is unclaimed
@@ -53,10 +54,22 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
      * that bank's feed and drops out of every other bank's. Without the second half
      * a bank would lose sight of a request the moment it approved it; without the
      * first, no bank would ever see a request to approve.
+     *
+     * The not-exists clause is Business Rule 11's per-bank half. A decline is now
+     * recorded per (request, bank) rather than by closing the request outright, so
+     * "I have turned this down" has to be expressed as a filter on this bank's own
+     * view: the request disappears from the declining bank's queue while staying
+     * fully visible and actionable in every other bank's. The clause is scoped to
+     * :bloodBankId alone — another bank's decline must never hide a request here,
+     * which is the entire point of the change.
      */
     @Query("""
         select r from BloodRequest r
-        where r.fulfilledByBloodBank is null or r.fulfilledByBloodBank.id = :bloodBankId
+        where (r.fulfilledByBloodBank is null or r.fulfilledByBloodBank.id = :bloodBankId)
+          and not exists (
+              select 1 from BloodRequestDecline d
+              where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
+          )
         order by r.createdAt desc
         """)
     List<BloodRequest> findActionableForBank(@Param("bloodBankId") UUID bloodBankId);
@@ -65,11 +78,17 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     List<BloodRequest> findAllByOrderByCreatedAtDesc();
 
     /** The "Pending Requests" stat card, counted over the same actionable scope as
-     *  {@link #findActionableForBank} so the card and the panel below it agree. */
+     *  {@link #findActionableForBank} so the card and the panel below it agree —
+     *  including the declined-by-this-bank exclusion, without which the card would
+     *  keep counting requests this bank has turned down and no longer displays. */
     @Query("""
         select count(r) from BloodRequest r
         where r.status = :status
           and (r.fulfilledByBloodBank is null or r.fulfilledByBloodBank.id = :bloodBankId)
+          and not exists (
+              select 1 from BloodRequestDecline d
+              where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
+          )
         """)
     long countActionableForBankByStatus(
         @Param("bloodBankId") UUID bloodBankId,

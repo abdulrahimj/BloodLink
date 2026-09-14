@@ -43,9 +43,9 @@ import { useNotifications } from "../realtime/useNotifications.js";
    and the register only tolerates so many asks before people stop reading them.
 
    Confirming is one lightweight step, not the Dashboard's full Reject dialog.
-   The two are weighed differently on purpose: rejecting a request is terminal
-   for every bank in Makeni and cannot be undone, so it earns a warning block
-   and a deliberate pause. Sending an appeal asks some donors to consider coming
+   The two are weighed differently on purpose: declining a request cannot be
+   undone and drops it out of this bank's queue for good, so it earns a warning
+   block and a deliberate pause. Sending an appeal asks some donors to consider coming
    in — its worst outcome is a wasted message, and the honest way to say that is
    a small confirmation, not borrowed alarm. What it does show is the number of
    donors who will actually be contacted, because that is the one fact a staff
@@ -732,9 +732,10 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
  * so the number promised here is the number contacted, not an estimate.
  *
  * Deliberately lighter than the Dashboard's Reject dialog: no warning block, and a
- * navy confirm rather than a red one. Rejecting a request is terminal for every
- * bank in Makeni; sending an appeal asks some people to consider donating. Dressing
- * the second in the first's alarm would devalue the warning where it is earned.
+ * navy confirm rather than a red one. Declining a request permanently gives up this
+ * bank's claim on it; sending an appeal asks some people to consider donating.
+ * Dressing the second in the first's alarm would devalue the warning where it is
+ * earned.
  */
 function AppealConfirmation({ appeal, onCancel, onConfirm }) {
   const { bloodType, reach, error, sending } = appeal;

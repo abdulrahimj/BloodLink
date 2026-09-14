@@ -15,6 +15,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
@@ -23,6 +24,7 @@ import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
+import com.bloodlink.domain.BloodRequestDecline;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
@@ -32,6 +34,7 @@ import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
@@ -58,6 +61,7 @@ class RequestServiceTest {
 
     @Mock private BloodRequestRepository bloodRequestRepository;
     @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodRequestDeclineRepository declineRepository;
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private UserRepository userRepository;
     @Mock private NotificationService notificationService;
@@ -73,6 +77,8 @@ class RequestServiceTest {
         service = new RequestService(
             bloodRequestRepository,
             bloodInventoryRepository,
+            declineRepository,
+            bloodBankRepository,
             userRepository,
             new ActingBankResolver(userRepository, bloodBankRepository),
             notificationService
@@ -275,14 +281,57 @@ class RequestServiceTest {
         )).isInstanceOf(ConflictException.class);
     }
 
-    // ---------- rejecting ----------
+    // ---------- rejecting (Business Rule 11: per-bank declines) ----------
 
+    /**
+     * The heart of Business Rule 11's fix: one bank declining must NOT close the
+     * request. Before this change, status went straight to REJECTED here, which
+     * stranded the hospital behind whichever bank happened to look first — even
+     * when the other bank had the stock.
+     */
     @Test
-    void rejectingIsTerminalAndClaimsNothing() {
+    void oneBankDecliningLeavesTheRequestPendingForTheOtherBank() {
         BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
+        // One decline recorded (this one), against the two banks that exist.
+        when(declineRepository.countByBloodRequestId(REQUEST_ID)).thenReturn(1L);
+        when(bloodBankRepository.count()).thenReturn(2L);
+        echoSavedRequest();
+
+        BloodRequestResponse afterDecline = service.act(
+            REQUEST_ID,
+            new RequestActionPayload(RequestAction.REJECT, null),
+            principal(Role.BLOOD_BANK_STAFF)
+        );
+
+        assertThat(afterDecline.status()).isEqualTo(RequestStatus.PENDING);
+        // Declining claims nothing — "fulfilled by" means "is supplying this".
+        assertThat(afterDecline.fulfilledByBloodBankId()).isNull();
+
+        // The decline itself is recorded, attributed to the acting bank and this
+        // request — that row is what removes it from this bank's queue.
+        ArgumentCaptor<BloodRequestDecline> captor = ArgumentCaptor.forClass(BloodRequestDecline.class);
+        verify(declineRepository).save(captor.capture());
+        assertThat(captor.getValue().getBloodBank().getId()).isEqualTo(BANK_ID);
+        assertThat(captor.getValue().getBloodRequest().getId()).isEqualTo(REQUEST_ID);
+    }
+
+    /**
+     * The other half of the rule: once every bank has declined, the request really
+     * is closed, and the hospital is told so.
+     */
+    @Test
+    void theLastBankDecliningClosesTheRequestForEveryone() {
+        BloodBank actingBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
+        when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
+            .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
+        // Two declines against two banks: the other bank had already declined, and
+        // this call is the second — the last one outstanding.
+        when(declineRepository.countByBloodRequestId(REQUEST_ID)).thenReturn(2L);
+        when(bloodBankRepository.count()).thenReturn(2L);
         echoSavedRequest();
 
         BloodRequestResponse rejected = service.act(
@@ -292,8 +341,63 @@ class RequestServiceTest {
         );
 
         assertThat(rejected.status()).isEqualTo(RequestStatus.REJECTED);
-        // "fulfilled by" means "is supplying this"; a rejection supplies nothing.
         assertThat(rejected.fulfilledByBloodBankId()).isNull();
+
+        // The hospital hears about it exactly once, on the closing decline — the
+        // service always calls this, and PENDING is a no-op inside it, so what is
+        // asserted here is that the status reaching it is the terminal one.
+        ArgumentCaptor<BloodRequest> notified = ArgumentCaptor.forClass(BloodRequest.class);
+        verify(notificationService).notifyRequestStatusChange(notified.capture());
+        assertThat(notified.getValue().getStatus()).isEqualTo(RequestStatus.REJECTED);
+    }
+
+    /**
+     * A bank that has already declined cannot decline again — without this, a
+     * double-click would write a second decline row and could push the count past
+     * the bank total, closing a request the other bank had never even seen.
+     */
+    @Test
+    void aBankCannotDeclineTheSameRequestTwice() {
+        BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
+        when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
+            .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
+        when(declineRepository.existsByBloodRequestIdAndBloodBankId(REQUEST_ID, BANK_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.act(
+            REQUEST_ID,
+            new RequestActionPayload(RequestAction.REJECT, null),
+            principal(Role.BLOOD_BANK_STAFF)
+        ))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("already declined");
+
+        // Nothing written, and the hospital is not notified about a non-event.
+        verify(declineRepository, never()).save(any());
+        verify(bloodRequestRepository, never()).save(any());
+        verify(notificationService, never()).notifyRequestStatusChange(any());
+    }
+
+    /**
+     * The queue side of the same rule, at the layer this test class covers: a bank's
+     * feed comes from findActionableForBank, whose query excludes requests that bank
+     * has declined. Asserting the service asks that question for the caller's own
+     * bank is what keeps "declined" and "no longer shown" the same fact — the query
+     * itself is exercised end-to-end in BloodRequestLifecycleIT against a real
+     * database, where a mock cannot pretend a SQL clause works.
+     */
+    @Test
+    void aBanksQueueIsScopedToItsOwnActionableRequests() {
+        BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
+        when(bloodRequestRepository.findActionableForBank(BANK_ID)).thenReturn(List.of());
+
+        List<BloodRequestResponse> queue = service.listRequests(principal(Role.BLOOD_BANK_STAFF), OTHER_BANK_ID);
+
+        assertThat(queue).isEmpty();
+        // Its own bank, never the one named in the query string.
+        verify(bloodRequestRepository).findActionableForBank(BANK_ID);
+        verify(bloodRequestRepository, never()).findActionableForBank(OTHER_BANK_ID);
     }
 
     // ---------- fulfilling ----------

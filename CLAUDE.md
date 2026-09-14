@@ -146,6 +146,18 @@ One row per (blood_bank_id, blood_type) — not one row per unit.
 | patient_reference | varchar, nullable — optional ward/patient note from hospital staff |
 | created_at | timestamp |
 
+### BloodRequestDecline
+| field | type |
+|---|---|
+| id | UUID, PK |
+| blood_request_id | UUID, FK -> BloodRequest, ON DELETE CASCADE |
+| blood_bank_id | UUID, FK -> BloodBank, ON DELETE CASCADE |
+| declined_at | timestamp |
+
+One row per (blood_request, blood_bank) pair, unique on that pair (`uq_decline_request_bank`) —
+added in V9 as the per-bank response table Business Rule 11 anticipated. A row here means "this bank
+has declined this request"; it does not change `BloodRequest.status`. See Business Rule 11.
+
 ### Notification
 | field | type |
 |---|---|
@@ -158,7 +170,8 @@ One row per (blood_bank_id, blood_type) — not one row per unit.
 
 ### Relationships
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
-BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification
+BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
+BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline
 
 ---
 
@@ -204,14 +217,25 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
     Approval removes a request from every other blood bank's queue, so approving without enough stock
     would strand the hospital behind a bank that turns out unable to help. Actual deduction from
     inventory still only happens at fulfilment.
-11. **Rejecting a request is terminal for every blood bank, not only the rejecting one** — `status` is
-    a single shared field with one `REJECTED` state (rule 5), and the schema has no per-bank response
-    table. **Flagged for review:** the project owner has not finally approved this as permanent
-    behaviour, since one bank lacking stock currently closes the request even if another bank could
-    fulfil it. A possible future fix is a separate per-bank response table, which would require an ERD
-    change. Until that decision is made, keep the current single-status behaviour, but the frontend
-    should confirm with blood bank staff before submitting a rejection that it closes the request for
-    every bank, not only theirs.
+11. **Rejecting a request is per blood bank, not shared.** One bank declining records a
+    `BloodRequestDecline` row for that (request, bank) pair and does **not** change
+    `BloodRequest.status`: the request stays PENDING and stays fully visible and actionable to every
+    other bank. It only becomes `REJECTED` once **every** blood bank has declined it — with two banks
+    seeded, that means both. "Every blood bank" is the count of `blood_banks` rows; nothing in the
+    schema marks a bank inactive, so existing is what active means, and `RequestService.reject` is the
+    one place that would have to learn otherwise if an inactive flag is ever added.
+    - A declining bank's own queue must stop showing the request — enforced by the `not exists`
+      clause in `BloodRequestRepository.findActionableForBank` (and in
+      `countActionableForBankByStatus`, so the stat card and the panel below it agree).
+    - A bank cannot decline the same request twice: refused with a 409, and guarded in the database
+      by `uq_decline_request_bank`, so two simultaneous clicks cannot inflate the count and close a
+      request early.
+    - The hospital is notified **only** on the closing decline. A decline that leaves the request live
+      is not news the hospital can act on, and `notifyRequestStatusChange` sends nothing for PENDING.
+    - Approval and fulfilment are unchanged — a request is already claimed exclusively via
+      `fulfilled_by_blood_bank_id` the moment one bank approves it (rules 5, 6, 10).
+    This replaces the earlier shared-rejection behaviour, which was flagged for review because one
+    bank lacking stock closed a request another bank could have filled. Schema added in `V9`.
 
 ## Actors (roles) and what each can do
 

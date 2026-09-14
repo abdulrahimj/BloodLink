@@ -332,8 +332,13 @@ public class NotificationService {
                 .formatted(subject, bank == null ? "a blood bank" : bank.getName());
             case FULFILLED -> "%s has been fulfilled by %s. The units have been issued."
                 .formatted(subject, bank == null ? "a blood bank" : bank.getName());
-            case REJECTED -> ("%s was rejected. A rejection closes the request for every blood bank, "
-                + "so please submit a new request if the blood is still needed.").formatted(subject);
+            // Reaching REJECTED now means every blood bank declined it, not just one
+            // (Business Rule 11) — the message says so, because "rejected" alone
+            // would leave a hospital wondering whether another bank might still pick
+            // it up, which under the old shared-rejection behaviour it could not, and
+            // under the new per-bank behaviour it already has had the chance to.
+            case REJECTED -> ("%s was declined by every blood bank, so it is now closed. "
+                + "Please submit a new request if the blood is still needed.").formatted(subject);
             // PENDING is the state a request is created in, never one it changes to —
             // nothing in Business Rule 5's lifecycle leads back to it. Listed so that
             // adding a status later fails the build here rather than silently

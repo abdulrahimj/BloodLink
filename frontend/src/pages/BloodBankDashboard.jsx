@@ -569,8 +569,9 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                                     onClick={() => handleAction(r.id, "APPROVE")}>
                               {busy ? "…" : "Approve"}
                             </button>
-                            {/* Confirmed first — rejecting closes the request for
-                                every bank, which the button alone cannot convey. */}
+                            {/* Confirmed first — declining drops the request out of
+                                this bank's queue for good, which the button alone
+                                cannot convey. */}
                             <button type="button" className="bb-act bb-act--ghost" disabled={busy}
                                     onClick={() => setConfirmingReject(r)}>
                               Reject
@@ -608,7 +609,15 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 
 /**
  * Asks before a Reject is submitted, and says what the operator cannot see from
- * the button: rejection is terminal for every blood bank, not only this one.
+ * the button: what declining does to the request elsewhere.
+ *
+ * The warning used to say a rejection closed the request for every bank, which
+ * was true of the old shared-status behaviour and is now wrong — under Business
+ * Rule 11 a decline is recorded per bank, so with two banks operating it is the
+ * *second* decline that closes anything, and the first usually closes nothing.
+ * Still confirmed rather than submitted straight from the button: the operator
+ * cannot undo their own decline, and the request vanishing from their queue is a
+ * surprising thing to trigger with a stray click.
  *
  * Deliberately a styled dialog rather than window.confirm — the browser's own
  * prompt cannot carry the warning with any emphasis, names the page rather than
@@ -645,9 +654,10 @@ function RejectConfirmation({ request, cancelRef, onCancel, onConfirm }) {
         </div>
 
         <div className="bb-dialog-warn">
-          Rejecting closes this request for <strong>every blood bank in Makeni</strong>, not
-          only this one — no other bank will be able to approve or fulfil it afterwards, and
-          the hospital will have to submit a new request. This cannot be undone.
+          This removes the request from <strong>your queue only</strong>. Every other blood
+          bank keeps seeing it and can still approve or fulfil it — the hospital's request
+          closes only if <strong>every bank</strong> ends up declining it. You cannot undo
+          your own decline.
         </div>
 
         <div className="bb-dialog-actions">

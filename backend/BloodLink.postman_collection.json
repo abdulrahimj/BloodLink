@@ -373,7 +373,7 @@
               "mode": "raw",
               "raw": "{\n  \"action\": \"REJECT\",\n  \"bloodBankId\": null\n}"
             },
-            "description": "PENDING -> REJECTED. Terminal, and — per Business Rule 11 — closes the request for *every* blood bank, not only the rejecting one, since status is one shared field. Run against a request that is still PENDING (this example reuses `{{bloodRequestId}}`, which the Approve/Fulfil requests above will already have moved past PENDING — submit a fresh request first if you want to see this succeed)."
+            "description": "Declines the request on behalf of the acting blood bank — per Business Rule 11 this is per-bank, not shared. It writes a `blood_request_declines` row and removes the request from THIS bank's queue only; the request stays PENDING and fully actionable for every other bank. It becomes REJECTED (and the hospital is notified) only once every blood bank has declined it. Declining twice as the same bank returns 409. Run against a request that is still PENDING (this example reuses `{{bloodRequestId}}`, which the Approve/Fulfil requests above will already have moved past PENDING — submit a fresh request first if you want to see this succeed)."
           }
         }
       ]

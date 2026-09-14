@@ -377,17 +377,18 @@ class NotificationServiceTest {
     }
 
     @Test
-    void aRejectionSaysItClosesTheRequestForEveryBank() {
+    void aRejectionSaysEveryBankDeclinedItAndTheRequestIsClosed() {
         when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
             .thenReturn(List.of(user("Isatu Turay")));
         echoSavedNotifications();
 
-        // Rejection leaves no fulfilling bank, so the message cannot name one — and
-        // the consequence the hospital must act on is that no other bank can either.
+        // Under Business Rule 11 a request only reaches REJECTED once every bank has
+        // declined it, so this message is sent once and means the request is closed.
+        // Rejection also leaves no fulfilling bank, so it cannot name one.
         service.notifyRequestStatusChange(request(RequestStatus.REJECTED, null));
 
         assertThat(capturedRows().get(0).getMessage())
-            .contains("rejected", "every blood bank", "submit a new request");
+            .contains("declined by every blood bank", "closed", "submit a new request");
     }
 
     @Test

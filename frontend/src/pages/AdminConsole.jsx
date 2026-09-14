@@ -628,11 +628,12 @@ export default function AdminConsole({ user, onSignOut }) {
  * A light confirmation before a suspension is submitted.
  *
  * Deliberately not the Blood Bank Dashboard's RejectConfirmation pattern: that
- * dialog earns its warning block and scary framing because a rejection is
- * terminal and cannot be undone. Suspending an account is neither — it denies
- * access immediately, which is real, but any administrator can reverse it with
- * one more click a moment later, so the dialog says only what is actually true:
- * who this affects and what happens, nothing more alarming than that.
+ * dialog earns its warning block and scary framing because a bank cannot undo
+ * its own decline and the request leaves its queue for good. Suspending an
+ * account is not like that — it denies access immediately, which is real, but
+ * any administrator can reverse it with one more click a moment later, so the
+ * dialog says only what is actually true: who this affects and what happens,
+ * nothing more alarming than that.
  */
 function SuspendConfirmation({ targetUser, cancelRef, onCancel, onConfirm }) {
   return (

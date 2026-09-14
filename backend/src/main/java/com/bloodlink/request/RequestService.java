@@ -11,13 +11,16 @@ import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
+import com.bloodlink.domain.BloodRequestDecline;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
+import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
@@ -32,11 +35,15 @@ import com.bloodlink.web.error.NotFoundException;
  * request, a blood bank approves or rejects it, and fulfilling it moves real units
  * out of that bank's stock.
  *
- * Three rules from CLAUDE.md shape almost everything here:
+ * Four rules from CLAUDE.md shape almost everything here:
  *   • Business Rule 5 — PENDING -> APPROVED -> FULFILLED, or PENDING -> REJECTED,
  *     and fulfilment must decrement the fulfilling bank's inventory.
  *   • Business Rule 6 — any blood bank may fulfil any hospital's request; there is
  *     no fixed hospital-to-bank ownership.
+ *   • Business Rule 11 — a rejection is per bank. One bank declining removes the
+ *     request from that bank's own queue and nothing more; the request stays
+ *     PENDING and actionable everywhere else, and only becomes REJECTED once every
+ *     blood bank has declined it. See {@link #reject}.
  *   • "Never trust the frontend alone for access control" — which hospital raised a
  *     request, and which bank is acting on it, are both read from the caller's own
  *     User row, never from the request body.
@@ -46,6 +53,8 @@ public class RequestService {
 
     private final BloodRequestRepository bloodRequestRepository;
     private final BloodInventoryRepository bloodInventoryRepository;
+    private final BloodRequestDeclineRepository declineRepository;
+    private final BloodBankRepository bloodBankRepository;
     private final UserRepository userRepository;
     private final ActingBankResolver actingBankResolver;
     private final NotificationService notificationService;
@@ -53,12 +62,18 @@ public class RequestService {
     RequestService(
         BloodRequestRepository bloodRequestRepository,
         BloodInventoryRepository bloodInventoryRepository,
+        BloodRequestDeclineRepository declineRepository,
+        BloodBankRepository bloodBankRepository,
         UserRepository userRepository,
         ActingBankResolver actingBankResolver,
         NotificationService notificationService
     ) {
         this.bloodRequestRepository = bloodRequestRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
+        this.declineRepository = declineRepository;
+        // Used for one question only: how many blood banks exist, which is what
+        // "every bank has declined this" is measured against (see reject).
+        this.bloodBankRepository = bloodBankRepository;
         this.userRepository = userRepository;
         this.actingBankResolver = actingBankResolver;
         this.notificationService = notificationService;
@@ -176,7 +191,10 @@ public class RequestService {
 
         switch (payload.action()) {
             case APPROVE -> approve(request, actingBank);
-            case REJECT -> reject(request);
+            // Still called REJECT on the wire — the action the operator takes is
+            // unchanged, only what it now means for the other banks. Renaming the
+            // enum would break every existing client for no behavioural gain.
+            case REJECT -> reject(request, actingBank);
             case FULFIL -> fulfil(request, actingBank);
         }
 
@@ -187,6 +205,13 @@ public class RequestService {
         // reaching here, so a hospital is never told a request was approved when the
         // approval was refused. The push itself waits for the commit as well; see
         // NotificationPublisher.
+        //
+        // A decline that was not the last one outstanding leaves the request PENDING,
+        // and notifyRequestStatusChange deliberately sends nothing for PENDING. That
+        // is the behaviour this feature wants: the hospital's request is still live
+        // with the other banks, so telling them "a bank declined" would read as bad
+        // news about a request that has not actually lost anything yet. They are told
+        // only if the last bank declines and the request really does close.
         notificationService.notifyRequestStatusChange(saved);
 
         return BloodRequestResponse.from(saved);
@@ -211,19 +236,55 @@ public class RequestService {
     }
 
     /**
-     * PENDING -> REJECTED. Terminal, and deliberately leaves fulfilled_by_blood_bank
-     * null: the column means "the bank that is supplying this", and a rejection
-     * supplies nothing.
+     * One bank declines a request — Business Rule 11's per-bank rejection.
      *
-     * A consequence worth being explicit about: status is a single field, so one
-     * bank rejecting a request closes it for every bank, not just for itself. That is
-     * the lifecycle CLAUDE.md specifies (Business Rule 5 has exactly one REJECTED
-     * state), and recording per-bank refusals would need a table the agreed schema
-     * does not have. The hospital can raise a fresh request.
+     * This used to set status = REJECTED outright, which closed the request for
+     * every bank because status is a single shared field. A bank that happened to be
+     * out of a group could therefore kill a request another bank could have filled.
+     * Now the decline is recorded as its own row against (request, bank), and the
+     * request's status is left PENDING: it drops out of THIS bank's queue (see
+     * BloodRequestRepository.findActionableForBank) and stays fully actionable for
+     * every other bank.
+     *
+     * The request only becomes REJECTED — genuinely closed, for the hospital as well
+     * — once every blood bank has declined it. "Every blood bank" is the count of
+     * blood_banks rows: the seeded banks are the operating banks, and nothing in the
+     * agreed schema marks one inactive, so existing is what active means here. If an
+     * inactive flag is ever added, this comparison is the one place that has to learn
+     * about it.
+     *
+     * fulfilled_by_blood_bank stays null throughout, including on the final
+     * rejection: that column means "the bank that is supplying this", and a decline
+     * supplies nothing.
      */
-    private void reject(BloodRequest request) {
+    private void reject(BloodRequest request, BloodBank actingBank) {
         requireStatus(request, RequestStatus.PENDING, "rejected");
-        request.setStatus(RequestStatus.REJECTED);
+
+        if (declineRepository.existsByBloodRequestIdAndBloodBankId(request.getId(), actingBank.getId())) {
+            // Checked rather than left to the unique constraint so a double-click
+            // gets a sentence the operator can act on instead of a 500 out of a
+            // constraint violation. The constraint is still the real guard — it is
+            // what stops two simultaneous transactions, which this check cannot see.
+            throw new ConflictException("This blood bank has already declined this request.");
+        }
+
+        BloodRequestDecline decline = new BloodRequestDecline();
+        decline.setBloodRequest(request);
+        decline.setBloodBank(actingBank);
+        // declinedAt is set by the entity's @PrePersist.
+        declineRepository.save(decline);
+
+        // Counted after the save so this decline is included — the question is
+        // "have all banks now declined", not "had they before this one".
+        long declines = declineRepository.countByBloodRequestId(request.getId());
+        long banks = bloodBankRepository.count();
+
+        // >= rather than ==: if a bank were ever removed after declining, the
+        // decline count could exceed the bank count, and a request no remaining
+        // bank can see must still be closable rather than stuck PENDING forever.
+        if (declines >= banks) {
+            request.setStatus(RequestStatus.REJECTED);
+        }
     }
 
     /**
