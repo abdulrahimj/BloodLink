@@ -1,0 +1,6 @@
+# Keeps the build context small and avoids shipping the developer's own local
+# build output into the image build — the Dockerfile does its own clean build.
+target/
+.mvn/wrapper/maven-wrapper.jar
+*.iml
+.idea/

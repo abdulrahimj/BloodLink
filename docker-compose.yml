@@ -1,0 +1,74 @@
+# One-command startup for the whole BloodLink system: PostgreSQL, the Spring
+# Boot backend, and the React frontend, wired together on one Docker network.
+#
+# Defaults to the "demo" Spring profile (see backend/Dockerfile and
+# backend/src/main/resources/application-demo.properties) — `docker compose up`
+# brings up a fully-populated demo (~850 donors, both blood banks stocked,
+# sample requests/notifications) rather than an empty schema. It is pointed at
+# its own "bloodlink_demo" database inside a container-only Postgres instance —
+# entirely separate from the developer's local `bloodlink_dev`, which this file
+# never references and cannot reach unless a developer manually points the "db"
+# service's volume/port at that same local instance, which nothing here does.
+#
+# Usage: docker compose up --build   (first run, or after changing source)
+#        docker compose up           (subsequent runs)
+#        docker compose down         (stop; add -v to also delete the demo data volume)
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bloodlink_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    volumes:
+      # Named volume, not a bind mount to a host folder — the demo data lives
+      # only inside Docker and is easy to wipe with `docker compose down -v`
+      # for a fresh reseed, without touching anything on the host machine.
+      - bloodlink_demo_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bloodlink_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Published for convenience (e.g. inspecting the demo data with a local
+      # psql/pgAdmin); the backend itself reaches this service by its Docker
+      # network hostname "db", not this host port.
+      - "5433:5432"
+
+  backend:
+    build:
+      context: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: demo
+      # Overrides application-demo.properties's localhost default to reach
+      # Postgres by its Docker network hostname instead.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/bloodlink_demo
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: root
+      # Must include the frontend's published host port (below), since that is
+      # the Origin header a browser actually sends — not the frontend
+      # container's internal Docker-network address.
+      BLOODLINK_ALLOWED_ORIGINS: http://localhost:5173
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Must be the backend's published *host* port — this value is baked
+        # into the static JS bundle at build time and is read by the browser,
+        # which knows nothing about the Docker-internal network.
+        VITE_API_BASE_URL: http://localhost:8080
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  bloodlink_demo_db:
