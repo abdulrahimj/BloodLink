@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import BloodLinkLanding from './pages/BloodLinkLanding.jsx';
 import Login from './pages/Login.jsx';
 import Register from './pages/Register.jsx';
 import DonorPortal from './pages/DonorPortal.jsx';
@@ -10,12 +11,21 @@ import { clearSession, getUser, isSignedIn } from './auth/session.js';
 /* ================================================================
    BloodLink — app shell
 
-   Routes between the two auth screens and, once signed in, to a
-   role-appropriate view. Routing is on the URL hash because that is
-   what the mockups' own links already use (#login, #register) — no
-   router dependency needed for a handful of screens. All four portals are
-   wired now; SignedInPlaceholder remains only as the fallback for a role
-   the backend might add before a screen exists for it.
+   Routes between the public landing page, the two auth screens, and, once
+   signed in, a role-appropriate view. Routing is on the URL hash because
+   that is what the mockups' own links already use (#login, #register) —
+   no router dependency needed for a handful of screens. All four portals
+   are wired now; SignedInPlaceholder remains only as the fallback for a
+   role the backend might add before a screen exists for it.
+
+   The root URL (no hash) is the landing page for a signed-out visitor —
+   BloodLinkLanding's own Login/Register buttons are plain <a href="#login">
+   / <a href="#register"> links, so clicking them is indistinguishable from
+   typing the hash directly and needs no wiring here beyond rendering the
+   page. A signed-in visitor never sees it: the role-dashboard check below
+   runs first and returns before route is ever consulted, exactly as it did
+   before this page existed — a returning user's own hash (if any) is not
+   even read in that case.
 
    ADMIN now lands on the Admin Console rather than the Blood Bank portal.
    That was a stopgap from before the console existed — of the two, the
@@ -29,9 +39,19 @@ import { clearSession, getUser, isSignedIn } from './auth/session.js';
    one-click UI path from a fresh sign-in has moved.
    ================================================================ */
 
-/** Reads the current screen from the hash, defaulting to login. */
+/**
+ * Reads the current screen from the hash.
+ *
+ * An empty hash — the bare root URL — is the landing page, not login: that is
+ * the one behavioural change from before this page existed. '#login' and
+ * '#register' are unchanged, and so is the fallback for anything else, which
+ * stays 'login' exactly as it always has (an unrecognised hash is not treated
+ * as the root).
+ */
 function readRoute() {
-  return window.location.hash === '#register' ? 'register' : 'login';
+  if (window.location.hash === '#register') return 'register';
+  if (window.location.hash === '') return 'landing';
+  return 'login';
 }
 
 export default function App() {
@@ -73,6 +93,10 @@ export default function App() {
       return <AdminConsole user={user} onSignOut={handleSignOut} />;
     }
     return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
+  }
+
+  if (route === 'landing') {
+    return <BloodLinkLanding />;
   }
 
   return route === 'register'
