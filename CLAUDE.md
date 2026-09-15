@@ -158,6 +158,21 @@ One row per (blood_request, blood_bank) pair, unique on that pair (`uq_decline_r
 added in V9 as the per-bank response table Business Rule 11 anticipated. A row here means "this bank
 has declined this request"; it does not change `BloodRequest.status`. See Business Rule 11.
 
+### AppealCooldown
+| field | type |
+|---|---|
+| id | UUID, PK |
+| blood_bank_id | UUID, FK -> BloodBank, ON DELETE CASCADE |
+| blood_type | enum (as above) |
+| last_sent_at | timestamp |
+| triggered_tier | enum: CRITICAL, LOW |
+
+One row per (blood_bank, blood_type), unique on that pair (`uq_appeal_cooldown_bank_type`) — added
+in V10 for Business Rule 12. Current state, not history: overwritten on each send, never appended to.
+`triggered_tier` is how short the bank was **at send time** (CRITICAL under 15 units, LOW 15–29) and
+is stored rather than re-derived, because it fixes that cooldown's length and the level stock must
+reach to end it early. See Business Rule 12.
+
 ### Notification
 | field | type |
 |---|---|
@@ -171,7 +186,8 @@ has declined this request"; it does not change `BloodRequest.status`. See Busine
 ### Relationships
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
 BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
-BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline
+BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
+BloodBank 1–N AppealCooldown
 
 ---
 
@@ -236,6 +252,35 @@ BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline
       `fulfilled_by_blood_bank_id` the moment one bank approves it (rules 5, 6, 10).
     This replaces the earlier shared-rejection behaviour, which was flagged for review because one
     bank lacking stock closed a request another bank could have filled. Schema added in `V9`.
+12. **A donation appeal is rate-limited per (blood bank, blood group) by a cooldown.** Each send
+    writes or overwrites an `AppealCooldown` row stamping `last_sent_at` and the `triggered_tier`
+    that stock was in at send time. The Send Appeal button's state is decided in this order, by
+    `AppealCooldownPolicy` — the single component both the inventory read path and the send endpoint
+    consult, so the button and the server can never disagree:
+    1. **30 units or more → disabled.** No shortage, nothing to send.
+    2. **A cooldown row within its tier's window → disabled, reading "Appeal Sent."** — 5 hours for
+       CRITICAL, 24 hours for LOW, measured from `last_sent_at`. Exactly 5h/24h is still within the
+       window ("no more than N hours elapsed"); past it the cooldown lapses.
+    3. **The cooldown ends early the moment stock is back over the threshold that triggered it** —
+       15 for a CRITICAL-triggered row, 30 for a LOW-triggered one — even if the timer has not run
+       out. This is evaluated against stock *as it is now*, not recorded as a one-way event, so a
+       shortage that recovers and then relapses inside the same window is still in cooldown; the
+       cooldown only stops blocking while the shortage it was raised for is genuinely over.
+    4. **Otherwise active.**
+    - **Appeal thresholds are deliberately not Business Rule 3's badge thresholds.** Rule 3 is a
+      display rule (Critical under 15, Low under 40); this is an action rule (an appeal needs fewer
+      than 30). So a group holding **30–39 units shows a "Low" badge and still cannot be appealed
+      for** — correct, not a bug: asking donors to come in for stock that is merely off target spends
+      goodwill the bank will need at 12 units. `AppealTier` owns the appeal numbers, `StockStatus`
+      the badge numbers, and they are separate types so a change to one cannot move the other.
+    - **Enforced server-side as well as on the button** — `POST /api/appeals` returns 409 for both
+      a no-shortage send and one inside a cooldown, since a disabled button is a courtesy, not a
+      control. The cooldown row is written only after the send succeeds, inside the same transaction,
+      so a failed appeal never leaves a cooldown blocking the retry it did not earn.
+    - **This does not change who receives an appeal.** Business Rule 2's 90-day donor-eligibility
+      gate is untouched and remains the only thing deciding that. The two answer different questions:
+      the cooldown decides whether the bank may ask at all right now, Rule 2 decides which donors it
+      is safe to ask. Schema added in `V10`.
 
 ## Actors (roles) and what each can do
 

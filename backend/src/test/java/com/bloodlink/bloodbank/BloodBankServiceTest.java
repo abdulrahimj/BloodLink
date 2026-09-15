@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.bloodlink.bloodbank.dto.DashboardResponse;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.enums.RequestStatus;
+import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
@@ -55,7 +56,7 @@ class BloodBankServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank));
 
         when(inventoryService.listInventory(BANK_ID)).thenReturn(List.of(
-            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT)
+            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE)
         ));
 
         when(donationRepository.countByBloodBankIdAndDonationDateBetween(any(), any(), any())).thenReturn(12L);

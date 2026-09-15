@@ -8,11 +8,14 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.appeal.AppealCooldownPolicy;
+import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.User;
@@ -25,6 +28,7 @@ import com.bloodlink.inventory.dto.CompositionSlice;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.inventory.dto.InventorySummaryResponse;
 import com.bloodlink.notification.NotificationService;
+import com.bloodlink.repository.AppealCooldownRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -50,19 +54,28 @@ public class InventoryService {
     private final UserRepository userRepository;
     private final BloodRequestRepository bloodRequestRepository;
     private final NotificationService notificationService;
+    // Both only for the Send Appeal button's state on each row (Business Rule 12):
+    // the repository supplies this bank's cooldown rows, the policy turns them and
+    // current stock into the one answer the send endpoint would also give.
+    private final AppealCooldownRepository appealCooldownRepository;
+    private final AppealCooldownPolicy appealCooldownPolicy;
 
     InventoryService(
         BloodBankRepository bloodBankRepository,
         BloodInventoryRepository bloodInventoryRepository,
         UserRepository userRepository,
         BloodRequestRepository bloodRequestRepository,
-        NotificationService notificationService
+        NotificationService notificationService,
+        AppealCooldownRepository appealCooldownRepository,
+        AppealCooldownPolicy appealCooldownPolicy
     ) {
         this.bloodBankRepository = bloodBankRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
         this.userRepository = userRepository;
         this.bloodRequestRepository = bloodRequestRepository;
         this.notificationService = notificationService;
+        this.appealCooldownRepository = appealCooldownRepository;
+        this.appealCooldownPolicy = appealCooldownPolicy;
     }
 
     /**
@@ -76,8 +89,20 @@ public class InventoryService {
         requireBank(bloodBankId);
         Map<BloodType, BloodInventory> byType = indexByType(bloodInventoryRepository.findByBloodBankId(bloodBankId));
 
+        // Every cooldown this bank holds, in one query rather than one per row —
+        // the Send Appeal button's state (Business Rule 12) is derived per group
+        // below, and eight lookups to draw one table would be seven too many.
+        Map<BloodType, AppealCooldown> cooldownsByType = appealCooldownRepository
+            .findByBloodBankId(bloodBankId).stream()
+            .collect(Collectors.toMap(AppealCooldown::getBloodType, cooldown -> cooldown));
+
+        // One instant for the whole table, so two rows can never be judged against
+        // clock readings milliseconds apart — a cosmetic difference here, but the
+        // kind that makes a failing test irreproducible.
+        Instant now = Instant.now();
+
         return List.of(BloodType.values()).stream()
-            .map(type -> toResponse(type, byType.get(type)))
+            .map(type -> toResponse(type, byType.get(type), cooldownsByType.get(type), now))
             .toList();
     }
 
@@ -170,7 +195,14 @@ public class InventoryService {
         // count (a correction, a write-off) cannot silently skip the alert.
         notificationService.notifyStockCrossing(bank, bloodType, unitsBefore, saved.getUnitsAvailable());
 
-        return toResponse(bloodType, saved);
+        // The row that comes back carries a freshly derived appeal state too, since
+        // adding units is one of the things that can end a cooldown early (Business
+        // Rule 12) — the caller must not be handed the pre-batch answer.
+        AppealCooldown cooldown = appealCooldownRepository
+            .findByBloodBankIdAndBloodType(bloodBankId, bloodType)
+            .orElse(null);
+
+        return toResponse(bloodType, saved, cooldown, Instant.now());
     }
 
     /**
@@ -201,14 +233,25 @@ public class InventoryService {
     }
 
     /** Maps a possibly-absent row to a response — absent means never stocked. */
-    private InventoryItemResponse toResponse(BloodType type, BloodInventory row) {
+    /**
+     * One table row: the stock figures, the Business Rule 3 badge, and the Business
+     * Rule 12 state of its Send Appeal button.
+     *
+     * The last of those is asked of {@link AppealCooldownPolicy} rather than worked
+     * out here, so this screen and the send endpoint cannot come to different
+     * conclusions about whether an appeal is allowed.
+     */
+    private InventoryItemResponse toResponse(
+        BloodType type, BloodInventory row, AppealCooldown cooldown, Instant now
+    ) {
         int units = row == null ? 0 : row.getUnitsAvailable();
         return new InventoryItemResponse(
             type.getLabel(),
             units,
             row == null ? null : row.getExpiryDate(),
             row == null ? null : row.getLastUpdated(),
-            StockStatus.fromUnits(units)
+            StockStatus.fromUnits(units),
+            appealCooldownPolicy.evaluate(units, cooldown, now)
         );
     }
 

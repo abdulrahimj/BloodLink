@@ -69,9 +69,54 @@ function donorCount(n) {
 }
 
 /** Which statuses justify asking donors to come in. Sufficient does not: an
- *  appeal for blood the bank already has spends goodwill it will need later. */
+ *  appeal for blood the bank already has spends goodwill it will need later.
+ *
+ *  This decides whether the row shows an appeal button at all. Whether that
+ *  button can be *pressed* is a separate question, answered by the server —
+ *  see canSendAppeal. The two use different thresholds on purpose: a group at
+ *  35 units is Low here, and still not short enough to appeal for. */
 function needsDonors(status) {
   return status === "LOW" || status === "CRITICAL";
+}
+
+/**
+ * Whether this row's Send Appeal button is live.
+ *
+ * Read from the server's own answer rather than worked out here, because it
+ * depends on when this bank last appealed for this group — state no amount of
+ * looking at the stock figure can reveal. Computing it in the browser is exactly
+ * the bug this feature exists to fix: a button that reflected only the numbers
+ * on screen looked identical whether an appeal had gone out ten minutes ago or
+ * never.
+ */
+function canSendAppeal(item) {
+  return item.appealAvailability === "AVAILABLE";
+}
+
+/**
+ * What the button says.
+ *
+ * "Appeal Sent." on a cooling-down row is deliberately a statement rather than a
+ * greyed "Send Appeal": it tells the operator their own earlier click worked,
+ * which is the question someone looking at a disabled button actually has. A row
+ * that is simply not short enough keeps the normal label, because nothing has
+ * happened there to report.
+ */
+function appealButtonText(item) {
+  return item.appealAvailability === "COOLING_DOWN" ? "Appeal Sent." : "Send Appeal";
+}
+
+/** The same distinction for screen readers, spelled out — a disabled control
+ *  still needs to say why it is disabled, and "Appeal Sent." alone does not
+ *  carry that without the visual context of the row it sits in. */
+function appealButtonLabel(item) {
+  if (item.appealAvailability === "COOLING_DOWN") {
+    return `An appeal for ${item.bloodType} was sent recently — not available yet`;
+  }
+  if (item.appealAvailability === "NO_SHORTAGE") {
+    return `${item.bloodType} is not short enough to appeal for`;
+  }
+  return `Send a donation appeal for ${item.bloodType}`;
 }
 
 export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNavigate }) {
@@ -251,9 +296,23 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           ? `No appeal was delivered — no eligible ${bloodType} donor is on the register right now.`
           : `Appeal sent — ${donorCount(receipt.donorsNotified)} of ${bloodType} notified.`
       );
+      // Re-read so this row's button becomes "Appeal Sent." straight away
+      // (Business Rule 12). Without this the cooldown would only appear on the
+      // next reload, which is precisely the stale-button problem the cooldown
+      // was added to fix — the operator would be left able to click again on a
+      // send the server would now refuse. Quietly, not load(): blanking a screen
+      // someone has just acted on, to show them the result of their own action,
+      // would lose the notice set above.
+      refreshQuietly();
     } catch (err) {
       if (!mountedRef.current) return;
       setAppeal((current) => (current ? { ...current, sending: false, error: err.message } : current));
+      // Also re-read on failure. A 409 here usually means this screen's copy of
+      // the row is out of date — another staff member at the same bank already
+      // appealed, or stock moved past the threshold — so the honest response is
+      // to show the state that refused the send, not leave the button inviting
+      // a second attempt that will fail the same way.
+      refreshQuietly();
     }
   }
 
@@ -430,6 +489,17 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         }
         .bi-appealbtn:hover { background: rgba(200,16,46,.07); border-color: var(--red); }
         .bi-appealbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        /* Unavailable: either this bank appealed for the group recently, or it is
+           no longer short enough to appeal about (Business Rule 12). Greyed and
+           inert rather than hidden, so the row still shows that the action exists
+           and is simply not open right now — a cell that emptied itself after a
+           successful send would read as the button having failed. Hover and
+           active-red are both dropped, since neither is true of it any more. */
+        .bi-appealbtn:disabled {
+          color: var(--ink-muted); border-color: var(--line);
+          background: transparent; cursor: default;
+        }
+        .bi-appealbtn:disabled:hover { background: transparent; border-color: var(--line); }
 
         /* What the last appeal did. Green because it reports a completed action,
            matching how this design system already uses green for success. */
@@ -670,15 +740,28 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
                           {/* Left empty rather than showing a greyed-out button on a
                               Sufficient row. Five disabled buttons in an eight-row
                               table is noise, and the Status cell immediately to the
-                              left already says why there is nothing to do here. */}
+                              left already says why there is nothing to do here.
+                              Rows that are Low or Critical always show the button,
+                              disabled when the server says it cannot be sent —
+                              there, the button is the only thing that can explain
+                              why (Business Rule 12). */}
                           {needsDonors(s.status) && (
                             <button
                               type="button"
                               className="bi-appealbtn"
+                              // Never derived from the stock figure in this row on
+                              // its own: whether an appeal may be sent also depends
+                              // on when this bank last sent one, which only the
+                              // server knows. It arrives with each row and is
+                              // re-derived on every reload — including the reloads
+                              // after adding a batch, recording a donation, or
+                              // sending an appeal — so the button reflects the
+                              // state now rather than at the last page load.
+                              disabled={!canSendAppeal(s)}
                               onClick={() => openAppeal(s.bloodType)}
-                              aria-label={`Send a donation appeal for ${s.bloodType}`}
+                              aria-label={appealButtonLabel(s)}
                             >
-                              Send Appeal
+                              {appealButtonText(s)}
                             </button>
                           )}
                         </td>

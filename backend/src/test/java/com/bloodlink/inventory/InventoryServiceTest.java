@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -18,9 +20,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
+import com.bloodlink.appeal.AppealCooldownPolicy;
+import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AppealAvailability;
+import com.bloodlink.domain.enums.AppealTier;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
@@ -28,6 +34,7 @@ import com.bloodlink.inventory.dto.AddBatchRequest;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.inventory.dto.InventorySummaryResponse;
 import com.bloodlink.notification.NotificationService;
+import com.bloodlink.repository.AppealCooldownRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -51,13 +58,20 @@ class InventoryServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private BloodRequestRepository bloodRequestRepository;
     @Mock private NotificationService notificationService;
+    @Mock private AppealCooldownRepository appealCooldownRepository;
 
     private InventoryService service;
 
     @BeforeEach
     void setUp() {
+        // A real AppealCooldownPolicy over the mocked repository, not a mock of it —
+        // the same choice RequestServiceTest makes for ActingBankResolver. Stubbing
+        // it would make every appealAvailability assertion below a test of the stub
+        // rather than of the rule the screen actually gets.
         service = new InventoryService(
-            bloodBankRepository, bloodInventoryRepository, userRepository, bloodRequestRepository, notificationService
+            bloodBankRepository, bloodInventoryRepository, userRepository, bloodRequestRepository,
+            notificationService, appealCooldownRepository,
+            new AppealCooldownPolicy(appealCooldownRepository)
         );
     }
 
@@ -92,6 +106,66 @@ class InventoryServiceTest {
         assertThat(neverStocked.unitsAvailable()).isZero();
         assertThat(neverStocked.expiryDate()).isNull();
         assertThat(neverStocked.status()).isEqualTo(StockStatus.CRITICAL);
+    }
+
+    /**
+     * The Send Appeal button's state travels with the stock it is derived from
+     * (Business Rule 12), so the screen cannot draw the button from one moment's
+     * cooldown and another moment's units.
+     *
+     * Also the clearest place to see the two threshold sets side by side: at 35
+     * units the badge says Low (Rule 3's Low band runs to 40) while the button is
+     * unavailable (an appeal needs fewer than 30). Both are correct, and they are
+     * meant to disagree.
+     */
+    @Test
+    void everyRowCarriesItsAppealButtonStateAndTheTwoThresholdSetsDifferOnPurpose() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(
+            row(BloodType.O_POSITIVE, 35, LocalDate.now().plusDays(10)),  // Low badge, no appeal
+            row(BloodType.A_NEGATIVE, 12, LocalDate.now().plusDays(10))   // Critical, appealable
+        ));
+
+        List<InventoryItemResponse> items = service.listInventory(BANK_ID);
+
+        InventoryItemResponse lowButNotAppealable = itemFor(items, "O+");
+        assertThat(lowButNotAppealable.status()).isEqualTo(StockStatus.LOW);
+        assertThat(lowButNotAppealable.appealAvailability()).isEqualTo(AppealAvailability.NO_SHORTAGE);
+
+        InventoryItemResponse shortAndAppealable = itemFor(items, "A-");
+        assertThat(shortAndAppealable.status()).isEqualTo(StockStatus.CRITICAL);
+        assertThat(shortAndAppealable.appealAvailability()).isEqualTo(AppealAvailability.AVAILABLE);
+    }
+
+    /**
+     * A cooldown this bank holds turns its row's button to "Appeal Sent." — the
+     * whole point of the feature, and the part that could not work before, since
+     * nothing recorded that an appeal had been sent at all.
+     */
+    @Test
+    void aRowWithARunningCooldownReportsItRatherThanOfferingTheButton() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(
+            List.of(row(BloodType.O_NEGATIVE, 8, LocalDate.now().plusDays(10)))
+        );
+
+        AppealCooldown cooldown = new AppealCooldown();
+        cooldown.setBloodType(BloodType.O_NEGATIVE);
+        cooldown.setTriggeredTier(AppealTier.CRITICAL);
+        cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(30)));
+        when(appealCooldownRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(cooldown));
+
+        List<InventoryItemResponse> items = service.listInventory(BANK_ID);
+
+        assertThat(itemFor(items, "O-").appealAvailability()).isEqualTo(AppealAvailability.COOLING_DOWN);
+        // Only that group is affected — a cooldown is per (bank, group), so the
+        // other seven rows are untouched by it.
+        assertThat(itemFor(items, "A-").appealAvailability()).isEqualTo(AppealAvailability.AVAILABLE);
+    }
+
+    /** One row out of the fixed eight, by its clinical label. */
+    private static InventoryItemResponse itemFor(List<InventoryItemResponse> items, String label) {
+        return items.stream().filter(i -> i.bloodType().equals(label)).findFirst().orElseThrow();
     }
 
     @Test

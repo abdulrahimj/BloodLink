@@ -29,6 +29,7 @@ import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
@@ -119,7 +120,7 @@ class DonationServiceTest {
         when(inventoryService.addBatch(any(), any(), any(), any()))
             .thenAnswer(inv -> new InventoryItemResponse(
                 inv.getArgument(1), resultingUnits, LocalDate.now().plusDays(30),
-                Instant.now(), StockStatus.SUFFICIENT
+                Instant.now(), StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE
             ));
     }
 
