@@ -413,13 +413,20 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-dialog-icon svg { width: 52%; height: 52%; }
         .bb-dialog-title { font-size: clamp(14px, 2vh, 17px); font-weight: 800; letter-spacing: -.02em; }
         .bb-dialog-body { font-size: clamp(11px, 1.55vh, 13.5px); line-height: 1.5; color: #3A3A3A; }
-        /* The consequence the operator cannot see from the button — given the
-           same amber the "needs attention" states already use on this screen. */
+        /* The plain "cannot be undone" confirmation — given the same amber the
+           "needs attention" states already use on this screen. */
         .bb-dialog-warn {
           font-size: clamp(10.5px, 1.5vh, 13px); line-height: 1.5; font-weight: 600;
           color: #8A5510; background: #FBF1E3;
           border-left: 3px solid var(--amber); border-radius: 6px;
           padding: clamp(8px, 1.2vh, 12px) clamp(10px, 1vw, 14px);
+        }
+        /* The stronger warning for an Emergency request this bank could actually
+           cover — red rather than amber, the same escalation the stock badges on
+           this screen already use between Low and Critical. */
+        .bb-dialog-warn--critical {
+          color: var(--red-dark); background: #FBE7EA;
+          border-left-color: var(--red);
         }
         .bb-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: clamp(2px, .6vh, 6px); }
         .bb-dialog-actions button {
@@ -598,6 +605,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
       {confirmingReject && (
         <RejectConfirmation
           request={confirmingReject}
+          stock={stock}
           cancelRef={cancelRejectRef}
           onCancel={() => setConfirmingReject(null)}
           onConfirm={handleConfirmReject}
@@ -608,16 +616,26 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 }
 
 /**
- * Asks before a Reject is submitted, and says what the operator cannot see from
- * the button: what declining does to the request elsewhere.
+ * Asks before a Reject is submitted — confirmed rather than submitted straight
+ * from the button because the operator cannot undo their own decline, and the
+ * request vanishing from their queue is a surprising thing to trigger with a
+ * stray click (Business Rule 11: a decline is per bank, so what actually
+ * happens elsewhere depends on what the other bank does, not on this click
+ * alone — not this bank's own staff's decision to make, so the dialog no
+ * longer says anything about it).
  *
- * The warning used to say a rejection closed the request for every bank, which
- * was true of the old shared-status behaviour and is now wrong — under Business
- * Rule 11 a decline is recorded per bank, so with two banks operating it is the
- * *second* decline that closes anything, and the first usually closes nothing.
- * Still confirmed rather than submitted straight from the button: the operator
- * cannot undo their own decline, and the request vanishing from their queue is a
- * surprising thing to trigger with a stray click.
+ * The warning shown is one of two, decided from what this bank can already see
+ * about the request and its own stock, not a separate lookup:
+ *   • Ordinary case (Routine or Urgent, or an Emergency this bank genuinely
+ *     cannot cover) — a plain confirmation with no mention of risk this bank
+ *     cannot actually change by acting differently.
+ *   • Emergency AND this bank currently holds enough units of the requested
+ *     group to fulfil it — a stronger warning naming that specifically, because
+ *     here declining is a choice not to help with a request this bank could
+ *     have covered, for a patient the EMERGENCY level says cannot wait.
+ * "Enough units" reads the same unitsAvailable figure the Inventory screen and
+ * dashboard table already show (passed in as `stock`), not a second calculation
+ * that could quietly drift from what the operator sees on the rest of the page.
  *
  * Deliberately a styled dialog rather than window.confirm — the browser's own
  * prompt cannot carry the warning with any emphasis, names the page rather than
@@ -627,8 +645,14 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
  * click that starts inside the dialog and drifts onto the backdrop (selecting the
  * warning text, say) from being read as a dismissal.
  */
-function RejectConfirmation({ request, cancelRef, onCancel, onConfirm }) {
+function RejectConfirmation({ request, stock, cancelRef, onCancel, onConfirm }) {
   const units = `${request.unitsRequested} unit${request.unitsRequested > 1 ? "s" : ""}`;
+
+  // The same row the Inventory table and this dashboard's own stock table read
+  // unitsAvailable from — never recomputed, just looked up.
+  const matchingStock = stock.find((s) => s.bloodType === request.bloodType);
+  const bankCanCoverIt = (matchingStock?.unitsAvailable ?? 0) >= request.unitsRequested;
+  const isUnhelpedEmergency = request.urgencyLevel === "EMERGENCY" && bankCanCoverIt;
 
   return (
     <div
@@ -653,12 +677,17 @@ function RejectConfirmation({ request, cancelRef, onCancel, onConfirm }) {
           {" "}({titleCase(request.urgencyLevel).toLowerCase()}).
         </div>
 
-        <div className="bb-dialog-warn">
-          This removes the request from <strong>your queue only</strong>. Every other blood
-          bank keeps seeing it and can still approve or fulfil it — the hospital's request
-          closes only if <strong>every bank</strong> ends up declining it. You cannot undo
-          your own decline.
-        </div>
+        {isUnhelpedEmergency ? (
+          <div className="bb-dialog-warn bb-dialog-warn--critical">
+            This is an <strong>Emergency</strong> request, and your bank currently has enough
+            units of <strong>{request.bloodType}</strong> to fulfil it. Declining could delay
+            life-saving treatment for the patient. Are you sure you want to decline?
+          </div>
+        ) : (
+          <div className="bb-dialog-warn">
+            Are you sure you want to decline this request? This action cannot be undone.
+          </div>
+        )}
 
         <div className="bb-dialog-actions">
           <button type="button" className="bb-dialog-cancel" ref={cancelRef} onClick={onCancel}>
