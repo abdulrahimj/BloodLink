@@ -33,10 +33,11 @@ public record InventoryItemResponse(
      * appeal.
      *
      * Deliberately not accompanied by a "cooling down until" timestamp. The button
-     * says "Appeal Sent.", not a countdown, and a client that was handed an expiry
-     * instant would be tempted to enable itself when that instant passed — which
-     * would be wrong, because a cooldown can also end early when stock recovers,
-     * and can fail to end when it does not. The server owns this decision.
+     * says "Appeal Sent.", not a countdown, and a client handed an expiry instant
+     * would be tempted to enable itself once that instant passed — which would be
+     * wrong, because a cooldown can also be cleared well before it by stock
+     * recovering past the threshold that triggered it. The server owns this
+     * decision.
      */
     AppealAvailability appealAvailability
 ) {}

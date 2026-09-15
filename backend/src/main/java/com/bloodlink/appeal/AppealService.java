@@ -129,7 +129,7 @@ public class AppealService {
 
         // Recorded only after the send has succeeded, and with units as they were at
         // send time — that figure fixes this cooldown's length and the level stock
-        // must reach to end it early.
+        // must reach to clear it.
         cooldownPolicy.recordSent(bank, bloodType, unitsAvailable, now);
 
         return new DonationAppealResponse(

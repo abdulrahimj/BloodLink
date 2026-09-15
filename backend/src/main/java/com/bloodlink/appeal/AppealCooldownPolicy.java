@@ -30,21 +30,26 @@ import com.bloodlink.repository.AppealCooldownRepository;
  * <ol>
  *   <li>30 units or more — no shortage, nothing to appeal about.</li>
  *   <li>A cooldown row within its tier's window (5h CRITICAL, 24h LOW) blocks.</li>
- *   <li>...unless stock has climbed back over the threshold that triggered it
- *       (15 for CRITICAL, 30 for LOW), which ends the cooldown early.</li>
  *   <li>Otherwise the button is active.</li>
  * </ol>
  *
- * <h2>Why this is a pure function of current stock</h2>
- * "The cooldown clears early the moment stock crosses back over its threshold" is
- * evaluated against stock *as it is now*, not recorded as a one-way event that
- * deletes the row. That matters when stock recovers and then falls again inside
- * the same window: a CRITICAL appeal sent at 10 units, with stock now back down to
- * 12 an hour later, is still in cooldown — which is right, because the shortage
- * being appealed about never actually ended. Treating the first crossing as
- * permanent would let a bank re-appeal to the same donors within the hour on a
- * shortage that merely wobbled. It also keeps the read path genuinely read-only:
- * rendering the inventory table must not write to the database.
+ * <h2>Recovery clears a cooldown permanently, as an event</h2>
+ * A cooldown also ends the moment stock climbs back over the threshold that
+ * triggered it (15 for CRITICAL, 30 for LOW) — but that is handled by deleting
+ * the row at the crossing, in {@link #clearIfRecovered}, not by re-checking
+ * current stock on every read. {@link #evaluate} therefore never looks at stock
+ * to decide whether a cooldown has ended: a row that still exists is one whose
+ * shortage was never resolved.
+ *
+ * The difference is visible when a group recovers and then relapses inside the
+ * same window. The relapse is a new shortage, and it gets its own fresh chance to
+ * appeal, rather than serving out the remainder of a timer belonging to an appeal
+ * that already did its job. Re-deriving on read would instead resurrect that spent
+ * timer and silence a bank that genuinely needs donors again.
+ *
+ * Keeping the decision an event also keeps the read path genuinely read-only —
+ * rendering the inventory table must never write — and matches how this codebase
+ * already handles stock thresholds elsewhere (see {@code notifyStockCrossing}).
  *
  * Nothing here touches who *receives* an appeal. Business Rule 2's 90-day
  * eligibility gate is NotificationService's, is unchanged, and remains the only
@@ -79,30 +84,74 @@ public class AppealCooldownPolicy {
             return AppealAvailability.NO_SHORTAGE;
         }
 
-        // Never appealed for: nothing to block it.
+        // Nothing to block it: either this group has never been appealed for, or a
+        // recovery has since cleared the cooldown away (see clearIfRecovered).
         if (cooldown == null) {
             return AppealAvailability.AVAILABLE;
         }
 
-        AppealTier tier = cooldown.getTriggeredTier();
-
-        // 3. Early release, checked before the timer: the shortage this cooldown
-        //    was protecting is over, so the cooldown has nothing left to protect.
-        //    Reached only while stock is under 30 (rule 1 above), so in practice
-        //    this is the CRITICAL case — a bank back over 15 but still under 30 may
-        //    appeal again at the lower tier without serving out the full 5 hours.
-        if (tier.hasRecoveredAt(unitsAvailable)) {
-            return AppealAvailability.AVAILABLE;
-        }
-
-        // 2. Still inside the window, and stock has not recovered.
-        if (!tier.hasExpiredBy(cooldown.getLastSentAt(), now)) {
+        // 2. A surviving cooldown blocks for as long as its timer runs. Current
+        //    stock is deliberately NOT consulted here — a cooldown that should have
+        //    ended because stock recovered was deleted at the moment it recovered,
+        //    so a row that still exists is one whose shortage was never resolved.
+        if (!cooldown.getTriggeredTier().hasExpiredBy(cooldown.getLastSentAt(), now)) {
             return AppealAvailability.COOLING_DOWN;
         }
 
-        // 4. Timer ran out with the shortage unresolved — appealing again is
+        // 3. Timer ran out with the shortage unresolved — appealing again is
         //    exactly what should happen now.
         return AppealAvailability.AVAILABLE;
+    }
+
+    /**
+     * Ends a cooldown for good once stock has climbed back over the threshold that
+     * triggered it — 15 for CRITICAL, 30 for LOW.
+     *
+     * Called from the one place stock can rise ({@code InventoryService.addBatch},
+     * which every route into inventory goes through under Business Rule 7), so the
+     * clearing happens at the moment of the crossing rather than being re-decided
+     * on every later read. That is the whole point: the appeal this cooldown was
+     * throttling has done its job, so the cooldown is finished. If the group later
+     * falls back into shortage, that is a new event with its own fresh chance to
+     * appeal — not something still throttled by the timer of an appeal that already
+     * worked.
+     *
+     * The row is deleted rather than flagged resolved. This table holds current
+     * state, not history (see {@link AppealCooldown}), and a resolved cooldown is
+     * indistinguishable from one that never existed: both mean "nothing is stopping
+     * an appeal for this group". A flag would be a second way to say the same
+     * thing, which every later read would then have to remember to check.
+     *
+     * Detecting the crossing as an event rather than deriving it on read is also
+     * how this codebase already treats stock thresholds — {@code notifyStockCrossing}
+     * fires on the change, not on the reading of it. The shared consequence is that
+     * stock edited directly in the database, outside the application, raises no
+     * alert and clears no cooldown; the fix for that has always been to make the
+     * change through the app.
+     *
+     * @return the cooldown still in force for this group afterwards, or null if
+     *         there was none or this recovery just cleared it. Returned rather than
+     *         left for the caller to look up again, so a caller that needs the
+     *         resulting state gets it from the same read this method already did —
+     *         no second query, and no dependence on a pending delete having been
+     *         flushed before it.
+     */
+    public AppealCooldown clearIfRecovered(UUID bloodBankId, BloodType bloodType, int unitsAvailable) {
+        AppealCooldown cooldown = cooldownRepository
+            .findByBloodBankIdAndBloodType(bloodBankId, bloodType)
+            .orElse(null);
+
+        if (cooldown == null) {
+            return null;
+        }
+
+        if (cooldown.getTriggeredTier().hasRecoveredAt(unitsAvailable)) {
+            cooldownRepository.delete(cooldown);
+            return null;
+        }
+
+        // Still short of the level that would end it: the cooldown stands.
+        return cooldown;
     }
 
     /** The same decision, reading the bank's cooldown row for itself. */
@@ -121,7 +170,7 @@ public class AppealCooldownPolicy {
      * that regardless.
      *
      * The tier comes from units at *send* time and is then fixed: it is what
-     * decides how long this cooldown lasts and what stock level ends it early, so
+     * decides how long this cooldown lasts and what stock level clears it, so
      * re-deriving it later from moving stock would rewrite a cooldown's terms after
      * the fact.
      *

@@ -168,10 +168,12 @@ has declined this request"; it does not change `BloodRequest.status`. See Busine
 | triggered_tier | enum: CRITICAL, LOW |
 
 One row per (blood_bank, blood_type), unique on that pair (`uq_appeal_cooldown_bank_type`) — added
-in V10 for Business Rule 12. Current state, not history: overwritten on each send, never appended to.
+in V10 for Business Rule 12. Current state, not history: overwritten on each send, **deleted** when
+stock recovers past the threshold that triggered it, never appended to. A row existing at all means
+"an appeal went out for this group and its shortage has not been resolved since".
 `triggered_tier` is how short the bank was **at send time** (CRITICAL under 15 units, LOW 15–29) and
 is stored rather than re-derived, because it fixes that cooldown's length and the level stock must
-reach to end it early. See Business Rule 12.
+reach to clear it. See Business Rule 12.
 
 ### Notification
 | field | type |
@@ -261,12 +263,21 @@ BloodBank 1–N AppealCooldown
     2. **A cooldown row within its tier's window → disabled, reading "Appeal Sent."** — 5 hours for
        CRITICAL, 24 hours for LOW, measured from `last_sent_at`. Exactly 5h/24h is still within the
        window ("no more than N hours elapsed"); past it the cooldown lapses.
-    3. **The cooldown ends early the moment stock is back over the threshold that triggered it** —
-       15 for a CRITICAL-triggered row, 30 for a LOW-triggered one — even if the timer has not run
-       out. This is evaluated against stock *as it is now*, not recorded as a one-way event, so a
-       shortage that recovers and then relapses inside the same window is still in cooldown; the
-       cooldown only stops blocking while the shortage it was raised for is genuinely over.
-    4. **Otherwise active.**
+    3. **Otherwise active.**
+    - **Recovery clears a cooldown permanently, at the crossing.** When stock climbs back over the
+      threshold that triggered it — 15 for a CRITICAL-triggered row, 30 for a LOW-triggered one —
+      the row is **deleted**, by `AppealCooldownPolicy.clearIfRecovered` called from
+      `InventoryService.addBatch`. That is the only path by which stock can rise (fulfilment is the
+      only one by which it falls), so it is the only place an upward crossing can happen.
+      `evaluate` therefore never consults current stock to decide whether a cooldown has ended: a
+      row that still exists is one whose shortage was never resolved.
+      **A group that recovers and then relapses gets a fresh appeal immediately** — the relapse is a
+      new shortage, not the tail of a spent timer belonging to an appeal that already did its job.
+      Re-deriving recovery on read instead would resurrect that timer and silence a bank that
+      genuinely needs donors again. Detecting the crossing as an event also keeps the read path
+      read-only, and matches how `notifyStockCrossing` already treats stock thresholds — with the
+      same shared consequence, that stock edited directly in the database (outside the app) raises
+      no alert and clears no cooldown.
     - **Appeal thresholds are deliberately not Business Rule 3's badge thresholds.** Rule 3 is a
       display rule (Critical under 15, Low under 40); this is an action rule (an appeal needs fewer
       than 30). So a group holding **30–39 units shows a "Low" badge and still cannot be appealed

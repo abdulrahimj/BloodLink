@@ -30,7 +30,7 @@ create table appeal_cooldowns (
     -- How short the bank was when the appeal went out: CRITICAL below 15 units,
     -- LOW from 15 to 29. Stored rather than re-derived from current stock,
     -- because it fixes this cooldown's length (5h vs 24h) and the level stock
-    -- must reach to end it early (15 vs 30). Deriving it later would let those
+    -- must reach to clear it (15 vs 30). Deriving it later would let those
     -- both change retroactively every time stock moved.
     --
     -- Note these are the *appeal* thresholds, not the Business Rule 3 badge

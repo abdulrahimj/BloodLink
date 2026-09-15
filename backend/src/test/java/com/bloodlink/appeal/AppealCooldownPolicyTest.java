@@ -111,7 +111,7 @@ class AppealCooldownPolicyTest {
         assertThat(policy.evaluate(0, null, after(Duration.ZERO))).isEqualTo(AppealAvailability.AVAILABLE);
     }
 
-    // ---------- rule 3: recovering past the trigger threshold ends it early ----------
+    // ---------- recovery clears a cooldown permanently, at the crossing ----------
 
     /**
      * A CRITICAL cooldown ends the moment stock reaches 15, long before its 5 hours
@@ -119,43 +119,120 @@ class AppealCooldownPolicyTest {
      * Low now, and a Low-tier appeal is a legitimate thing to send.
      */
     @Test
-    void aCriticalCooldownReactivatesEarlyOnceStockReachesFifteen() {
-        assertThat(policy.evaluate(15, cooldown(AppealTier.CRITICAL), after(Duration.ofMinutes(30))))
-            .isEqualTo(AppealAvailability.AVAILABLE);
+    void aCriticalCooldownIsClearedOnceStockReachesFifteen() {
+        AppealCooldown existing = cooldown(AppealTier.CRITICAL);
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+
+        AppealCooldown surviving = policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 15);
+
+        verify(cooldownRepository).delete(existing);
+        assertThat(surviving).isNull();
     }
 
-    /** One unit short of recovery, and well inside the window: still locked. */
+    /** One unit short of recovery: the cooldown stands, and is not deleted. */
     @Test
-    void aCriticalCooldownIsStillLockedAtFourteenUnits() {
-        assertThat(policy.evaluate(14, cooldown(AppealTier.CRITICAL), after(Duration.ofMinutes(30))))
+    void aCriticalCooldownIsNotClearedAtFourteenUnits() {
+        AppealCooldown existing = cooldown(AppealTier.CRITICAL);
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+
+        AppealCooldown surviving = policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 14);
+
+        verify(cooldownRepository, never()).delete(any());
+        assertThat(surviving).isSameAs(existing);
+        // And it still blocks, well inside its window.
+        assertThat(policy.evaluate(14, surviving, after(Duration.ofMinutes(30))))
             .isEqualTo(AppealAvailability.COOLING_DOWN);
+    }
+
+    /** A LOW cooldown's threshold is 30 — the same line rule 1 draws — so it is
+     *  cleared by a recovery to 30, not merely masked by NO_SHORTAGE. */
+    @Test
+    void aLowCooldownIsClearedOnceStockReachesThirty() {
+        AppealCooldown existing = cooldown(AppealTier.LOW);
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+
+        AppealCooldown surviving = policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 30);
+
+        verify(cooldownRepository).delete(existing);
+        assertThat(surviving).isNull();
+    }
+
+    /** One unit short of recovery: still there, still blocking. */
+    @Test
+    void aLowCooldownIsNotClearedAtTwentyNineUnits() {
+        AppealCooldown existing = cooldown(AppealTier.LOW);
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+
+        AppealCooldown surviving = policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 29);
+
+        verify(cooldownRepository, never()).delete(any());
+        assertThat(policy.evaluate(29, surviving, after(Duration.ofHours(2))))
+            .isEqualTo(AppealAvailability.COOLING_DOWN);
+    }
+
+    @Test
+    void clearingAGroupThatHasNoCooldownIsHarmless() {
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.empty());
+
+        assertThat(policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 40)).isNull();
+
+        verify(cooldownRepository, never()).delete(any());
     }
 
     /**
-     * A LOW cooldown's own threshold is 30 — the same line rule 1 draws — so its
-     * early release is observable through the NO_SHORTAGE answer: either way the
-     * cooldown is no longer what is stopping a send. What matters is that it is not
-     * reported as COOLING_DOWN, because the cooldown really has ended and stock
-     * dropping back under 30 later must find the button live again.
+     * The behaviour this design exists for: a group recovers past its threshold and
+     * then relapses into shortage inside what would have been the original
+     * cooldown's window.
+     *
+     * The relapse is a new shortage and gets its own chance to appeal immediately —
+     * it is not throttled by the tail of a timer belonging to an appeal that has
+     * already done its job. Recovery cleared that cooldown for good, so by the time
+     * stock falls again there is simply nothing left to block on.
+     *
+     * The contrast is the whole point: had recovery been re-derived from current
+     * stock on each check instead of cleared at the crossing, the row would still
+     * be sitting there, and this second shortage would have been met with a
+     * "COOLING_DOWN" from a spent timer — silencing a bank that genuinely needs
+     * donors again.
      */
     @Test
-    void aLowCooldownReactivatesEarlyOnceStockReachesThirty() {
-        AppealAvailability atRecovery =
-            policy.evaluate(30, cooldown(AppealTier.LOW), after(Duration.ofHours(1)));
+    void aGroupThatRecoversThenRelapsesInsideTheWindowCanAppealAgainImmediately() {
+        AppealCooldown existing = cooldown(AppealTier.CRITICAL);
+        when(cooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
 
-        assertThat(atRecovery).isNotEqualTo(AppealAvailability.COOLING_DOWN);
-        assertThat(atRecovery).isEqualTo(AppealAvailability.NO_SHORTAGE);
+        // Sent at 10 units; an hour later a batch takes the group to 16, crossing
+        // the 15 that triggered it. That clears the cooldown permanently.
+        AppealCooldown afterRecovery = policy.clearIfRecovered(BANK_ID, BloodType.O_NEGATIVE, 16);
+        verify(cooldownRepository).delete(existing);
+        assertThat(afterRecovery).isNull();
 
-        // And the point of it: once stock slips back under 30 inside the same
-        // 24-hour window, the ended cooldown does not come back to block the send.
-        assertThat(policy.evaluate(29, cooldown(AppealTier.LOW), after(Duration.ofHours(1))))
-            .isEqualTo(AppealAvailability.COOLING_DOWN);
+        // Stock then falls back to 11 — still only two hours after the original
+        // appeal, far inside its 5-hour window.
+        assertThat(policy.evaluate(11, afterRecovery, after(Duration.ofHours(2))))
+            .isEqualTo(AppealAvailability.AVAILABLE);
+
+        // Even one minute after the original send, the relapse is appealable.
+        assertThat(policy.evaluate(11, afterRecovery, after(Duration.ofMinutes(1))))
+            .isEqualTo(AppealAvailability.AVAILABLE);
     }
 
-    /** One unit short of recovery, well inside the 24 hours: still locked. */
+    /**
+     * evaluate() deliberately no longer consults current stock to decide whether a
+     * cooldown has ended. A row that still exists is one whose shortage was never
+     * resolved, so it blocks regardless of what the units happen to read now —
+     * clearing is the crossing's job, not this method's.
+     */
     @Test
-    void aLowCooldownIsStillLockedAtTwentyNineUnits() {
-        assertThat(policy.evaluate(29, cooldown(AppealTier.LOW), after(Duration.ofHours(2))))
+    void evaluateDoesNotEndACooldownItselfOnStockAlone() {
+        // 20 units is above the CRITICAL tier's own 15-unit threshold, yet the row
+        // is still present — which only happens if no recovery was ever recorded.
+        assertThat(policy.evaluate(20, cooldown(AppealTier.CRITICAL), after(Duration.ofMinutes(30))))
             .isEqualTo(AppealAvailability.COOLING_DOWN);
     }
 

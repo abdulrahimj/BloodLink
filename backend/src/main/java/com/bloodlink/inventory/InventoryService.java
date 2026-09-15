@@ -195,12 +195,17 @@ public class InventoryService {
         // count (a correction, a write-off) cannot silently skip the alert.
         notificationService.notifyStockCrossing(bank, bloodType, unitsBefore, saved.getUnitsAvailable());
 
-        // The row that comes back carries a freshly derived appeal state too, since
-        // adding units is one of the things that can end a cooldown early (Business
-        // Rule 12) — the caller must not be handed the pre-batch answer.
-        AppealCooldown cooldown = appealCooldownRepository
-            .findByBloodBankIdAndBloodType(bloodBankId, bloodType)
-            .orElse(null);
+        // This is the only place stock can rise, so it is the only place an appeal
+        // cooldown can be recovered out of (Business Rule 12). If these units take
+        // the group back over the threshold that triggered its cooldown, that
+        // cooldown is finished for good — a later relapse into shortage is a new
+        // event with its own chance to appeal, not the tail of this one's timer.
+        //
+        // What comes back is whatever cooldown survives, which is exactly what the
+        // returned row should report: the state this batch has just produced, not
+        // the one it replaced.
+        AppealCooldown cooldown =
+            appealCooldownPolicy.clearIfRecovered(bloodBankId, bloodType, saved.getUnitsAvailable());
 
         return toResponse(bloodType, saved, cooldown, Instant.now());
     }

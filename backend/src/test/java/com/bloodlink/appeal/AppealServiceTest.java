@@ -274,14 +274,21 @@ class AppealServiceTest {
         verify(cooldownRepository, never()).save(any());
     }
 
-    /** Stock back over the threshold that triggered it lets the next appeal through
-     *  without waiting out the timer. */
+    /**
+     * A group that recovered past its threshold and then relapsed can appeal again
+     * straight away, even inside what would have been the original window.
+     *
+     * The recovery deleted the cooldown when it happened (InventoryService.addBatch
+     * calls clearIfRecovered), so by the time stock falls again there is no row left
+     * to block on — which is what "no prior cooldown" below represents. The relapse
+     * is a new shortage with its own chance to appeal, not the tail of a spent timer.
+     */
     @Test
-    void sendAppealIsAllowedOnceStockHasRecoveredPastTheTriggeringThreshold() {
+    void sendAppealIsAllowedForARelapseAfterAnEarlierRecoveryClearedTheCooldown() {
         when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
-        // Critical cooldown from 20 minutes ago, but stock is back to 15.
-        stubStock(BloodType.O_NEGATIVE, 15);
-        stubCooldown(BloodType.O_NEGATIVE, AppealTier.CRITICAL, Duration.ofMinutes(20));
+        // Back down to 11 shortly after an appeal that was sent at 10 and then
+        // resolved by a batch — no cooldown row survives that recovery.
+        stubStock(BloodType.O_NEGATIVE, 11);
         when(notificationService.sendDonationAppeal(any(), any(), any())).thenReturn(new AppealReach(4, 1));
 
         DonationAppealResponse response = service.sendAppeal(

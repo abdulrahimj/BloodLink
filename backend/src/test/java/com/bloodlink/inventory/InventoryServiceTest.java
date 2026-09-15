@@ -3,6 +3,8 @@ package com.bloodlink.inventory;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
@@ -166,6 +168,68 @@ class InventoryServiceTest {
     /** One row out of the fixed eight, by its clinical label. */
     private static InventoryItemResponse itemFor(List<InventoryItemResponse> items, String label) {
         return items.stream().filter(i -> i.bloodType().equals(label)).findFirst().orElseThrow();
+    }
+
+    /**
+     * Adding stock is the only way a group's units can rise, so it is the only
+     * place an appeal cooldown can be recovered out of (Business Rule 12). A batch
+     * that takes the group back over the threshold that triggered its cooldown
+     * deletes that cooldown for good.
+     */
+    @Test
+    void addBatchClearsACooldownWhenTheBatchCrossesTheThresholdThatTriggeredIt() {
+        BloodInventory existing = row(BloodType.O_NEGATIVE, 12, LocalDate.now().plusDays(20));
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        when(bloodInventoryRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+        when(bloodInventoryRepository.save(any(BloodInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AppealCooldown cooldown = new AppealCooldown();
+        cooldown.setBloodType(BloodType.O_NEGATIVE);
+        cooldown.setTriggeredTier(AppealTier.CRITICAL);
+        cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(20)));
+        when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(cooldown));
+
+        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+
+        // 12 + 3 = 15, exactly the CRITICAL tier's recovery threshold.
+        InventoryItemResponse result = service.addBatch(
+            BANK_ID, "O-", new AddBatchRequest(3, LocalDate.now().plusDays(40)), admin
+        );
+
+        verify(appealCooldownRepository).delete(cooldown);
+        // And the row handed back already reflects the clearing, rather than
+        // reporting the cooldown this very call just ended.
+        assertThat(result.unitsAvailable()).isEqualTo(15);
+        assertThat(result.appealAvailability()).isEqualTo(AppealAvailability.AVAILABLE);
+    }
+
+    /** A batch that does not reach the threshold leaves the cooldown alone. */
+    @Test
+    void addBatchLeavesACooldownRunningWhenTheBatchFallsShortOfTheThreshold() {
+        BloodInventory existing = row(BloodType.O_NEGATIVE, 12, LocalDate.now().plusDays(20));
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        when(bloodInventoryRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(existing));
+        when(bloodInventoryRepository.save(any(BloodInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AppealCooldown cooldown = new AppealCooldown();
+        cooldown.setBloodType(BloodType.O_NEGATIVE);
+        cooldown.setTriggeredTier(AppealTier.CRITICAL);
+        cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(20)));
+        when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
+            .thenReturn(Optional.of(cooldown));
+
+        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+
+        // 12 + 2 = 14, one short of the 15 that would end it.
+        InventoryItemResponse result = service.addBatch(
+            BANK_ID, "O-", new AddBatchRequest(2, LocalDate.now().plusDays(40)), admin
+        );
+
+        verify(appealCooldownRepository, never()).delete(any());
+        assertThat(result.appealAvailability()).isEqualTo(AppealAvailability.COOLING_DOWN);
     }
 
     @Test

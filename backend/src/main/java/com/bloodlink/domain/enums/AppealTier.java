@@ -79,9 +79,15 @@ public enum AppealTier {
      * Whether stock has climbed back over the threshold that triggered this tier's
      * appeal — 15 for CRITICAL, 30 for LOW.
      *
-     * This is what lets a cooldown end early: the cooldown exists to stop a bank
-     * appealing repeatedly about the same unresolved shortage, so once that
-     * shortage is over the cooldown has nothing left to protect against.
+     * This is what clears a cooldown: it exists to stop a bank appealing
+     * repeatedly about the same unresolved shortage, so once that shortage is over
+     * the cooldown has nothing left to protect against and its row is deleted
+     * (see {@code AppealCooldownPolicy.clearIfRecovered}).
+     *
+     * Asked at the moment stock rises, not re-asked on every read — so a group
+     * that recovers and then relapses counts as a new shortage, free to appeal
+     * again rather than serving out the remains of a timer belonging to an appeal
+     * that already did its job.
      */
     public boolean hasRecoveredAt(int unitsAvailable) {
         return unitsAvailable >= recoveryThreshold;
