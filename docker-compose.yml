@@ -10,6 +10,12 @@
 # never references and cannot reach unless a developer manually points the "db"
 # service's volume/port at that same local instance, which nothing here does.
 #
+# First time only: cp .env.example .env
+#   Compose reads .env (gitignored) from this folder automatically. It supplies
+#   BLOODLINK_JWT_SECRET — see .env.example for the format and how to generate a
+#   real value. Compose refuses to start without it rather than falling back to
+#   anything, so a secret is never silently missing.
+#
 # Usage: docker compose up --build   (first run, or after changing source)
 #        docker compose up           (subsequent runs)
 #        docker compose down         (stop; add -v to also delete the demo data volume)
@@ -54,6 +60,14 @@ services:
       # the Origin header a browser actually sends — not the frontend
       # container's internal Docker-network address.
       BLOODLINK_ALLOWED_ORIGINS: http://localhost:5173
+      # The token-signing secret, passed explicitly from .env — never baked into
+      # the image, and never read from a local file that only one machine has.
+      # ":?" makes Compose stop with this message if it is unset or empty, instead
+      # of starting the backend with no secret (which would fail far less clearly).
+      # If .env still holds the public placeholder from .env.example, the backend
+      # starts, because this is the "demo" profile, but prints a large warning
+      # (Business Rule 15). Under any other profile that placeholder is refused.
+      BLOODLINK_JWT_SECRET: "${BLOODLINK_JWT_SECRET:?BLOODLINK_JWT_SECRET is not set - copy .env.example to .env first, then see the notes inside it}"
     ports:
       - "8080:8080"
 

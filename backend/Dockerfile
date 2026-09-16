@@ -18,6 +18,15 @@ COPY .mvn .mvn
 RUN chmod +x mvnw && ./mvnw -q -B dependency:go-offline
 
 COPY src src
+# The base configuration comes from the committed template, never from a local
+# application.properties (which .dockerignore keeps out of the build context).
+# That file is gitignored, so on a fresh clone it does not exist — and it holds
+# more than credentials: token lifetime, CORS origins and the Hibernate/Flyway
+# settings live only there. Without this step a fresh clone's image started, then
+# died on "Could not resolve placeholder 'bloodlink.jwt.expiration-ms'".
+# The template's datasource and JWT secret are placeholders; docker-compose.yml
+# replaces them with real values through environment variables at run time.
+RUN cp src/main/resources/application.properties.example src/main/resources/application.properties
 # Skip tests here — this Dockerfile builds a runnable image, not a CI check;
 # `mvnw test` still runs separately in the ordinary dev/CI workflow.
 RUN ./mvnw -q -B clean package -DskipTests

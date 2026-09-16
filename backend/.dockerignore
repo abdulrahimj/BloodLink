@@ -4,3 +4,12 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 *.iml
 .idea/
+
+# A developer's own local config — gitignored because it holds their database
+# credentials — must never be sent into an image build. It would bake those
+# credentials into the image, and it would make the image depend on a file that
+# exists on one machine and nowhere else: a fresh clone has no such file, which is
+# exactly why the image used to build on its author's machine and fail everywhere
+# else. The Dockerfile uses the committed application.properties.example instead,
+# and every environment-specific value arrives as an environment variable.
+src/main/resources/application.properties

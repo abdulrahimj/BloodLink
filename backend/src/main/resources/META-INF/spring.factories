@@ -1,0 +1,5 @@
+# Spring Boot discovers failure analyzers from this file, not by component scanning:
+# they run while startup is already failing, before or without a usable application
+# context. See InsecureJwtSecretFailureAnalyzer (Business Rule 15).
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+com.bloodlink.security.InsecureJwtSecretFailureAnalyzer

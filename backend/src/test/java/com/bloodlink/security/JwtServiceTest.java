@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
@@ -21,7 +22,11 @@ class JwtServiceTest {
     private static final String SECRET = "test-secret-that-is-long-enough-for-hmac-sha256";
     private static final long ONE_HOUR_MS = 3_600_000L;
 
-    private final JwtService jwtService = new JwtService(SECRET, ONE_HOUR_MS);
+    /** No active profiles — the default profile. Irrelevant to these tests, whose
+     *  secret is not the placeholder; the profile rules are JwtSecretPolicyTest's job. */
+    private static final MockEnvironment ENVIRONMENT = new MockEnvironment();
+
+    private final JwtService jwtService = new JwtService(SECRET, ONE_HOUR_MS, ENVIRONMENT);
 
     private static User donor() {
         User user = new User();
@@ -47,7 +52,7 @@ class JwtServiceTest {
 
     @Test
     void tokenSignedWithAnotherSecretIsRejected() {
-        JwtService impostor = new JwtService("a-completely-different-secret-of-sufficient-length", ONE_HOUR_MS);
+        JwtService impostor = new JwtService("a-completely-different-secret-of-sufficient-length", ONE_HOUR_MS, ENVIRONMENT);
         String foreignToken = impostor.issueToken(donor());
 
         // A token minted elsewhere must not authenticate — this is what stops a

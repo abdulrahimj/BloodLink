@@ -370,6 +370,39 @@ BloodBank 1–N AppealCooldown
     - **Admin-only, enforced by SecurityConfig's `/api/admin/**` rule** — a donor, hospital-staff or
       blood-bank-staff token is refused with a 403 in the filter chain, before the service is
       reached, and an unauthenticated caller gets a 401.
+15. **The application refuses to start on the public placeholder JWT secret, except on a profile
+    that never leaves a developer's own machine.** `bloodlink.jwt.secret` resolves as
+    `${BLOODLINK_JWT_SECRET:local-dev-only-change-me-0123456789abcdef}`. That default is committed to
+    the repository, so anyone can read it — and anyone who knows the signing secret can forge a login
+    token for any account, administrators included. HMAC-SHA256's 32-character minimum was the only
+    check before this rule, and the placeholder (41 characters) passes it, so a deployment that forgot
+    to set the variable used to start silently and accept forged logins.
+    - **Tolerated, with a warning:** the default profile (none active, or `default` named explicitly)
+      and `demo`. Those are the local-only profiles that exist: `mvnw spring-boot:run` against
+      `bloodlink_dev`, and docker-compose's container-only demo. Even there, a framed, upper-case WARN
+      banner is printed at startup saying the secret is a public placeholder for local development only.
+    - **Refused, hard, under every other profile** — `prod`, `staging`, a profile nobody has invented
+      yet, and any mix such as `demo,prod` (every active profile must be local-only, not one of them).
+      The allowed list names what is known to be safe; nothing names what is dangerous, so a newly
+      added profile is protected without anyone remembering to protect it. The start fails with
+      `InsecureJwtSecretException`, reported by `InsecureJwtSecretFailureAnalyzer` as Spring Boot's
+      "APPLICATION FAILED TO START" block naming the problem and `BLOODLINK_JWT_SECRET` as the fix.
+    - **`test` is deliberately not exempt.** It exists only as `@ActiveProfiles("test")` on the
+      integration tests, and `application-test.properties` sets its own test-only secret instead. That
+      file lives in `src/test/resources` and is never in the jar, so an exemption keyed on the profile
+      *name* would let a server started with `SPRING_PROFILES_ACTIVE=test` run on the placeholder.
+    - **Owned by `JwtSecretPolicy`, applied in `JwtService`'s constructor** — the one place the secret
+      becomes a signing key, so nothing can sign with the placeholder on a real deployment. `JwtService`
+      is `@Lazy(false)` so the check stays a *startup* check even if lazy initialisation is enabled.
+      The placeholder text is duplicated in `application.properties.example` and `.env.example`;
+      `JwtSecretPolicyTest` fails the build if either drifts from `JwtSecretPolicy.PUBLIC_PLACEHOLDER`,
+      since a mismatch would silently switch the check off.
+    - **Docker gets the secret from the environment, never from a file baked into the image.**
+      `docker-compose.yml` passes `BLOODLINK_JWT_SECRET` from a gitignored `.env` (template: the
+      committed `.env.example`) and refuses to start if it is unset. The Dockerfile builds from the
+      committed `application.properties.example`, and `.dockerignore` keeps a developer's local
+      `application.properties` out of the build — it holds their credentials, and a fresh clone does
+      not have one, which previously made the image fail at startup on every machine but its author's.
 
 ## Actors (roles) and what each can do
 

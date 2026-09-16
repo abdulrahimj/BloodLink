@@ -7,7 +7,11 @@ import java.util.UUID;
 
 import javax.crypto.SecretKey;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import com.bloodlink.domain.User;
@@ -28,22 +32,68 @@ import io.jsonwebtoken.security.Keys;
  * the trade-off is that a role change only takes effect once the token expires.
  */
 @Service
+// Never lazily created, even if spring.main.lazy-initialization is ever switched on
+// for faster startup. The secret check in the constructor is only a startup check
+// if this bean is built at startup; lazily, it would first run on the first login
+// attempt, long after a deployment had been declared healthy.
+@Lazy(false)
 public class JwtService {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtService.class);
 
     /** Claim holding the Role enum name, e.g. "DONOR". Drives role-based access control. */
     private static final String CLAIM_ROLE = "role";
     /** Display-name claim, so the frontend can greet the user without a second call. */
     private static final String CLAIM_NAME = "fullName";
 
+    /**
+     * Printed at WARN when the public placeholder is in use on a local-only profile.
+     * Framed and upper-case on purpose: it has to survive being scrolled past in a
+     * startup log full of Flyway and Hibernate lines, which is exactly what a quiet
+     * one-line warning would not.
+     */
+    private static final String PLACEHOLDER_WARNING = """
+
+        ************************************************************************
+        *  INSECURE JWT SECRET - LOCAL DEVELOPMENT ONLY                         *
+        *                                                                      *
+        *  bloodlink.jwt.secret is the PUBLIC PLACEHOLDER committed to the      *
+        *  BloodLink repository. Anyone who has read it can forge a login      *
+        *  token for any account, including an administrator.                  *
+        *                                                                      *
+        *  Tolerated only because the active profile is local-only             *
+        *  (default or demo). NEVER run this configuration anywhere but your   *
+        *  own machine. Set BLOODLINK_JWT_SECRET to a long random value.       *
+        ************************************************************************""";
+
     private final SecretKey signingKey;
     private final long expiryMillis;
 
+    /**
+     * Builds the signing key — after deciding whether the secret is safe to build it
+     * from (Business Rule 15, {@link JwtSecretPolicy}).
+     *
+     * The check lives here, in the one place the secret is turned into a key, rather
+     * than in a separate startup hook. That way no path can sign a token with the
+     * placeholder on a real deployment: if this constructor refuses, there is no
+     * JwtService, so there is no application.
+     *
+     * Two things can stop the start here, in this order:
+     *   1. The placeholder under a profile that is not local-only —
+     *      InsecureJwtSecretException, presented by InsecureJwtSecretFailureAnalyzer.
+     *   2. A secret shorter than HMAC-SHA256's 256-bit minimum — Keys.hmacShaKeyFor
+     *      throws rather than silently weakening every token we sign.
+     */
     JwtService(
         @Value("${bloodlink.jwt.secret}") String secret,
-        @Value("${bloodlink.jwt.expiration-ms}") long expiryMillis
+        @Value("${bloodlink.jwt.expiration-ms}") long expiryMillis,
+        Environment environment
     ) {
-        // HMAC-SHA256 requires at least a 256-bit key; a short secret would throw here
-        // at startup rather than silently weakening every token we sign.
+        if (JwtSecretPolicy.evaluate(secret, environment.getActiveProfiles())
+                == JwtSecretPolicy.Verdict.ACCEPTED_WITH_WARNING) {
+            log.warn(PLACEHOLDER_WARNING);
+        }
+
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expiryMillis = expiryMillis;
     }

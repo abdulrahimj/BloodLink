@@ -2,3 +2,5 @@
 .DS_Store
 *.log
 backend/src/main/resources/application.properties
+# Docker Compose's real secrets. Only .env.example, which holds placeholders, is committed.
+.env
