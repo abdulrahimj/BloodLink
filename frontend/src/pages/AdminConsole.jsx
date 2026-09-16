@@ -13,11 +13,23 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
      • Manage User Accounts  (all four roles, activate / suspend)
      • View Reports & Analytics  (donation trends, request outcomes)
 
-   Wired to GET /api/admin/users, PATCH /api/admin/users/{id}, and
+   Wired to GET /api/admin/users, POST + PATCH /api/admin/users, and
    GET /api/admin/reports/donations + /requests. Layout, styling and the two
    inline SVG charts are the mockup's, unchanged; the TRENDS/OUTCOMES/USERS
    fixtures are replaced with fetched data, and a loading/error pair was
    added using the same idiom as the other wired portals.
+
+   Two views, switched from the sidebar the way BloodBankPortal switches its
+   own (plain state, no URL routing):
+     • Dashboard (DashboardView) — read-only: the four stat cards and two
+       charts, nothing that changes anything.
+     • User Accounts (UserAccountsView) — the account table with its
+       Suspend/Activate actions, the Create Account flow, and a role filter.
+   The mockup drew the user table beneath the charts on one screen; it was
+   moved to its own page once the table gained a Create Account flow and a
+   donor register that only grows — a list to work through does not belong
+   on a summary screen. The other sidebar entries (Blood Banks, Hospitals,
+   Reports, Audit Log, Settings) are still the mockup's inert buttons.
 
    The notification bell is deliberately left exactly as the mockup drew it —
    a static icon with an always-on dot, no live count. No Notification type
@@ -81,7 +93,29 @@ function statusLabel(status) {
  *  endpoint regardless — offering it would be offering something that cannot work. */
 const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
 
+/** The two views this console switches between. Held as plain
+ *  state rather than a URL hash, the same way BloodBankPortal switches Dashboard /
+ *  Blood Inventory: App.jsx's hash routing chooses which portal a role sees, and
+ *  nothing inside a portal has ever needed its own address. */
+const VIEW = { DASHBOARD: "dashboard", USERS: "users" };
+
+/** The role filter's choices, in the order the buttons appear. "ALL" first, then
+ *  the four roles in ROLE_LABEL's own order. */
+const ROLE_FILTERS = ["ALL", "DONOR", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
+
+/**
+ * The console shell: sidebar, header, data loading, and which view is showing.
+ *
+ * Data is loaded once, here, and shared by both views rather than fetched by each
+ * view as it opens. The two genuinely overlap — the dashboard's "Total Users" and
+ * "Registered Donors" cards are counts over the very list the User Accounts page
+ * shows — so keeping one copy means an account created or suspended on the User
+ * Accounts page is already reflected in those cards when the administrator
+ * switches back, with no refetch and no chance of the two pages disagreeing.
+ */
 export default function AdminConsole({ user, onSignOut }) {
+  const [view, setView] = useState(VIEW.DASHBOARD);
+
   const [users, setUsers] = useState([]);
   const [trends, setTrends] = useState([]);
   const [outcomes, setOutcomes] = useState(null);
@@ -95,29 +129,6 @@ export default function AdminConsole({ user, onSignOut }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
-
-  // The Create Account form, and the credentials screen that replaces it on
-  // success. Separate pieces of state because the second outlives the first:
-  // the form closes the moment the account is created, and the password stays
-  // on screen until the administrator dismisses it themselves.
-  const [creatingAccount, setCreatingAccount] = useState(false);
-  const [newCredentials, setNewCredentials] = useState(null);
-
-  // Which row's status is mid-write, and the last write failure — mirrors the
-  // Blood Bank Dashboard's actingOn/actionError pair, keyed to one row rather
-  // than shown as a page-level banner.
-  const [updatingUserId, setUpdatingUserId] = useState(null);
-  const [actionError, setActionError] = useState(null);
-
-  // The user awaiting a confirmed Suspend, or null when the dialog is closed.
-  const [confirmingSuspend, setConfirmingSuspend] = useState(null);
-  const cancelSuspendRef = useRef(null);
-
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
 
   async function load() {
     const [usersData, trendsData, outcomesData, banks, hospitals] = await Promise.all([
@@ -151,75 +162,7 @@ export default function AdminConsole({ user, onSignOut }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Escape closes the confirmation, and focus moves to Cancel — the same
-   *  keyboard handling the Dashboard's Reject dialog already uses, so the two
-   *  confirmations in this app behave identically even though this one is
-   *  visually lighter. */
-  useEffect(() => {
-    if (!confirmingSuspend) return;
-
-    cancelSuspendRef.current?.focus();
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") setConfirmingSuspend(null);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [confirmingSuspend]);
-
-  /**
-   * Writes one status change and reconciles the table from the response,
-   * rather than trusting the click to know what the new row should look like —
-   * the same reasoning BloodBankDashboard's handleAction gives for reloading
-   * after an approve/reject/fulfil instead of patching local state by hand.
-   */
-  async function applyStatus(targetUserId, status) {
-    setUpdatingUserId(targetUserId);
-    setActionError(null);
-    try {
-      const updated = await updateUserStatus(targetUserId, status);
-      if (!mountedRef.current) return;
-      setUsers((current) => current.map((u) => (u.id === targetUserId ? updated : u)));
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setActionError({ userId: targetUserId, message: err.message });
-    } finally {
-      if (mountedRef.current) setUpdatingUserId(null);
-    }
-  }
-
-  function handleConfirmSuspend() {
-    const targetUserId = confirmingSuspend.id;
-    setConfirmingSuspend(null);
-    applyStatus(targetUserId, "SUSPENDED");
-  }
-
-  /**
-   * Called by the form once the account exists, with the server's 201 body.
-   *
-   * The new row is spliced into the table from that response rather than by
-   * re-fetching every account: the created account comes back in exactly the
-   * shape this table renders, so a second round trip would ask the server to
-   * repeat what it just said. Inserted in name order, which is the order
-   * GET /api/admin/users returns, so the row sits where a reload would put it
-   * instead of jumping on the next visit.
-   *
-   * The password is held in state only for as long as the credentials screen is
-   * open, and is never written to storage — it cannot be fetched again, so
-   * keeping a copy anywhere would be keeping the one thing hashing exists to
-   * avoid keeping.
-   */
-  function handleAccountCreated(result) {
-    setUsers((current) =>
-      [...current, result.account].sort((a, b) => a.fullName.localeCompare(b.fullName))
-    );
-    setCreatingAccount(false);
-    setNewCredentials(result);
-  }
-
-  const totalUsers = users.length;
-  const registeredDonors = users.filter((u) => u.role === "DONOR").length;
-  const pendingRequests = outcomes?.pending ?? 0;
-  const facilityCount = banks.length + hospitals.length;
+  const onUsers = view === VIEW.USERS;
 
   return (
     <div className="ad-root">
@@ -490,6 +433,23 @@ export default function AdminConsole({ user, onSignOut }) {
         .ad-new svg { width: clamp(11px, 1.5vh, 14px); height: clamp(11px, 1.5vh, 14px); }
         .ad-panel-head-right { display: flex; align-items: center; gap: clamp(8px, .9vw, 14px); }
 
+        /* ===== ROLE FILTER — User Accounts page ===== */
+        /* Pill-shaped to echo the role pills in the table they filter. The chosen
+           one is filled navy, this app's "selected / primary" tone, and each shows
+           its count so an empty role is visible before it is clicked. */
+        .ad-filters { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: clamp(5px, .5vw, 8px); margin-bottom: clamp(7px, 1.1vh, 12px); }
+        .ad-filter {
+          display: inline-flex; align-items: center; gap: 6px;
+          background: #FFF; color: #3A3A3A; border: 1.5px solid var(--line); border-radius: 20px;
+          cursor: pointer; font-family: inherit; font-weight: 700;
+          font-size: clamp(9px, 1.28vh, 11.5px);
+          padding: clamp(4px, .7vh, 6px) clamp(9px, .9vw, 13px);
+        }
+        .ad-filter:hover { border-color: #C9CDD3; background: #F6F7F8; }
+        .ad-filter.is-on { background: var(--navy); border-color: var(--navy); color: #FFF; }
+        .ad-filter:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        .ad-filter-count { font-weight: 600; opacity: .7; }
+
         /* A wider dialog than the suspend confirmation: this one holds a form,
            not a sentence. Scrolls internally rather than growing past the viewport
            on a short screen. */
@@ -571,9 +531,23 @@ export default function AdminConsole({ user, onSignOut }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
+        {/* Dashboard and User Accounts are wired; the rest remain the mockup's own
+            inert entries, exactly as before — nothing behind them exists yet. */}
         <nav className="ad-nav">
-          <button type="button" className="is-active"><GridIcon /> Dashboard</button>
-          <button type="button"><UsersIcon /> User Accounts</button>
+          <button
+            type="button" className={onUsers ? "" : "is-active"}
+            aria-current={onUsers ? undefined : "page"}
+            onClick={() => setView(VIEW.DASHBOARD)}
+          >
+            <GridIcon /> Dashboard
+          </button>
+          <button
+            type="button" className={onUsers ? "is-active" : ""}
+            aria-current={onUsers ? "page" : undefined}
+            onClick={() => setView(VIEW.USERS)}
+          >
+            <UsersIcon /> User Accounts
+          </button>
           <button type="button"><BankIcon /> Blood Banks</button>
           <button type="button"><HospitalIcon /> Hospitals</button>
           <button type="button"><ChartIcon /> Reports</button>
@@ -588,8 +562,10 @@ export default function AdminConsole({ user, onSignOut }) {
       <main className="ad-main">
         <div className="ad-top">
           <div>
-            <div className="ad-title">System Administration</div>
-            <div className="ad-sub">BloodLink · Makeni City deployment</div>
+            <div className="ad-title">{onUsers ? "User Accounts" : "System Administration"}</div>
+            <div className="ad-sub">
+              {onUsers ? "Create, suspend and reactivate accounts across all four roles" : "BloodLink · Makeni City deployment"}
+            </div>
           </div>
           <div className="ad-top-right">
             <div className="ad-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -615,133 +591,341 @@ export default function AdminConsole({ user, onSignOut }) {
         )}
 
         {!loading && !error && outcomes && (
-          <>
-            {/* ---- stat cards ---- */}
-            <div className="ad-stats">
-              <Stat tone="navy" icon={<UsersFillIcon />} figure={totalUsers} label="Total Users" note="All roles" />
-              <Stat tone="red" icon={<DropletIcon />} figure={registeredDonors} label="Registered Donors" note="Voluntary donors" />
-              <Stat tone="green" icon={<BuildingIcon />} figure={facilityCount} label="Partner Facilities" note="Hospitals & blood banks" />
-              <Stat tone="amber" icon={<AlertIcon />} figure={pendingRequests} label="Pending Requests" note="Needs attention" />
-            </div>
-
-            {/* ---- charts ---- */}
-            <div className="ad-charts">
-              <div className="ad-panel">
-                <div className="ad-panel-head">
-                  <div className="ad-panel-title">Donation Trends</div>
-                  <div className="ad-panel-link">Last 6 months</div>
-                </div>
-                <div className="ad-chart-wrap"><TrendChart data={trends} /></div>
-              </div>
-
-              <div className="ad-panel">
-                <div className="ad-panel-head">
-                  <div className="ad-panel-title">Request Outcomes</div>
-                  <div className="ad-panel-link">{outcomes.total.toLocaleString()} total</div>
-                </div>
-                <div className="ad-chart-wrap">
-                  <div className="ad-donut-row">
-                    <DonutChart outcomes={outcomes} />
-                    <div className="ad-legend">
-                      {outcomeSlices(outcomes).map((o) => (
-                        <div key={o.label}>
-                          <i style={{ background: o.color }} />
-                          {o.label} <em>{o.pct}%</em>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* ---- user accounts ---- */}
-            <div className="ad-panel ad-table-panel">
-              <div className="ad-panel-head">
-                <div className="ad-panel-title">User Accounts</div>
-                <div className="ad-panel-head-right">
-                  <div className="ad-panel-link">{users.length} total</div>
-                  {/* The only way to create a staff or administrator account
-                      without writing SQL — see Business Rule 14. */}
-                  <button type="button" className="ad-new" onClick={() => setCreatingAccount(true)}>
-                    <PlusIcon /> Create Account
-                  </button>
-                </div>
-              </div>
-              <div className="ad-table-scroll">
-                <table className="ad-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "24%" }}>User</th>
-                      <th style={{ width: "16%" }}>Role</th>
-                      <th style={{ width: "20%" }}>Facility</th>
-                      <th style={{ width: "11%" }}>Status</th>
-                      <th style={{ width: "13%" }}>Joined</th>
-                      <th style={{ width: "16%" }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.length === 0 && (
-                      <tr><td colSpan={6} className="ad-empty">No accounts on record.</td></tr>
-                    )}
-                    {users.map((u) => {
-                      const facility = u.bloodBankName ?? u.hospitalName;
-                      const busy = updatingUserId === u.id;
-                      // The backend refuses this too (409), but a button that
-                      // always fails is worse than one that explains itself —
-                      // the same reasoning BloodBankDashboard already gives
-                      // canFulfil for a request this bank did not approve.
-                      const isSelf = u.id === user.id;
-
-                      return (
-                        <tr key={u.id}>
-                          <td>
-                            <div className="ad-user">
-                              <div className="ad-user-av" style={{ background: roleColor(u.role) }}>
-                                {initials(u.fullName)}
-                              </div>
-                              <span className="ad-user-name">{u.fullName}</span>
-                            </div>
-                          </td>
-                          <td><span className={`ad-pill ${rolePill(u.role)}`}>{ROLE_LABEL[u.role] ?? u.role}</span></td>
-                          <td className={facility ? "" : "ad-muted"}>{facility ?? "—"}</td>
-                          <td><span className={`ad-badge ad-b-${u.status.toLowerCase()}`}>{statusLabel(u.status)}</span></td>
-                          <td className="ad-muted">{formatRelativeTime(u.createdAt)}</td>
-                          <td>
-                            {u.status === "ACTIVE" ? (
-                              <button
-                                type="button"
-                                className="ad-act"
-                                disabled={busy || isSelf}
-                                title={isSelf ? "You cannot suspend your own account." : undefined}
-                                onClick={() => setConfirmingSuspend(u)}
-                              >
-                                {busy ? "…" : "Suspend"}
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="ad-act ad-act--go"
-                                disabled={busy}
-                                onClick={() => applyStatus(u.id, "ACTIVE")}
-                              >
-                                {busy ? "…" : "Activate"}
-                              </button>
-                            )}
-                            {actionError?.userId === u.id && (
-                              <div className="ad-act-error">{actionError.message}</div>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
+          onUsers ? (
+            <UserAccountsView
+              user={user}
+              users={users}
+              setUsers={setUsers}
+              banks={banks}
+              hospitals={hospitals}
+            />
+          ) : (
+            <DashboardView
+              users={users}
+              trends={trends}
+              outcomes={outcomes}
+              facilityCount={banks.length + hospitals.length}
+            />
+          )
         )}
       </main>
+    </div>
+  );
+}
+
+/**
+ * Dashboard — the read-only system summary.
+ *
+ * Four stat cards and two charts, and nothing that changes anything. Account
+ * management used to share this screen as a table underneath the charts; it now
+ * lives on its own page (UserAccountsView), so this one answers only "how is the
+ * system doing?" and never "what do I need to do?". The cards and charts are
+ * exactly as they were, including the two user counts, which still read from the
+ * same shared user list the User Accounts page acts on.
+ */
+function DashboardView({ users, trends, outcomes, facilityCount }) {
+  const totalUsers = users.length;
+  const registeredDonors = users.filter((u) => u.role === "DONOR").length;
+  const pendingRequests = outcomes.pending ?? 0;
+
+  return (
+    <>
+      {/* ---- stat cards ---- */}
+      <div className="ad-stats">
+        <Stat tone="navy" icon={<UsersFillIcon />} figure={totalUsers} label="Total Users" note="All roles" />
+        <Stat tone="red" icon={<DropletIcon />} figure={registeredDonors} label="Registered Donors" note="Voluntary donors" />
+        <Stat tone="green" icon={<BuildingIcon />} figure={facilityCount} label="Partner Facilities" note="Hospitals & blood banks" />
+        <Stat tone="amber" icon={<AlertIcon />} figure={pendingRequests} label="Pending Requests" note="Needs attention" />
+      </div>
+
+      {/* ---- charts ---- */}
+      <div className="ad-charts">
+        <div className="ad-panel">
+          <div className="ad-panel-head">
+            <div className="ad-panel-title">Donation Trends</div>
+            <div className="ad-panel-link">Last 6 months</div>
+          </div>
+          <div className="ad-chart-wrap"><TrendChart data={trends} /></div>
+        </div>
+
+        <div className="ad-panel">
+          <div className="ad-panel-head">
+            <div className="ad-panel-title">Request Outcomes</div>
+            <div className="ad-panel-link">{outcomes.total.toLocaleString()} total</div>
+          </div>
+          <div className="ad-chart-wrap">
+            <div className="ad-donut-row">
+              <DonutChart outcomes={outcomes} />
+              <div className="ad-legend">
+                {outcomeSlices(outcomes).map((o) => (
+                  <div key={o.label}>
+                    <i style={{ background: o.color }} />
+                    {o.label} <em>{o.pct}%</em>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * User Accounts — every account in the system, and everything an administrator
+ * can do to one: create it, suspend it, reactivate it.
+ *
+ * Moved here from underneath the Dashboard's charts, unchanged in behaviour: the
+ * same columns, the same Suspend/Activate buttons and confirmation, the same
+ * Create Account dialog and one-time credentials screen (Business Rule 14). What
+ * is new is the role filter above the table.
+ *
+ * <h3>Filtering happens in the browser</h3>
+ * GET /api/admin/users already returns every account, and this page already holds
+ * that list, so choosing a role narrows what is on screen rather than asking the
+ * server again. That keeps the filter instant and needs no new endpoint. It is the
+ * right trade while the list is in the hundreds; see the note on `visibleUsers`
+ * for where that stops being true.
+ *
+ * The list itself belongs to the console shell, not to this view — `setUsers`
+ * writes straight back to it — so the Dashboard's user counts move the moment an
+ * account is created here.
+ */
+function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
+  const [roleFilter, setRoleFilter] = useState("ALL");
+
+  // The Create Account form, and the credentials screen that replaces it on
+  // success. Separate pieces of state because the second outlives the first:
+  // the form closes the moment the account is created, and the password stays
+  // on screen until the administrator dismisses it themselves.
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [newCredentials, setNewCredentials] = useState(null);
+
+  // Which row's status is mid-write, and the last write failure — mirrors the
+  // Blood Bank Dashboard's actingOn/actionError pair, keyed to one row rather
+  // than shown as a page-level banner.
+  const [updatingUserId, setUpdatingUserId] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  // The user awaiting a confirmed Suspend, or null when the dialog is closed.
+  const [confirmingSuspend, setConfirmingSuspend] = useState(null);
+  const cancelSuspendRef = useRef(null);
+
+  // Guards the async status write against this view having been left (the
+  // administrator clicking Dashboard mid-request) before the response arrives.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  /** Escape closes the confirmation, and focus moves to Cancel — the same
+   *  keyboard handling the Dashboard's Reject dialog already uses, so the two
+   *  confirmations in this app behave identically even though this one is
+   *  visually lighter. */
+  useEffect(() => {
+    if (!confirmingSuspend) return;
+
+    cancelSuspendRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setConfirmingSuspend(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [confirmingSuspend]);
+
+  /**
+   * Writes one status change and reconciles the table from the response,
+   * rather than trusting the click to know what the new row should look like —
+   * the same reasoning BloodBankDashboard's handleAction gives for reloading
+   * after an approve/reject/fulfil instead of patching local state by hand.
+   */
+  async function applyStatus(targetUserId, status) {
+    setUpdatingUserId(targetUserId);
+    setActionError(null);
+    try {
+      const updated = await updateUserStatus(targetUserId, status);
+      if (!mountedRef.current) return;
+      setUsers((current) => current.map((u) => (u.id === targetUserId ? updated : u)));
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setActionError({ userId: targetUserId, message: err.message });
+    } finally {
+      if (mountedRef.current) setUpdatingUserId(null);
+    }
+  }
+
+  function handleConfirmSuspend() {
+    const targetUserId = confirmingSuspend.id;
+    setConfirmingSuspend(null);
+    applyStatus(targetUserId, "SUSPENDED");
+  }
+
+  /**
+   * Called by the form once the account exists, with the server's 201 body.
+   *
+   * The new row is spliced into the table from that response rather than by
+   * re-fetching every account: the created account comes back in exactly the
+   * shape this table renders, so a second round trip would ask the server to
+   * repeat what it just said. Inserted in name order, which is the order
+   * GET /api/admin/users returns, so the row sits where a reload would put it
+   * instead of jumping on the next visit.
+   *
+   * If a role filter is active that would hide the new account — Donor chosen,
+   * an Administrator just created — the filter switches to the new account's
+   * role. Otherwise the administrator's first sight of the account they just
+   * made would be its absence, which reads as a failure that did not happen.
+   *
+   * The password is held in state only for as long as the credentials screen is
+   * open, and is never written to storage — it cannot be fetched again, so
+   * keeping a copy anywhere would be keeping the one thing hashing exists to
+   * avoid keeping.
+   */
+  function handleAccountCreated(result) {
+    setUsers((current) =>
+      [...current, result.account].sort((a, b) => a.fullName.localeCompare(b.fullName))
+    );
+    if (roleFilter !== "ALL" && roleFilter !== result.account.role) {
+      setRoleFilter(result.account.role);
+    }
+    setCreatingAccount(false);
+    setNewCredentials(result);
+  }
+
+  // How many accounts hold each role — shown on the filter buttons, so an empty
+  // role is visible as "0" before anyone clicks it and finds an empty table.
+  const countsByRole = users.reduce(
+    (counts, u) => ({ ...counts, [u.role]: (counts[u.role] ?? 0) + 1 }),
+    {}
+  );
+
+  /*
+   * Filtered in the browser, over the list already held. Fine at the scale this
+   * deployment has today — two blood banks, two hospitals, their staff, and a
+   * donor register in the hundreds — where the whole list is a small response and
+   * renders instantly. Donors are the part that grows without limit; once the
+   * register reaches the low thousands, fetching and rendering every account on
+   * each visit becomes the slow part, and the fix is paging and role filtering on
+   * the server (GET /api/admin/users?role=...&page=...) rather than more cleverness
+   * here. Not built now: that is a backend change, and a decision for the project
+   * owner rather than something to add quietly.
+   */
+  const visibleUsers = roleFilter === "ALL" ? users : users.filter((u) => u.role === roleFilter);
+
+  return (
+    <>
+      <div className="ad-panel ad-table-panel">
+        <div className="ad-panel-head">
+          <div className="ad-panel-title">All Accounts</div>
+          <div className="ad-panel-head-right">
+            <div className="ad-panel-link">
+              {roleFilter === "ALL" ? `${users.length} total` : `${visibleUsers.length} of ${users.length}`}
+            </div>
+            {/* The only way to create a staff or administrator account
+                without writing SQL — see Business Rule 14. */}
+            <button type="button" className="ad-new" onClick={() => setCreatingAccount(true)}>
+              <PlusIcon /> Create Account
+            </button>
+          </div>
+        </div>
+
+        {/* aria-pressed on each, so a screen reader announces which role is
+            currently narrowing the table rather than just listing five buttons. */}
+        <div className="ad-filters" role="group" aria-label="Filter accounts by role">
+          {ROLE_FILTERS.map((role) => (
+            <button
+              key={role}
+              type="button"
+              className={`ad-filter${roleFilter === role ? " is-on" : ""}`}
+              aria-pressed={roleFilter === role}
+              onClick={() => setRoleFilter(role)}
+            >
+              {role === "ALL" ? "All" : ROLE_LABEL[role]}
+              <span className="ad-filter-count">
+                {role === "ALL" ? users.length : (countsByRole[role] ?? 0)}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="ad-table-scroll">
+          <table className="ad-table">
+            <thead>
+              <tr>
+                <th style={{ width: "24%" }}>User</th>
+                <th style={{ width: "16%" }}>Role</th>
+                <th style={{ width: "20%" }}>Facility</th>
+                <th style={{ width: "11%" }}>Status</th>
+                <th style={{ width: "13%" }}>Joined</th>
+                <th style={{ width: "16%" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleUsers.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="ad-empty">
+                    {roleFilter === "ALL"
+                      ? "No accounts on record."
+                      : `No ${ROLE_LABEL[roleFilter]} accounts on record.`}
+                  </td>
+                </tr>
+              )}
+              {visibleUsers.map((u) => {
+                const facility = u.bloodBankName ?? u.hospitalName;
+                const busy = updatingUserId === u.id;
+                // The backend refuses this too (409), but a button that
+                // always fails is worse than one that explains itself —
+                // the same reasoning BloodBankDashboard already gives
+                // canFulfil for a request this bank did not approve.
+                const isSelf = u.id === user.id;
+
+                return (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="ad-user">
+                        <div className="ad-user-av" style={{ background: roleColor(u.role) }}>
+                          {initials(u.fullName)}
+                        </div>
+                        <span className="ad-user-name">{u.fullName}</span>
+                      </div>
+                    </td>
+                    <td><span className={`ad-pill ${rolePill(u.role)}`}>{ROLE_LABEL[u.role] ?? u.role}</span></td>
+                    <td className={facility ? "" : "ad-muted"}>{facility ?? "—"}</td>
+                    <td><span className={`ad-badge ad-b-${u.status.toLowerCase()}`}>{statusLabel(u.status)}</span></td>
+                    <td className="ad-muted">{formatRelativeTime(u.createdAt)}</td>
+                    <td>
+                      {u.status === "ACTIVE" ? (
+                        <button
+                          type="button"
+                          className="ad-act"
+                          disabled={busy || isSelf}
+                          title={isSelf ? "You cannot suspend your own account." : undefined}
+                          onClick={() => setConfirmingSuspend(u)}
+                        >
+                          {busy ? "…" : "Suspend"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ad-act ad-act--go"
+                          disabled={busy}
+                          onClick={() => applyStatus(u.id, "ACTIVE")}
+                        >
+                          {busy ? "…" : "Activate"}
+                        </button>
+                      )}
+                      {actionError?.userId === u.id && (
+                        <div className="ad-act-error">{actionError.message}</div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {confirmingSuspend && (
         <SuspendConfirmation
@@ -767,7 +951,7 @@ export default function AdminConsole({ user, onSignOut }) {
           onDone={() => setNewCredentials(null)}
         />
       )}
-    </div>
+    </>
   );
 }
 
