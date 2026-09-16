@@ -46,25 +46,43 @@ public class JwtService {
     /** Display-name claim, so the frontend can greet the user without a second call. */
     private static final String CLAIM_NAME = "fullName";
 
+    /** Width of the warning frame, border characters included. Declared before the
+     *  banner that uses it, so the order of initialisation reads as it runs. */
+    private static final int BANNER_WIDTH = 72;
+
     /**
      * Printed at WARN when the public placeholder is in use on a local-only profile.
      * Framed and upper-case on purpose: it has to survive being scrolled past in a
      * startup log full of Flyway and Hibernate lines, which is exactly what a quiet
-     * one-line warning would not.
+     * one-line warning would not. It prints before the database pool opens, so it
+     * sits near the top of the log rather than buried under the migration output.
      */
-    private static final String PLACEHOLDER_WARNING = """
+    private static final String PLACEHOLDER_WARNING = banner(
+        "INSECURE JWT SECRET - LOCAL DEVELOPMENT ONLY",
+        "",
+        "bloodlink.jwt.secret is the PUBLIC PLACEHOLDER committed to the",
+        "BloodLink repository. Anyone who has read it can forge a login",
+        "token for any account, including an administrator.",
+        "",
+        "Tolerated only because the active profile is local-only",
+        "(default or demo). NEVER run this configuration anywhere but your",
+        "own machine. Set BLOODLINK_JWT_SECRET to a long random value."
+    );
 
-        ************************************************************************
-        *  INSECURE JWT SECRET - LOCAL DEVELOPMENT ONLY                         *
-        *                                                                      *
-        *  bloodlink.jwt.secret is the PUBLIC PLACEHOLDER committed to the      *
-        *  BloodLink repository. Anyone who has read it can forge a login      *
-        *  token for any account, including an administrator.                  *
-        *                                                                      *
-        *  Tolerated only because the active profile is local-only             *
-        *  (default or demo). NEVER run this configuration anywhere but your   *
-        *  own machine. Set BLOODLINK_JWT_SECRET to a long random value.       *
-        ************************************************************************""";
+    /**
+     * Frames lines of text in asterisks, padding each to the same width so the
+     * right-hand border lines up. Computed rather than hand-typed: a hand-aligned
+     * frame goes ragged the first time anyone edits a word inside it.
+     */
+    private static String banner(String... lines) {
+        String border = "*".repeat(BANNER_WIDTH);
+        int textWidth = BANNER_WIDTH - 6; // "*  " on the left, "  *" on the right
+        StringBuilder out = new StringBuilder("\n").append(border).append('\n');
+        for (String line : lines) {
+            out.append("*  ").append(String.format("%-" + textWidth + "s", line)).append("  *\n");
+        }
+        return out.append(border).toString();
+    }
 
     private final SecretKey signingKey;
     private final long expiryMillis;

@@ -148,6 +148,24 @@ class JwtSecretStartupTest {
     }
 
     @Test
+    void theWarningIsAnEvenFrameThatReadsAsDeliberate(CapturedOutput output) {
+        try (ConfigurableApplicationContext context = start(PLACEHOLDER, null)) {
+            assertThat(context.getBean(JwtService.class)).isNotNull();
+        }
+
+        // Every line of the frame the same width: a ragged border reads as a glitch
+        // in the log, and a warning that looks like a glitch gets skipped.
+        List<Integer> frameWidths = output.getOut().lines()
+            .map(String::stripTrailing)
+            .filter(line -> line.startsWith("*"))
+            .map(String::length)
+            .distinct()
+            .toList();
+
+        assertThat(frameWidths).containsExactly(72);
+    }
+
+    @Test
     void theDemoProfileStartsOnThePlaceholderAndWarns(CapturedOutput output) {
         try (ConfigurableApplicationContext context = start(PLACEHOLDER, "demo")) {
             assertThat(context.getBean(JwtService.class)).isNotNull();
