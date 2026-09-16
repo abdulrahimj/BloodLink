@@ -333,14 +333,50 @@ BloodBank 1–N AppealCooldown
       are deliberately left as entered.
     - **Accounts written straight into the database must store the normalised form.** There is no
       self-registration path for HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN (Business Rules 8, 9),
-      so those rows are inserted by hand; one stored in any other spelling cannot be signed into.
+      so a row inserted by hand in any other spelling cannot be signed into. `POST /api/admin/users`
+      (Business Rule 14) normalises for itself, and is the reason hand-inserting one is now the
+      exception rather than the only way.
+14. **An administrator creates staff and administrator accounts through `POST /api/admin/users`;
+    the system generates the password and shows it exactly once.** This is the "created by an
+    administrator" path Business Rules 8 and 9 always referred to. Before it, those rows were
+    inserted into the database by hand — which meant hashing a password by hand, and getting it
+    wrong silently at least once, surfacing only as an account that would not log in.
+    - **Three roles, never DONOR.** HOSPITAL_STAFF, BLOOD_BANK_STAFF and ADMIN only. Donors
+      self-register (Business Rule 8), and that path also writes the linked `Donor` row — blood
+      group, date of birth, address — which this endpoint has no fields for; a DONOR `User` with
+      no `Donor` row would break every donor screen. The Admin Console does not offer the option
+      and the server refuses it anyway: an option a form does not show is a courtesy, not a control.
+    - **The facility is required or forbidden by role, and never merely ignored.** `hospital_id` is
+      required for HOSPITAL_STAFF and forbidden otherwise; `blood_bank_id` is required for
+      BLOOD_BANK_STAFF and forbidden otherwise; an ADMIN carries neither, because an administrator's
+      authority is citywide. Sending the wrong one is a 400 rather than a silently dropped field —
+      accepting it would accept a request whose author believed something untrue about what they
+      were creating. A staff account with no facility can see nothing, so the missing case is
+      equally refused. A facility id matching no row is a 404: the request is well-formed, and the
+      thing it named does not exist.
+    - **The password is generated, never chosen, and readable exactly once.** `TemporaryPasswordGenerator`
+      draws 12 characters from a `SecureRandom` over an alphabet with the look-alikes removed
+      (no `O`/`0`, no `I`/`l`/`1`, no punctuation) because a human reads this password aloud to
+      another human. Only the BCrypt hash is stored. The plaintext is returned in the creation
+      response and then it is gone — no endpoint can return it again, and nothing stores or logs it.
+      The Admin Console's confirmation screen says so plainly because it is true of the system, not
+      because the interface is being cautious: **if the password is lost, the account must be
+      created again.** An administrator relays it directly; BloodLink sends no email or SMS.
+    - **Phone goes through Business Rule 13's shared `PhoneNumber.normalize`** and is refused as a
+      duplicate exactly as registration refuses one (409), compared against the normalised value so
+      the same number typed two ways cannot become two accounts. Email is lower-cased and likewise
+      unique.
+    - **Every account is created ACTIVE**, so it works the moment the password is handed over.
+    - **Admin-only, enforced by SecurityConfig's `/api/admin/**` rule** — a donor, hospital-staff or
+      blood-bank-staff token is refused with a 403 in the filter chain, before the service is
+      reached, and an unauthenticated caller gets a 401.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's request status, view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, approve/reject/fulfil incoming requests, send donation appeals
-- **Administrator** — manage all user accounts, view aggregate reports (donation trends, request outcomes)
+- **Administrator** — create staff and administrator accounts (Business Rule 14), manage all user accounts (activate/suspend), view aggregate reports (donation trends, request outcomes)
 
 ## Conventions
 
@@ -363,11 +399,15 @@ BloodBank 1–N AppealCooldown
     counts they affected, and confirm the deleted count equals the count inserted. If those two numbers
     disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
-    it is a dedicated, *persistent* fixture for exactly one test, `BloodRequestLifecycleIT`, which is
-    `@Transactional` and rolls back everything it writes, so re-running it never leaves residue to clean up.
+    it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
+    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`), every one of which is `@Transactional` and
+    rolls back everything it writes, so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
-    Never point it at `bloodlink_dev`, and never use it for anything but that one test — a second,
-    non-transactional consumer would break the "always safe to rerun" guarantee this convention exists for.
+    Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,
+    not the number of test classes, is what would break the "always safe to rerun" guarantee this
+    convention exists for. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
+    widened deliberately when `AdminAccountCreationIT` was added, since the guarantee comes from the
+    rollback, not from there being a single class.)
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.
 - **At the end of every task, list every file created or modified**, grouped as New / Modified, and for each new or changed method/function, give its name and a one-line purpose. This is a structured list in addition to any prose summary, not a replacement for it — the project owner reviews this list against `git status` before verifying anything in the browser.
 - **Work directly on the `main` branch.** Do not create feature branches, task branches, or any other branch unless explicitly instructed to. This is a two-person project working phase-by-phase in turns; branching adds coordination overhead we've deliberately chosen not to use.

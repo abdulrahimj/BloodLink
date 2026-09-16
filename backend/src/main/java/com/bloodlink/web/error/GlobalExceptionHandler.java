@@ -158,6 +158,26 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A cross-field rule the service had to check itself, because no annotation on a
+     * single field could express it — {@code hospitalId} being required for one role
+     * and forbidden for another (Business Rule 14).
+     *
+     * Deliberately built to the same field-keyed shape as {@link #handleValidation},
+     * so the form treats it identically to a Bean Validation failure: the offending
+     * input is highlighted and the message appears beneath it. Which field it belongs
+     * to travels on the exception rather than being guessed here.
+     */
+    @ExceptionHandler(InvalidFieldException.class)
+    public ResponseEntity<ApiError> handleInvalidField(InvalidFieldException ex) {
+        return ResponseEntity.badRequest().body(ApiError.of(
+            HttpStatus.BAD_REQUEST.value(),
+            "Bad Request",
+            ex.getMessage(),
+            Map.of(ex.getField(), ex.getMessage())
+        ));
+    }
+
+    /**
      * A phone number that is not in, and cannot be converted to, the format this
      * system stores — raised by {@code PhoneNumber.normalize} from registration,
      * login and the donor lookup alike.

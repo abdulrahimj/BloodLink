@@ -15,6 +15,22 @@ export function getAdminUsers() {
 }
 
 /**
+ * POST /api/admin/users — creates a staff or administrator account.
+ *
+ * `payload` is { fullName, phone, email, role, bloodBankId?, hospitalId? }, where
+ * role is "HOSPITAL_STAFF", "BLOOD_BANK_STAFF" or "ADMIN" — never "DONOR", which
+ * the server refuses outright (donors register themselves).
+ *
+ * No password is sent: the server generates one and returns it, in plaintext,
+ * exactly once — { account, temporaryPassword }. That value is never retrievable
+ * again and exists nowhere else, so the caller must show it to the administrator
+ * before it is lost, and must not stash it anywhere afterwards.
+ */
+export function createStaffAccount(payload) {
+  return apiRequest('/api/admin/users', { method: 'POST', body: payload });
+}
+
+/**
  * PATCH /api/admin/users/{id} — activates or suspends one account.
  *
  * `status` is "ACTIVE" or "SUSPENDED". A suspension takes effect immediately —

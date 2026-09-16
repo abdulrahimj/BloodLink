@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  getAdminUsers, updateUserStatus, getDonationTrends, getRequestOutcomes,
+  getAdminUsers, createStaffAccount, updateUserStatus, getDonationTrends, getRequestOutcomes,
 } from "../api/admin.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
@@ -35,6 +35,15 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
        from the real request-outcomes report — a genuine citywide figure that
        keeps the same amber "needs attention" framing the mockup intended.
 
+   "Create Account" is likewise new UI, for the same reason (Business Rule 14):
+   the mockup drew a user table but no way to add to it, because until now staff
+   and administrator accounts were inserted into the database by hand. The button,
+   its form and the one-time credentials screen are all built from the tokens
+   already declared below. The credentials screen is deliberately the loudest
+   thing on this page — the generated password is shown exactly once and cannot
+   be retrieved afterwards, so an administrator who closes it without reading it
+   has to create the account again.
+
    The user table's Action column is new UI: the mockup's own table had no
    button to suspend or activate anyone, only a status badge. Built from this
    file's own tokens (navy/red/amber/shadow/radius already declared below),
@@ -67,14 +76,32 @@ function statusLabel(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
+/** ROLE_LABEL, minus DONOR: the three roles an administrator may create here.
+ *  Donors self-register (Business Rule 8), and the server refuses a DONOR on this
+ *  endpoint regardless — offering it would be offering something that cannot work. */
+const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
+
 export default function AdminConsole({ user, onSignOut }) {
   const [users, setUsers] = useState([]);
   const [trends, setTrends] = useState([]);
   const [outcomes, setOutcomes] = useState(null);
-  const [facilityCount, setFacilityCount] = useState(0);
+  // The facility reference lists, kept rather than counted away: the stat card
+  // needs their total, and the Create Account form needs the rows themselves for
+  // its hospital / blood bank picker. Both come from the listings this page
+  // already fetched (GET /api/blood-banks, GET /api/hospitals) — the same
+  // endpoints every other picker in the app uses, not a second admin-only one.
+  const [banks, setBanks] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
+
+  // The Create Account form, and the credentials screen that replaces it on
+  // success. Separate pieces of state because the second outlives the first:
+  // the form closes the moment the account is created, and the password stays
+  // on screen until the administrator dismisses it themselves.
+  const [creatingAccount, setCreatingAccount] = useState(false);
+  const [newCredentials, setNewCredentials] = useState(null);
 
   // Which row's status is mid-write, and the last write failure — mirrors the
   // Blood Bank Dashboard's actingOn/actionError pair, keyed to one row rather
@@ -100,10 +127,7 @@ export default function AdminConsole({ user, onSignOut }) {
       getBloodBanks(),
       getHospitals(),
     ]);
-    return {
-      usersData, trendsData, outcomesData,
-      facilities: banks.length + hospitals.length,
-    };
+    return { usersData, trendsData, outcomesData, banks, hospitals };
   }
 
   useEffect(() => {
@@ -112,12 +136,13 @@ export default function AdminConsole({ user, onSignOut }) {
     setError(null);
 
     load()
-      .then(({ usersData, trendsData, outcomesData, facilities }) => {
+      .then(({ usersData, trendsData, outcomesData, banks: bankRows, hospitals: hospitalRows }) => {
         if (cancelled) return;
         setUsers(usersData);
         setTrends(trendsData);
         setOutcomes(outcomesData);
-        setFacilityCount(facilities);
+        setBanks(bankRows);
+        setHospitals(hospitalRows);
       })
       .catch((err) => { if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -168,9 +193,33 @@ export default function AdminConsole({ user, onSignOut }) {
     applyStatus(targetUserId, "SUSPENDED");
   }
 
+  /**
+   * Called by the form once the account exists, with the server's 201 body.
+   *
+   * The new row is spliced into the table from that response rather than by
+   * re-fetching every account: the created account comes back in exactly the
+   * shape this table renders, so a second round trip would ask the server to
+   * repeat what it just said. Inserted in name order, which is the order
+   * GET /api/admin/users returns, so the row sits where a reload would put it
+   * instead of jumping on the next visit.
+   *
+   * The password is held in state only for as long as the credentials screen is
+   * open, and is never written to storage — it cannot be fetched again, so
+   * keeping a copy anywhere would be keeping the one thing hashing exists to
+   * avoid keeping.
+   */
+  function handleAccountCreated(result) {
+    setUsers((current) =>
+      [...current, result.account].sort((a, b) => a.fullName.localeCompare(b.fullName))
+    );
+    setCreatingAccount(false);
+    setNewCredentials(result);
+  }
+
   const totalUsers = users.length;
   const registeredDonors = users.filter((u) => u.role === "DONOR").length;
   const pendingRequests = outcomes?.pending ?? 0;
+  const facilityCount = banks.length + hospitals.length;
 
   return (
     <div className="ad-root">
@@ -425,6 +474,81 @@ export default function AdminConsole({ user, onSignOut }) {
         .ad-dialog-confirm:hover { background: var(--red-dark); }
         .ad-dialog-actions button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
+        /* ===== CREATE ACCOUNT — button, form, credentials ===== */
+        /* The one filled button on this screen: adding a staff account is the only
+           thing here that creates something, and navy is this app's "primary
+           action" tone everywhere else (Submit Request, Add Batch). */
+        .ad-new {
+          background: var(--navy); color: #FFF; border: none; border-radius: 7px;
+          cursor: pointer; font-family: inherit; font-weight: 700;
+          font-size: clamp(9.5px, 1.35vh, 12px);
+          padding: clamp(5px, .85vh, 8px) clamp(10px, 1vw, 15px);
+          display: inline-flex; align-items: center; gap: 6px;
+        }
+        .ad-new:hover { background: var(--navy-soft); }
+        .ad-new:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        .ad-new svg { width: clamp(11px, 1.5vh, 14px); height: clamp(11px, 1.5vh, 14px); }
+        .ad-panel-head-right { display: flex; align-items: center; gap: clamp(8px, .9vw, 14px); }
+
+        /* A wider dialog than the suspend confirmation: this one holds a form,
+           not a sentence. Scrolls internally rather than growing past the viewport
+           on a short screen. */
+        .ad-dialog--form { width: min(480px, 100%); max-height: min(86vh, 720px); overflow-y: auto; }
+
+        .ad-form { display: flex; flex-direction: column; gap: clamp(8px, 1.15vh, 13px); }
+        .ad-field { display: flex; flex-direction: column; gap: 4px; }
+        .ad-label { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 700; color: #3A3A3A; }
+        .ad-input, .ad-select {
+          font-family: inherit; font-size: clamp(11px, 1.55vh, 13.5px);
+          padding: clamp(7px, 1.1vh, 10px) 11px;
+          border: 1.5px solid var(--line); border-radius: 7px; background: #FFF; color: var(--ink);
+          width: 100%;
+        }
+        .ad-input:focus, .ad-select:focus { outline: none; border-color: var(--navy); }
+        .ad-input--bad, .ad-select--bad { border-color: var(--red); }
+        .ad-hint { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--ink-muted); }
+        .ad-err { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--red); font-weight: 600; }
+        .ad-form-alert {
+          background: #FBE9EC; color: var(--red); font-weight: 600;
+          font-size: clamp(10px, 1.4vh, 12.5px); line-height: 1.45;
+          padding: clamp(7px, 1.1vh, 10px) 11px; border-radius: 7px;
+        }
+        .ad-dialog-confirm:disabled, .ad-dialog-cancel:disabled { opacity: .55; cursor: not-allowed; }
+        .ad-dialog-confirm--go { background: var(--navy); }
+        .ad-dialog-confirm--go:hover { background: var(--navy-soft); }
+
+        /* The password, shown once. Deliberately the most prominent thing in the
+           dialog — monospace so an l and a 1 can be told apart when it is read out
+           (the generator avoids those characters anyway, belt and braces). */
+        .ad-cred {
+          background: #F6F7F8; border: 1.5px dashed #C9CDD3; border-radius: 8px;
+          padding: clamp(10px, 1.5vh, 15px) clamp(11px, 1.1vw, 16px);
+          display: flex; flex-direction: column; gap: 8px;
+        }
+        .ad-cred-label { font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 700; letter-spacing: .06em; color: var(--ink-muted); text-transform: uppercase; }
+        .ad-cred-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+        .ad-cred-value {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: clamp(14px, 2.2vh, 20px); font-weight: 700; letter-spacing: .04em;
+          color: var(--ink); word-break: break-all; flex: 1 1 auto; min-width: 0;
+        }
+        .ad-copy {
+          flex: 0 0 auto;
+          background: var(--navy); color: #FFF; border: none; border-radius: 6px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(9.5px, 1.35vh, 12px);
+          padding: clamp(6px, .95vh, 9px) clamp(10px, 1vw, 14px);
+        }
+        .ad-copy:hover { background: var(--navy-soft); }
+        .ad-copy--done { background: var(--green); }
+        /* Amber, not red: nothing has gone wrong — this is a deadline, not an error. */
+        .ad-warn {
+          background: #FBF1E3; color: #8A5A10; border-radius: 7px;
+          font-size: clamp(10px, 1.4vh, 12.5px); font-weight: 600; line-height: 1.45;
+          padding: clamp(8px, 1.15vh, 11px) 11px;
+        }
+        .ad-summary { font-size: clamp(11px, 1.55vh, 13.5px); line-height: 1.6; color: #3A3A3A; }
+        .ad-summary b { color: var(--ink); }
+
         @media (prefers-reduced-motion: reduce) { .ad-root * { transition: none !important; } }
       `}</style>
 
@@ -535,7 +659,14 @@ export default function AdminConsole({ user, onSignOut }) {
             <div className="ad-panel ad-table-panel">
               <div className="ad-panel-head">
                 <div className="ad-panel-title">User Accounts</div>
-                <div className="ad-panel-link">{users.length} total</div>
+                <div className="ad-panel-head-right">
+                  <div className="ad-panel-link">{users.length} total</div>
+                  {/* The only way to create a staff or administrator account
+                      without writing SQL — see Business Rule 14. */}
+                  <button type="button" className="ad-new" onClick={() => setCreatingAccount(true)}>
+                    <PlusIcon /> Create Account
+                  </button>
+                </div>
               </div>
               <div className="ad-table-scroll">
                 <table className="ad-table">
@@ -620,6 +751,311 @@ export default function AdminConsole({ user, onSignOut }) {
           onConfirm={handleConfirmSuspend}
         />
       )}
+
+      {creatingAccount && (
+        <CreateAccountDialog
+          banks={banks}
+          hospitals={hospitals}
+          onCancel={() => setCreatingAccount(false)}
+          onCreated={handleAccountCreated}
+        />
+      )}
+
+      {newCredentials && (
+        <NewAccountCredentials
+          result={newCredentials}
+          onDone={() => setNewCredentials(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Create Account form.
+ *
+ * Role comes first because everything below it depends on that answer: a hospital
+ * staff account needs a hospital, a blood bank staff account needs a bank, and an
+ * administrator needs neither. The matching picker appears only once the role that
+ * requires it is chosen, so the form never shows a field that would be refused if
+ * it were filled in (Business Rule 14 rejects, rather than ignores, a facility sent
+ * for an administrator).
+ *
+ * Donor is not an option, and this is not merely a display decision: donors create
+ * their own accounts through public registration, which also writes the Donor
+ * profile row — blood group, date of birth, address — that this form has no fields
+ * for. The server refuses the role too; the form simply never offers something that
+ * could not work.
+ *
+ * No password field either. The server generates one and returns it once — see
+ * NewAccountCredentials, which is what replaces this dialog on success.
+ */
+function CreateAccountDialog({ banks, hospitals, onCancel, onCreated }) {
+  const [form, setForm] = useState({
+    role: "HOSPITAL_STAFF", fullName: "", phone: "", email: "", bloodBankId: "", hospitalId: "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const cancelRef = useRef(null);
+  const roleRef = useRef(null);
+
+  /** Escape closes the form, and focus starts on the role selector — the field
+   *  every other field's meaning depends on. Same handling as the suspend
+   *  confirmation, so both dialogs behave identically at the keyboard. */
+  useEffect(() => {
+    roleRef.current?.focus();
+    const onKeyDown = (event) => { if (event.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  /** Changing role clears the facility that no longer applies, so a bank chosen
+   *  before switching to Administrator cannot be submitted invisibly. */
+  function changeRole(role) {
+    setForm((current) => ({ ...current, role, bloodBankId: "", hospitalId: "" }));
+    setFieldErrors({});
+  }
+
+  const needsHospital = form.role === "HOSPITAL_STAFF";
+  const needsBank = form.role === "BLOOD_BANK_STAFF";
+
+  function inputClass(base, field) {
+    return `${base}${fieldErrors[field] ? ` ${base}--bad` : ""}`;
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (submitting) return;
+
+    setSubmitting(true);
+    setError(null);
+    setFieldErrors({});
+
+    try {
+      const created = await createStaffAccount({
+        fullName: form.fullName.trim(),
+        // Sent as typed: the server normalises it (Business Rule 13), and doing
+        // it here as well would be a second copy of that rule free to drift.
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        role: form.role,
+        // Only ever the one the chosen role calls for; the other stays null.
+        bloodBankId: needsBank ? form.bloodBankId || null : null,
+        hospitalId: needsHospital ? form.hospitalId || null : null,
+      });
+      onCreated(created);
+    } catch (err) {
+      // Covers a duplicate phone or email (409), a bad phone number or a missing
+      // facility (400, keyed to the field). The backend's messages are written
+      // for display, so they are shown verbatim.
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="ad-scrim"
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onCancel(); }}
+    >
+      <form
+        className="ad-dialog ad-dialog--form"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ad-create-title"
+        onSubmit={handleSubmit}
+      >
+        <div className="ad-dialog-title" id="ad-create-title">Create staff account</div>
+        <div className="ad-dialog-body">
+          The new account is ready to use immediately. A password is generated for it and
+          shown to you once, on the next screen.
+        </div>
+
+        {error && <div className="ad-form-alert" role="alert">{error}</div>}
+
+        <div className="ad-form">
+          <div className="ad-field">
+            <label className="ad-label" htmlFor="ad-role">Role</label>
+            <select
+              id="ad-role" ref={roleRef} className={inputClass("ad-select", "role")}
+              value={form.role} onChange={(e) => changeRole(e.target.value)}
+            >
+              {CREATABLE_ROLES.map((role) => (
+                <option key={role} value={role}>{ROLE_LABEL[role]}</option>
+              ))}
+            </select>
+            {fieldErrors.role && <span className="ad-err">{fieldErrors.role}</span>}
+            <span className="ad-hint">Donors sign themselves up and are not created here.</span>
+          </div>
+
+          {needsHospital && (
+            <div className="ad-field">
+              <label className="ad-label" htmlFor="ad-hospital">Hospital</label>
+              <select
+                id="ad-hospital" className={inputClass("ad-select", "hospitalId")}
+                value={form.hospitalId} onChange={(e) => update("hospitalId", e.target.value)}
+              >
+                <option value="">Select a hospital…</option>
+                {hospitals.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
+              {fieldErrors.hospitalId && <span className="ad-err">{fieldErrors.hospitalId}</span>}
+            </div>
+          )}
+
+          {needsBank && (
+            <div className="ad-field">
+              <label className="ad-label" htmlFor="ad-bank">Blood bank</label>
+              <select
+                id="ad-bank" className={inputClass("ad-select", "bloodBankId")}
+                value={form.bloodBankId} onChange={(e) => update("bloodBankId", e.target.value)}
+              >
+                <option value="">Select a blood bank…</option>
+                {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              {fieldErrors.bloodBankId && <span className="ad-err">{fieldErrors.bloodBankId}</span>}
+            </div>
+          )}
+
+          <div className="ad-field">
+            <label className="ad-label" htmlFor="ad-fullname">Full name</label>
+            <input
+              id="ad-fullname" className={inputClass("ad-input", "fullName")} type="text"
+              placeholder="e.g. Fatmata Conteh" autoComplete="off"
+              value={form.fullName} onChange={(e) => update("fullName", e.target.value)}
+            />
+            {fieldErrors.fullName && <span className="ad-err">{fieldErrors.fullName}</span>}
+          </div>
+
+          <div className="ad-field">
+            <label className="ad-label" htmlFor="ad-phone">Phone number</label>
+            <input
+              id="ad-phone" className={inputClass("ad-input", "phone")} type="tel"
+              placeholder="076 900 005 or +232 76 900 005" autoComplete="off"
+              value={form.phone} onChange={(e) => update("phone", e.target.value)}
+            />
+            {fieldErrors.phone && <span className="ad-err">{fieldErrors.phone}</span>}
+            <span className="ad-hint">This is what they sign in with.</span>
+          </div>
+
+          <div className="ad-field">
+            <label className="ad-label" htmlFor="ad-email">Email address</label>
+            <input
+              id="ad-email" className={inputClass("ad-input", "email")} type="email"
+              placeholder="name@example.com" autoComplete="off"
+              value={form.email} onChange={(e) => update("email", e.target.value)}
+            />
+            {fieldErrors.email && <span className="ad-err">{fieldErrors.email}</span>}
+          </div>
+        </div>
+
+        <div className="ad-dialog-actions">
+          <button
+            type="button" className="ad-dialog-cancel" ref={cancelRef}
+            onClick={onCancel} disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button type="submit" className="ad-dialog-confirm ad-dialog-confirm--go" disabled={submitting}>
+            {submitting ? "Creating…" : "Create account"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * The one-time credentials screen.
+ *
+ * This exists because of a fact about the system rather than a design preference:
+ * only the BCrypt hash of the password is stored, so there is no endpoint that
+ * could show it again — not to this administrator, not to anyone. If it is lost,
+ * the account needs a new password, not a lookup. The warning below says so
+ * plainly for that reason, and this dialog deliberately has no scrim-click or
+ * Escape dismissal: closing it is a decision, not something to do by accident.
+ *
+ * The administrator relays the password to the new staff member directly. BloodLink
+ * sends no email or SMS, so there is no other channel it could travel down.
+ */
+function NewAccountCredentials({ result, onDone }) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const doneRef = useRef(null);
+
+  useEffect(() => { doneRef.current?.focus(); }, []);
+
+  async function copyPassword() {
+    try {
+      await navigator.clipboard.writeText(result.temporaryPassword);
+      setCopied(true);
+      setCopyFailed(false);
+      // Reverts to "Copy" so the button can be used again — the password is still
+      // on screen, and a confirmation that never resets reads as stuck.
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Clipboard access can be refused outright (an insecure origin, a browser
+      // permission). Saying so is better than a button that silently does
+      // nothing, since the password is still readable right above it.
+      setCopyFailed(true);
+    }
+  }
+
+  const account = result.account;
+
+  return (
+    <div className="ad-scrim">
+      <div
+        className="ad-dialog ad-dialog--form"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ad-cred-title"
+      >
+        <div className="ad-dialog-title" id="ad-cred-title">Account created</div>
+
+        <div className="ad-summary">
+          <b>{account.fullName}</b> — {ROLE_LABEL[account.role] ?? account.role}
+          {(account.hospitalName || account.bloodBankName) && (
+            <> at <b>{account.hospitalName ?? account.bloodBankName}</b></>
+          )}
+          <br />
+          Signs in with <b>{account.phone}</b>
+        </div>
+
+        <div className="ad-cred">
+          <div className="ad-cred-label">Temporary password</div>
+          <div className="ad-cred-row">
+            <span className="ad-cred-value">{result.temporaryPassword}</span>
+            <button
+              type="button"
+              className={`ad-copy${copied ? " ad-copy--done" : ""}`}
+              onClick={copyPassword}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          {copyFailed && (
+            <span className="ad-err">Could not copy automatically — select the password above and copy it.</span>
+          )}
+        </div>
+
+        <div className="ad-warn">
+          This password will not be shown again. Write it down or copy it now, and give it to
+          {" "}{account.fullName} directly — they should change it after signing in. If it is lost,
+          the account has to be created again.
+        </div>
+
+        <div className="ad-dialog-actions">
+          <button type="button" className="ad-dialog-confirm ad-dialog-confirm--go" ref={doneRef} onClick={onDone}>
+            I have saved the password
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -802,6 +1238,9 @@ function LogIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M14 2H6
 function GearIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><circle cx="12" cy="12" r="3.4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>); }
 function LogoutIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>); }
 function CalendarIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>); }
+/* Drawn white, not currentColor: it only ever sits inside the filled navy
+   "Create Account" button, where the surrounding text is white too. */
+function PlusIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><path d="M12 5v14M5 12h14"/></svg>); }
 function BellIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>); }
 function UsersFillIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><circle cx="9" cy="8" r="3.4"/><circle cx="17" cy="9" r="2.7"/><path d="M2 20c0-3.6 3.1-5.8 7-5.8s7 2.2 7 5.8z"/><path d="M16.5 14.4c3 .3 5.5 2.3 5.5 5.6h-5.2c0-2-.4-3.9-.3-5.6z"/></svg>); }
 function DropletIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M12 2S5 10 5 14.5a7 7 0 0 0 14 0C19 10 12 2 12 2z"/></svg>); }
