@@ -158,6 +158,28 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A phone number that is not in, and cannot be converted to, the format this
+     * system stores — raised by {@code PhoneNumber.normalize} from registration,
+     * login and the donor lookup alike.
+     *
+     * Given the same field-level shape as the two handlers above, keyed to "phone",
+     * so the Register, Login and Record Donation forms highlight that input and show
+     * the message beneath it exactly as they already do for a bean-validation
+     * failure. The check runs in the service rather than as a {@code @Pattern} on the
+     * DTO precisely because the same rule has to convert the value, not just judge
+     * it, and one function has to do both or the two can disagree.
+     */
+    @ExceptionHandler(InvalidPhoneNumberException.class)
+    public ResponseEntity<ApiError> handleInvalidPhoneNumber(InvalidPhoneNumberException ex) {
+        return ResponseEntity.badRequest().body(ApiError.of(
+            HttpStatus.BAD_REQUEST.value(),
+            "Bad Request",
+            ex.getMessage(),
+            Map.of("phone", ex.getMessage())
+        ));
+    }
+
+    /**
      * A {@code @RequestParam} the client left out of the query string entirely —
      * not present with an empty value (which {@link #handleParameterValidation}
      * would catch via {@code @NotBlank}), but absent altogether, e.g.

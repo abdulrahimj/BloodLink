@@ -2,6 +2,9 @@ package com.bloodlink.donor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,6 +25,7 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.EligibilityStatus;
 import com.bloodlink.donor.dto.DonorLookupResponse;
 import com.bloodlink.repository.DonorRepository;
+import com.bloodlink.web.error.InvalidPhoneNumberException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -33,7 +37,9 @@ import com.bloodlink.web.error.NotFoundException;
 @ExtendWith(MockitoExtension.class)
 class DonorLookupServiceTest {
 
-    private static final String PHONE = "+232 76 000 001";
+    /** The stored form — what every account's phone looks like in the database once
+     *  PhoneNumber.normalize has run over it (and once V11 converted the older rows). */
+    private static final String PHONE = "+23276000001";
 
     @Mock private DonorRepository donorRepository;
 
@@ -100,13 +106,30 @@ class DonorLookupServiceTest {
     }
 
     @Test
-    void surroundingWhitespaceIsTrimmedBeforeMatching() {
+    void theNumberIsNormalisedSoAnyWayOfTypingItFindsTheSameDonor() {
         when(donorRepository.findByUserPhoneWithUser(PHONE))
             .thenReturn(Optional.of(donor(BloodType.O_POSITIVE, null)));
 
-        service.lookupByPhone("  " + PHONE + "  ");
+        // The staff member has a donor standing in front of them reading out a
+        // number; they should not also have to know which of the accepted formats
+        // that person happened to register in. All three of these are one number.
+        service.lookupByPhone("  +232 76 000 001  ");
+        service.lookupByPhone("076000001");
+        service.lookupByPhone("076 000 001");
 
-        verify(donorRepository).findByUserPhoneWithUser(PHONE);
+        verify(donorRepository, times(3)).findByUserPhoneWithUser(PHONE);
+    }
+
+    @Test
+    void aNumberThatIsNotAPhoneNumberIsRefusedRatherThanReportedAsNoSuchDonor() {
+        // "That is not a phone number" and "no donor has that number" are different
+        // problems: the first is a typo to correct here, the second sends the staff
+        // member off to register the donor. Answering 404 to the first would start
+        // that second errand for no reason.
+        assertThatThrownBy(() -> service.lookupByPhone("07600000"))
+            .isInstanceOf(InvalidPhoneNumberException.class);
+
+        verify(donorRepository, never()).findByUserPhoneWithUser(anyString());
     }
 
     @Test

@@ -37,6 +37,7 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.security.JwtService;
 import com.bloodlink.web.error.AccountSuspendedException;
 import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.InvalidPhoneNumberException;
 
 /**
  * Registration rules that must hold regardless of the database: the role is never
@@ -46,6 +47,14 @@ import com.bloodlink.web.error.ConflictException;
  * Also covers the one rule login must add on top of a correct password: a
  * suspended account is refused even once the password has checked out, with a
  * message that — unlike a failed login — is allowed to say so plainly.
+ *
+ * And it covers the rule that binds the two halves of this class together: phone is
+ * the login credential, matched exactly, so registration and login must normalise it
+ * identically. {@link #aDonorWhoRegisteredLocallyCanSignInWithTheInternationalFormat}
+ * is the one that would fail if those two ever drifted apart — the failure being a
+ * real donor permanently locked out of an account they successfully created. The
+ * format rule itself is tested on its own in {@code PhoneNumberTest}; what is tested
+ * here is that both entry points actually apply it.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -73,9 +82,16 @@ class AuthServiceTest {
     }
 
     private static RegisterRequest request(String bloodTypeLabel) {
+        return request(bloodTypeLabel, "+232 76 000 001");
+    }
+
+    /** The same registration, with the phone number written however the test needs
+     *  it — the point of several tests below is that the way it is typed does not
+     *  change what gets stored. */
+    private static RegisterRequest request(String bloodTypeLabel, String phone) {
         return new RegisterRequest(
             "Aminata Kamara",
-            "+232 76 000 001",
+            phone,
             "Aminata@Example.com",
             LocalDate.of(2000, 1, 1),
             Gender.FEMALE,
@@ -148,6 +164,57 @@ class AuthServiceTest {
     }
 
     @Test
+    void phoneIsNormalisedSoTheFormatItWasTypedInCannotLockTheDonorOut() {
+        // Typed the local way; stored the one way. Phone is the login credential and
+        // is matched exactly, so the format written here is the format that has to be
+        // reproduced at every future sign-in — which is why it is not left as typed.
+        newService().register(request("O+", "076 900 005"));
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+
+        assertThat(captor.getValue().getPhone()).isEqualTo("+23276900005");
+    }
+
+    @Test
+    void anInternationalPhoneNumberIsStoredInTheSameFormAsALocalOne() {
+        newService().register(request("O+", "+232 76 900 005"));
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+
+        assertThat(captor.getValue().getPhone()).isEqualTo("+23276900005");
+    }
+
+    @Test
+    void theDuplicateCheckRunsAgainstTheNormalisedNumberNotTheTypedOne() {
+        AuthService service = newService();
+        // Already registered, in the stored form. Someone signing up with the same
+        // number typed the local way must still be caught as a duplicate — checking
+        // the raw string would let one person hold two accounts on one number.
+        when(userRepository.existsByPhone("+23276900005")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.register(request("O+", "076900005")))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("phone number");
+
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void aPhoneNumberThatIsNotAValidNumberIsRefusedBeforeAnythingIsWritten() {
+        AuthService service = newService();
+
+        // Wrong length, though every character is a digit — the case that would
+        // otherwise create an account no one could ever sign in to.
+        assertThatThrownBy(() -> service.register(request("O+", "07690000")))
+            .isInstanceOf(InvalidPhoneNumberException.class);
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(donorRepository, never()).save(any(Donor.class));
+    }
+
+    @Test
     void duplicatePhoneIsRefusedAndNothingIsWritten() {
         AuthService service = newService();
         when(userRepository.existsByPhone(anyString())).thenReturn(true);
@@ -213,6 +280,61 @@ class AuthServiceTest {
 
         assertThat(response.token()).isEqualTo("signed-token");
         assertThat(response.user().id()).isEqualTo(USER_ID);
+    }
+
+    @Test
+    void loginNormalisesThePhoneBeforeItIsComparedAgainstStoredAccounts() {
+        AuthService service = newService();
+        stubSuccessfulAuthentication(authenticatedUser(AccountStatus.ACTIVE));
+
+        service.login(new LoginRequest("076 900 005", "correct-horse-battery"));
+
+        // What reaches Spring Security — and therefore the users.phone lookup behind
+        // it — is the stored form, not the spaced local form that was typed.
+        ArgumentCaptor<UsernamePasswordAuthenticationToken> captor =
+            ArgumentCaptor.forClass(UsernamePasswordAuthenticationToken.class);
+        verify(authenticationManager).authenticate(captor.capture());
+
+        assertThat(captor.getValue().getPrincipal()).isEqualTo("+23276900005");
+    }
+
+    @Test
+    void aDonorWhoRegisteredLocallyCanSignInWithTheInternationalFormat() {
+        AuthService service = newService();
+
+        // 1. Register the way a donor in Makeni types their own number.
+        service.register(request("O+", "076900005"));
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(saved.capture());
+        String storedPhone = saved.getValue().getPhone();
+
+        // 2. Come back later and sign in the way the form's placeholder shows it,
+        //    spaces and country code and all — a different string entirely.
+        stubSuccessfulAuthentication(authenticatedUser(AccountStatus.ACTIVE));
+        service.login(new LoginRequest("+232 76 900 005", "correct-horse-battery"));
+
+        // 3. The number looked up is character-for-character the number stored at
+        //    registration. This is the whole rule in one assertion: if these two ever
+        //    disagree, a real donor is locked out of an account they created.
+        ArgumentCaptor<UsernamePasswordAuthenticationToken> attempted =
+            ArgumentCaptor.forClass(UsernamePasswordAuthenticationToken.class);
+        verify(authenticationManager).authenticate(attempted.capture());
+
+        assertThat(attempted.getValue().getPrincipal()).isEqualTo(storedPhone);
+    }
+
+    @Test
+    void aLoginPhoneThatIsNotAValidNumberIsRefusedWithoutTouchingTheAuthenticationManager() {
+        AuthService service = newService();
+
+        assertThatThrownBy(() -> service.login(new LoginRequest("07690000a", "correct-horse-battery")))
+            .isInstanceOf(InvalidPhoneNumberException.class);
+
+        // A 400 about the shape of the input, raised before any account is looked up,
+        // so it reveals nothing about which numbers are registered — and tells the
+        // person about the typo rather than blaming a password that was fine.
+        verify(authenticationManager, never()).authenticate(any());
     }
 
     @Test

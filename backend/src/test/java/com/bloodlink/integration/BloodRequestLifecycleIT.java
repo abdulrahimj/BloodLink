@@ -27,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.auth.dto.RegisterRequest;
+import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.Notification;
@@ -77,6 +78,12 @@ import tools.jackson.databind.ObjectMapper;
  * The first flow, in order:
  *   1. A donor registers over the real HTTP endpoint, and their own token is
  *      proven to work against their own profile.
+ *   1b. That same donor signs in again with their phone number typed the other
+ *      accepted way — registered as "076123456", signing in as "+232 76 123 456".
+ *      Phone is the login credential and is matched exactly, so this passes only
+ *      because registration and login share one normalisation rule; against a real
+ *      database rather than a mock, because what is being proven is that the value
+ *      stored is the value later looked up.
  *   2. A hospital-staff and a blood-bank-staff account are seeded directly via
  *      the repositories, because — deliberately, per CLAUDE.md — there is no
  *      self-registration path for either role; an administrator would create
@@ -126,9 +133,14 @@ class BloodRequestLifecycleIT {
     @Test
     void donorRegistrationHospitalRequestBankFulfilmentAndNotificationAllWorkTogether() throws Exception {
         // ---------- 1. A donor registers, for real, over HTTP ----------
+        // Typed the local way, as someone in Makeni writes their own number. Step 1b
+        // below comes back and signs in with the international spelling of the same
+        // number, which is a different string entirely.
+        String localPhone = uniqueLocalPhone();
+
         RegisterRequest registration = new RegisterRequest(
             "Aminata Sesay",
-            "+232 76 900 " + uniqueSuffix(),
+            localPhone,
             "aminata.it." + uniqueSuffix() + "@example.com",
             LocalDate.of(1998, 3, 12),
             Gender.FEMALE,
@@ -152,18 +164,39 @@ class BloodRequestLifecycleIT {
             .andExpect(jsonPath("$.fullName").value("Aminata Sesay"))
             .andExpect(jsonPath("$.eligibilityStatus").value("ELIGIBLE"));
 
+        // ---------- 1b. The same donor signs in with the other format ----------
+        // The number was registered as "076900005" and is typed here as
+        // "+232 76 900 005". Phone is the login credential and is matched exactly,
+        // so this only works because registration and login share one normalisation
+        // rule — and if it ever stops working, a real donor is locked out of an
+        // account they created. Proven against the real database, not a mock.
+        String internationalPhone = internationalSpellingOf(localPhone);
+        assertThat(internationalPhone).isNotEqualTo(localPhone);
+
+        MvcResult crossFormatLogin = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new LoginRequest(internationalPhone, PASSWORD))))
+            .andExpect(status().isOk())
+            .andReturn();
+
+        // Same account, not merely a successful login: the stored number comes back
+        // in the one format, whichever of the two was typed to reach it.
+        AuthResponse reAuth = readBody(crossFormatLogin, AuthResponse.class);
+        assertThat(reAuth.user().id()).isEqualTo(donorAuth.user().id());
+        assertThat(reAuth.user().phone()).isEqualTo(PhoneNumber.normalize(localPhone));
+
         // ---------- 2. Seed the two staff accounts no self-registration path can create ----------
         Hospital hospital = hospitalRepository.findAllByOrderByNameAsc().get(0);
         BloodBank bank = bloodBankRepository.findAllByOrderByNameAsc().get(0);
 
         User hospitalStaff = staffAccount(
-            "Hospital Desk Clerk", "+232 76 900 " + uniqueSuffix(), Role.HOSPITAL_STAFF
+            "Hospital Desk Clerk", uniqueLocalPhone(), Role.HOSPITAL_STAFF
         );
         hospitalStaff.setHospital(hospital);
         hospitalStaff = userRepository.save(hospitalStaff);
 
         User bankStaff = staffAccount(
-            "Lab Technician", "+232 76 900 " + uniqueSuffix(), Role.BLOOD_BANK_STAFF
+            "Lab Technician", uniqueLocalPhone(), Role.BLOOD_BANK_STAFF
         );
         bankStaff.setBloodBank(bank);
         userRepository.save(bankStaff);
@@ -269,7 +302,7 @@ class BloodRequestLifecycleIT {
         Hospital hospital = hospitalRepository.findAllByOrderByNameAsc().get(0);
 
         User hospitalStaff = staffAccount(
-            "Request Desk Clerk", "+232 76 900 " + uniqueSuffix(), Role.HOSPITAL_STAFF
+            "Request Desk Clerk", uniqueLocalPhone(), Role.HOSPITAL_STAFF
         );
         hospitalStaff.setHospital(hospital);
         hospitalStaff = userRepository.save(hospitalStaff);
@@ -280,7 +313,7 @@ class BloodRequestLifecycleIT {
         List<String> bankTokens = new ArrayList<>();
         for (BloodBank bank : banks) {
             User bankStaff = staffAccount(
-                "Lab Technician " + bank.getName(), "+232 76 900 " + uniqueSuffix(), Role.BLOOD_BANK_STAFF
+                "Lab Technician " + bank.getName(), uniqueLocalPhone(), Role.BLOOD_BANK_STAFF
             );
             bankStaff.setBloodBank(bank);
             userRepository.save(bankStaff);
@@ -385,12 +418,18 @@ class BloodRequestLifecycleIT {
 
     /** A staff account of the given role, active and ready to sign in — the shape
      *  an administrator would create by hand, since no self-registration path
-     *  exists for anything but DONOR. */
+     *  exists for anything but DONOR.
+     *
+     *  The phone is stored through PhoneNumber.normalize rather than as passed,
+     *  because that is the format login compares against — an account written
+     *  straight into the database in any other spelling cannot be signed into. It is
+     *  the one thing whoever creates these accounts by hand has to get right, so the
+     *  test creates them the same way. */
     private User staffAccount(String fullName, String phone, Role role) {
         User user = new User();
         user.setFullName(fullName);
-        user.setEmail(phone.replaceAll("[^0-9]", "") + "@example.com");
-        user.setPhone(phone);
+        user.setEmail("staff.it." + uniqueSuffix() + "@example.com");
+        user.setPhone(PhoneNumber.normalize(phone));
         user.setPasswordHash(passwordEncoder.encode(PASSWORD));
         user.setRole(role);
         return user;
@@ -440,5 +479,31 @@ class BloodRequestLifecycleIT {
      */
     private String uniqueSuffix() {
         return String.valueOf(System.nanoTime()).substring(8);
+    }
+
+    /**
+     * A distinct phone number for this run, written the local way: a leading 0 and
+     * exactly eight digits, e.g. {@code 076123456}. Six of those digits come from the
+     * clock, for the same reason {@link #uniqueSuffix()} exists — repeated runs must
+     * not collide on the unique phone constraint, which is checked before the
+     * transaction rolls back.
+     *
+     * Unlike the old free-form suffix, the length here is fixed at what a real
+     * Sierra Leone number has, because the system now refuses anything else.
+     */
+    private String uniqueLocalPhone() {
+        return "076" + String.format("%06d", System.nanoTime() % 1_000_000L);
+    }
+
+    /**
+     * The same number as {@link #uniqueLocalPhone()} produced, written the other
+     * accepted way: {@code 076123456} becomes {@code +232 76 123 456}. Used to sign
+     * in with a string the account was demonstrably not registered under.
+     */
+    private String internationalSpellingOf(String localPhone) {
+        String national = localPhone.substring(1);
+        return "+232 " + national.substring(0, 2)
+            + " " + national.substring(2, 5)
+            + " " + national.substring(5);
     }
 }

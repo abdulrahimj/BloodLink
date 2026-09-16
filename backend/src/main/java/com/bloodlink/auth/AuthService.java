@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.auth.dto.RegisterRequest;
+import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
@@ -64,10 +65,19 @@ public class AuthService {
      *
      * A token is issued on success so the new donor lands on their dashboard instead
      * of being bounced to the login screen to re-enter what they just typed.
+     *
+     * Phone and email are both normalised before anything is checked or written, for
+     * the same reason: each is a unique identifier compared by exact string equality,
+     * so the stored spelling decides whether a later match succeeds. Email is lower-cased;
+     * phone goes through {@link PhoneNumber#normalize} — the same call login makes, so
+     * the value written here is character-for-character the value login will compare
+     * against, whichever of the two accepted formats either was typed in.
      */
     @Transactional
     public AuthResponse register(RegisterRequest request) {
-        String phone = request.phone().trim();
+        // Also the format gate: an unusable number is a 400 naming the phone field,
+        // raised before any row is written, rather than an account nobody can sign into.
+        String phone = PhoneNumber.normalize(request.phone());
         String email = request.email().trim().toLowerCase();
 
         // Checked up front so a duplicate returns an actionable 409 naming the field,
@@ -107,6 +117,13 @@ public class AuthService {
     /**
      * Verifies phone + password and returns a signed token.
      *
+     * The phone is normalised first, through the very same {@link PhoneNumber#normalize}
+     * call registration made before storing it. That is what lets a donor who signed up
+     * typing {@code 076900005} sign in later typing {@code +232 76 900 005}: both become
+     * {@code +23276900005}, and the lookup that follows is comparing one spelling against
+     * one spelling. Normalising here rather than inside AuthenticatedUserService keeps it
+     * on the path the user's own input takes, and does it once.
+     *
      * The password comparison is delegated to Spring Security's AuthenticationManager
      * (DaoAuthenticationProvider + BCrypt) rather than done by hand, so it benefits
      * from the framework's constant-time comparison and its protection against timing
@@ -123,7 +140,7 @@ public class AuthService {
      */
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
-        String phone = request.phone().trim();
+        String phone = PhoneNumber.normalize(request.phone());
 
         try {
             var authentication = authenticationManager.authenticate(
