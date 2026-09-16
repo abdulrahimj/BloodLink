@@ -296,7 +296,11 @@ export default function AdminConsole({ user, onSignOut }) {
         .ad-i-amber { background: var(--amber); }
 
         /* ===== PANELS ===== */
-        .ad-charts { flex: 0 0 auto; display: grid; grid-template-columns: 1.45fr 1fr; gap: clamp(9px, 1.1vw, 18px); }
+        /* Grows to fill the Dashboard below the stat cards. It used to be sized to
+           its content, with the user table taking the rest of the page; the table
+           now lives on User Accounts, so the charts take that space instead of
+           leaving it empty. The grid's rows stretch, so both panels match height. */
+        .ad-charts { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1.45fr 1fr; gap: clamp(9px, 1.1vw, 18px); }
         .ad-panel {
           background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow);
           padding: clamp(11px, 1.7vh, 18px) clamp(12px, 1.2vw, 20px);
@@ -305,12 +309,23 @@ export default function AdminConsole({ user, onSignOut }) {
         .ad-panel-head { flex: 0 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: clamp(6px, 1vh, 12px); }
         .ad-panel-title { font-size: clamp(12px, 1.85vh, 16px); font-weight: 700; letter-spacing: -.01em; }
         .ad-panel-link { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; color: var(--red); cursor: pointer; }
-        .ad-chart-wrap { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; }
-        .ad-chart-wrap svg { width: 100%; height: auto; max-height: clamp(120px, 20vh, 178px); }
+        /* The chart fills whatever height the panel has, positioned absolutely so
+           the SVG takes its size from the box rather than the box from the SVG
+           (an SVG sized by height:auto grows with width only, and would never use
+           the extra height). min-height is the chart's old fixed size, so on a
+           short screen it is never smaller than it used to be — it only grows. */
+        .ad-chart-wrap { flex: 1 1 auto; position: relative; min-height: clamp(120px, 20vh, 178px); }
+        /* Scaled with the SVG default preserveAspectRatio ("meet"): the chart grows
+           until it touches the box's width or height, whichever comes first, and
+           is centred in the rest — never stretched out of proportion. */
+        .ad-chart-wrap > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 
         /* donut + legend */
-        .ad-donut-row { display: flex; align-items: center; gap: clamp(10px, 1.2vw, 20px); width: 100%; }
-        .ad-donut-row svg { flex: 0 0 auto; width: clamp(96px, 15vh, 140px); height: clamp(96px, 15vh, 140px); }
+        /* The donut and its legend fill the chart box together. The donut takes the
+           box's full height as a square, capped at 60% of the width so the legend
+           beside it always keeps room for its labels. */
+        .ad-donut-row { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: clamp(10px, 1.2vw, 20px); }
+        .ad-donut-row svg { flex: 0 1 auto; height: 100%; width: auto; aspect-ratio: 1 / 1; max-width: 60%; }
         .ad-legend { display: flex; flex-direction: column; gap: clamp(4px, .85vh, 9px); min-width: 0; }
         .ad-legend div { display: flex; align-items: center; gap: 7px; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; }
         .ad-legend i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
