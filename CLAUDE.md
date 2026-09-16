@@ -73,7 +73,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | email | varchar |
 | password_hash | varchar |
 | role | enum: DONOR, HOSPITAL_STAFF, BLOOD_BANK_STAFF, ADMIN |
-| phone | varchar |
+| phone | varchar — unique (V2) and the login credential; stored in exactly one normalised format, `+232` + 8 digits. See Business Rule 13. |
 | blood_bank_id | UUID, FK -> BloodBank, nullable — set only for BLOOD_BANK_STAFF |
 | hospital_id | UUID, FK -> Hospital, nullable — set only for HOSPITAL_STAFF |
 | created_at | timestamp |
@@ -292,6 +292,48 @@ BloodBank 1–N AppealCooldown
       gate is untouched and remains the only thing deciding that. The two answer different questions:
       the cooldown decides whether the bank may ask at all right now, Rule 2 decides which donors it
       is safe to ask. Schema added in `V10`.
+13. **Every phone number is stored in exactly one format: `+232` followed by 8 digits, no spaces,
+    no leading zero** (e.g. `+23276900005`). This is a storage rule, not a display preference:
+    `User.phone` is the login credential (`uq_users_phone`, V2) and is matched by exact string
+    equality, so the format a number is stored in decides whether a real person can sign in.
+    Before this rule, `076900005` and `+232 76 900 005` were two different accounts' worth of
+    string to the system, and a donor who registered one way could not log in the other way.
+    - **Accepted on input, from any entry point:** local format (a leading `0` then 8 digits,
+      `076900005`) or international format (`+232` then 8 digits, spaced or not,
+      `+232 76 900 005`). All spaces are stripped whichever was typed; a leading `0` is replaced
+      by `+232`; an existing `+232` is left as-is.
+    - **Rejected:** anything that, after removing spaces, is not digits with at most a single
+      leading `+` — a letter, a hyphen, brackets, a second `+`. Refused, never silently stripped:
+      a character that does not belong in a phone number is more likely a typo than a formatting
+      choice, and "fixing" it would store a number the person never gave. **Also rejected: a
+      number of the wrong length even though every character was individually valid**
+      (`07690000`, `+23276900005123`, `23276900005` with no `+`, a non-`+232` country code) —
+      the case a per-character check alone lets through, and the one that would otherwise create
+      an account that registered successfully and can never be signed into.
+    - **One function, `PhoneNumber.normalize` (`com.bloodlink.common`), is the only implementation,
+      and all three phone entry points call it: `AuthService.register` (before the duplicate check
+      and before storing), `AuthService.login` (before the value is compared), and
+      `DonorLookupService.lookupByPhone` (the number bank staff type before recording a donation).**
+      Not three checks that agree today — one function, for the same reason Business Rule 2's
+      callers all share `Donor.isEligibleToDonate()`. Two copies of this rule are two copies free
+      to drift, and the failure drift produces is an account a real donor created and can never
+      get back into. A donor who registers typing `076900005` must be able to log in typing
+      `+232 76 900 005`, and the blood bank must be able to find them typing either.
+    - **Refusal is a 400 keyed to the `phone` field**, not the vague 401 a failed login returns —
+      including when it is a login that raised it. It describes the shape of what was typed, not
+      whether any account exists, so it enumerates nothing; and answering "invalid phone number or
+      password" to someone who typed seven digits would hide a fixable typo behind a complaint
+      about a password that was never the problem.
+    - **`V11` converted every phone already stored to this format**, so accounts created before
+      the rule existed still work. It refuses to run if converting would make two accounts share
+      one number (a question only a person can answer), and leaves anything it cannot convert
+      untouched with a warning naming it rather than guessing at someone's number.
+    - **Applies to `User.phone` only.** `BloodBank.contact_phone` and `Hospital.contact_phone` are
+      display-only facility numbers — nothing compares them and nothing logs in with them — and
+      are deliberately left as entered.
+    - **Accounts written straight into the database must store the normalised form.** There is no
+      self-registration path for HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN (Business Rules 8, 9),
+      so those rows are inserted by hand; one stored in any other spelling cannot be signed into.
 
 ## Actors (roles) and what each can do
 
