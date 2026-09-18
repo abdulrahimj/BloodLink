@@ -16,6 +16,11 @@ import React from "react";
    navigation: the three Login/Register buttons became <a> tags pointing
    at the existing #login and #register hash routes App.jsx already
    listens for, in place of the mockup's inert onClick-less buttons.
+
+   The header's About and Contact are the two links that got no such
+   destination, because no such page exists. They are inert <span>s rather
+   than <a>s — see the comment above them in the header for why that is a
+   fix and not a cosmetic choice.
    ================================================================ */
 
 export default function BloodLinkLanding() {
@@ -60,7 +65,9 @@ export default function BloodLinkLanding() {
           padding: clamp(8px, 1.6vh, 15px) clamp(18px, 2.4vw, 34px);
         }
         .bl-nav { display: flex; align-items: center; gap: clamp(18px, 2.4vw, 34px); }
-        .bl-nav a {
+        /* Covers both a real <a> and the inert <span>s About/Contact are for now,
+           so the header keeps the mockup's look whichever one is rendered. */
+        .bl-nav a, .bl-nav span {
           color: #FFF;
           font-size: clamp(14px, 2.1vh, 19px);
           font-weight: 700;
@@ -68,6 +75,9 @@ export default function BloodLinkLanding() {
           letter-spacing: -0.01em;
         }
         .bl-nav a:hover { opacity: 0.82; }
+        /* No hover fade and the ordinary arrow cursor: the hover cue belongs to
+           things that do something when clicked, and these two do not yet. */
+        .bl-nav span { cursor: default; }
         .bl-nav a:focus-visible, .bl-btn:focus-visible, .bl-cta:focus-visible {
           outline: 2px solid #FFF; outline-offset: 3px;
         }
@@ -233,9 +243,19 @@ export default function BloodLinkLanding() {
       {/* ================= HEADER ================= */}
       <header className="bl-header">
         <Logo />
+        {/* About and Contact are deliberately plain <span>s, not links. As
+            <a href="#about"> / <a href="#contact"> they sent the browser to a hash
+            App.jsx's readRoute does not recognise, and its fallback for an
+            unrecognised hash is the Login screen — so clicking "About" signed-out
+            landed the visitor on a login form, with no way back but the browser's
+            Back button. There are no About or Contact pages to point at yet, so
+            they carry no href, no click handler and no focus stop: nothing
+            happens, and nothing promises that anything will. Give each an href
+            once there is a real page behind it — and add the hash to readRoute at
+            the same time, since that is the half whose absence caused this. */}
         <nav className="bl-nav">
-          <a href="#about">About</a>
-          <a href="#contact">Contact</a>
+          <span>About</span>
+          <span>Contact</span>
         </nav>
         <div className="bl-actions">
           <a href="#login" className="bl-btn bl-btn--ghost">
