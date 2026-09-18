@@ -3,6 +3,9 @@ package com.bloodlink.admin;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -23,6 +26,9 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
+import com.bloodlink.admin.dto.EditAccountPayload;
+import com.bloodlink.audit.AuditLogService;
+import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
@@ -63,6 +69,7 @@ class AdminUserServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private HospitalRepository hospitalRepository;
+    @Mock private AuditLogService auditLogService;
 
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -71,7 +78,12 @@ class AdminUserServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AdminUserService(userRepository, bloodBankRepository, hospitalRepository, passwordEncoder);
+        service = new AdminUserService(userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService);
+    }
+
+    /** Creates an account as the test administrator — the actor the audit log records. */
+    private CreatedAccountResponse create(CreateStaffAccountPayload payload) {
+        return service.createStaffAccount(payload, admin());
     }
 
     private static AuthenticatedUser admin() {
@@ -162,7 +174,7 @@ class AdminUserServiceTest {
         stubSaveAssigningId();
         stubHospitalExists();
 
-        CreatedAccountResponse created = service.createStaffAccount(
+        CreatedAccountResponse created = create(
             payload(Role.HOSPITAL_STAFF, null, HOSPITAL_ID)
         );
 
@@ -180,7 +192,7 @@ class AdminUserServiceTest {
         stubSaveAssigningId();
         stubBankExists();
 
-        CreatedAccountResponse created = service.createStaffAccount(
+        CreatedAccountResponse created = create(
             payload(Role.BLOOD_BANK_STAFF, BANK_ID, null)
         );
 
@@ -194,7 +206,7 @@ class AdminUserServiceTest {
     void anAdministratorAccountIsCreatedWithNoFacilityAtAll() {
         stubSaveAssigningId();
 
-        CreatedAccountResponse created = service.createStaffAccount(payload(Role.ADMIN, null, null));
+        CreatedAccountResponse created = create(payload(Role.ADMIN, null, null));
 
         // An administrator's authority is citywide, so having no facility is the
         // correct state here, not a missing value.
@@ -208,7 +220,7 @@ class AdminUserServiceTest {
         // Donors self-register (Business Rule 8), and that path also writes the
         // linked Donor row this endpoint has no fields for. A DONOR User without
         // one would break every donor screen, so it is refused, not half-created.
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.DONOR, null, null)))
+        assertThatThrownBy(() -> create(payload(Role.DONOR, null, null)))
             .isInstanceOf(InvalidFieldException.class)
             .hasMessageContaining("registration");
 
@@ -217,7 +229,7 @@ class AdminUserServiceTest {
 
     @Test
     void hospitalStaffWithoutAHospitalIsRefused() {
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.HOSPITAL_STAFF, null, null)))
+        assertThatThrownBy(() -> create(payload(Role.HOSPITAL_STAFF, null, null)))
             .isInstanceOf(InvalidFieldException.class)
             .extracting(ex -> ((InvalidFieldException) ex).getField())
             .isEqualTo("hospitalId");
@@ -227,7 +239,7 @@ class AdminUserServiceTest {
 
     @Test
     void bloodBankStaffWithoutABloodBankIsRefused() {
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.BLOOD_BANK_STAFF, null, null)))
+        assertThatThrownBy(() -> create(payload(Role.BLOOD_BANK_STAFF, null, null)))
             .isInstanceOf(InvalidFieldException.class)
             .extracting(ex -> ((InvalidFieldException) ex).getField())
             .isEqualTo("bloodBankId");
@@ -239,9 +251,9 @@ class AdminUserServiceTest {
     void anAdministratorCannotBeGivenAFacility() {
         // Refused rather than ignored: silently dropping the id would accept a
         // request whose author believed something untrue about what they created.
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.ADMIN, BANK_ID, null)))
+        assertThatThrownBy(() -> create(payload(Role.ADMIN, BANK_ID, null)))
             .isInstanceOf(InvalidFieldException.class);
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.ADMIN, null, HOSPITAL_ID)))
+        assertThatThrownBy(() -> create(payload(Role.ADMIN, null, HOSPITAL_ID)))
             .isInstanceOf(InvalidFieldException.class);
 
         verify(userRepository, never()).save(any(User.class));
@@ -249,12 +261,12 @@ class AdminUserServiceTest {
 
     @Test
     void aStaffAccountCannotCarryTheOtherRolesFacility() {
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.HOSPITAL_STAFF, BANK_ID, HOSPITAL_ID)))
+        assertThatThrownBy(() -> create(payload(Role.HOSPITAL_STAFF, BANK_ID, HOSPITAL_ID)))
             .isInstanceOf(InvalidFieldException.class)
             .extracting(ex -> ((InvalidFieldException) ex).getField())
             .isEqualTo("bloodBankId");
 
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.BLOOD_BANK_STAFF, BANK_ID, HOSPITAL_ID)))
+        assertThatThrownBy(() -> create(payload(Role.BLOOD_BANK_STAFF, BANK_ID, HOSPITAL_ID)))
             .isInstanceOf(InvalidFieldException.class)
             .extracting(ex -> ((InvalidFieldException) ex).getField())
             .isEqualTo("hospitalId");
@@ -266,7 +278,7 @@ class AdminUserServiceTest {
     void aFacilityIdThatMatchesNoRowIsA404() {
         when(hospitalRepository.findById(HOSPITAL_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.HOSPITAL_STAFF, null, HOSPITAL_ID)))
+        assertThatThrownBy(() -> create(payload(Role.HOSPITAL_STAFF, null, HOSPITAL_ID)))
             .isInstanceOf(NotFoundException.class);
 
         verify(userRepository, never()).save(any(User.class));
@@ -280,7 +292,7 @@ class AdminUserServiceTest {
         // hold two accounts on one number.
         when(userRepository.existsByPhone("+23276900005")).thenReturn(true);
 
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.ADMIN, null, null)))
+        assertThatThrownBy(() -> create(payload(Role.ADMIN, null, null)))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("phone number");
 
@@ -291,7 +303,7 @@ class AdminUserServiceTest {
     void aDuplicateEmailIsRefusedAndNothingIsWritten() {
         when(userRepository.existsByEmail("isatu@example.com")).thenReturn(true);
 
-        assertThatThrownBy(() -> service.createStaffAccount(payload(Role.ADMIN, null, null)))
+        assertThatThrownBy(() -> create(payload(Role.ADMIN, null, null)))
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("email address");
 
@@ -302,7 +314,7 @@ class AdminUserServiceTest {
     void thePhoneAndEmailAreStoredNormalised() {
         stubSaveAssigningId();
 
-        service.createStaffAccount(payload(Role.ADMIN, null, null));
+        create(payload(Role.ADMIN, null, null));
 
         User saved = savedUser();
         // The same rule registration applies, via the same shared function, so an
@@ -315,7 +327,7 @@ class AdminUserServiceTest {
     void theGeneratedPasswordActuallyVerifiesAgainstTheStoredHash() {
         stubSaveAssigningId();
 
-        CreatedAccountResponse created = service.createStaffAccount(payload(Role.ADMIN, null, null));
+        CreatedAccountResponse created = create(payload(Role.ADMIN, null, null));
         User saved = savedUser();
 
         // The assertion this whole class exists for. Not "a hash was stored" —
@@ -335,7 +347,7 @@ class AdminUserServiceTest {
     void aWrongPasswordDoesNotVerifyAgainstTheStoredHash() {
         stubSaveAssigningId();
 
-        CreatedAccountResponse created = service.createStaffAccount(payload(Role.ADMIN, null, null));
+        CreatedAccountResponse created = create(payload(Role.ADMIN, null, null));
         User saved = savedUser();
 
         // The control for the test above: proves that assertion is actually
@@ -347,8 +359,8 @@ class AdminUserServiceTest {
     void everyAccountGetsItsOwnPassword() {
         stubSaveAssigningId();
 
-        String first = service.createStaffAccount(payload(Role.ADMIN, null, null)).temporaryPassword();
-        String second = service.createStaffAccount(payload(Role.ADMIN, null, null)).temporaryPassword();
+        String first = create(payload(Role.ADMIN, null, null)).temporaryPassword();
+        String second = create(payload(Role.ADMIN, null, null)).temporaryPassword();
 
         // Generated per account, never a shared default — one leaked password must
         // not be every staff account's password.
@@ -359,7 +371,7 @@ class AdminUserServiceTest {
     void theResponseCarriesTheNewAccountSoTheConsoleNeedNotRefetchEveryUser() {
         stubSaveAssigningId();
 
-        CreatedAccountResponse created = service.createStaffAccount(payload(Role.ADMIN, null, null));
+        CreatedAccountResponse created = create(payload(Role.ADMIN, null, null));
 
         assertThat(created.account().id()).isNotNull();
         assertThat(created.account().fullName()).isEqualTo("Isatu Bangura");
@@ -439,5 +451,202 @@ class AdminUserServiceTest {
 
         assertThatThrownBy(() -> service.updateStatus(OTHER_USER_ID, AccountStatus.SUSPENDED, admin()))
             .isInstanceOf(NotFoundException.class);
+    }
+
+    // ---------- the audit trail for the three existing actions (Business Rule 17) ----------
+
+    @Test
+    void creatingAnAccountRecordsWhoCreatedItAndNeverThePassword() {
+        stubSaveAssigningId();
+        stubHospitalExists();
+
+        CreatedAccountResponse created = create(payload(Role.HOSPITAL_STAFF, null, HOSPITAL_ID));
+        User saved = savedUser();
+
+        // Actor is the calling administrator; target is the account just created.
+        verify(auditLogService).record(eq(ADMIN_ID), eq(AuditAction.ACCOUNT_CREATED), eq(saved), argThat(details ->
+            details.contains("Hospital Staff")
+                && details.contains("Isatu Bangura")
+                && details.contains("+23276900005")
+                && details.contains("Makeni Regional Hospital")
+                // The one-time password must never reach a table anyone can read.
+                && !details.contains(created.temporaryPassword())));
+    }
+
+    @Test
+    void aRefusedCreationRecordsNothing() {
+        when(userRepository.existsByPhone("+23276900005")).thenReturn(true);
+
+        assertThatThrownBy(() -> create(payload(Role.ADMIN, null, null))).isInstanceOf(ConflictException.class);
+
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void suspendingRecordsAnAccountSuspendedEntry() {
+        User target = donor();
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(target.getId(), AccountStatus.SUSPENDED, admin());
+
+        verify(auditLogService).record(ADMIN_ID, AuditAction.ACCOUNT_SUSPENDED, target, "Account suspended.");
+    }
+
+    @Test
+    void reactivatingRecordsAnAccountReactivatedEntry() {
+        User target = hospitalStaff(); // starts SUSPENDED
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(target.getId(), AccountStatus.ACTIVE, admin());
+
+        verify(auditLogService).record(ADMIN_ID, AuditAction.ACCOUNT_REACTIVATED, target, "Account reactivated.");
+    }
+
+    @Test
+    void settingAStatusAnAccountAlreadyHasRecordsNothing() {
+        // Still the harmless no-op it always was — and the log is of things that
+        // happened, so nothing is recorded for it.
+        User target = donor(); // already ACTIVE
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(target.getId(), AccountStatus.ACTIVE, admin());
+
+        verifyNoInteractions(auditLogService);
+    }
+
+    // ---------- editing another account (Business Rule 17) ----------
+
+    private static EditAccountPayload edit(String phone, UUID bloodBankId, UUID hospitalId) {
+        return new EditAccountPayload(phone, bloodBankId, hospitalId, null);
+    }
+
+    private User stubTarget(User target) {
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        return target;
+    }
+
+    @Test
+    void anAdministratorEditsAnotherAccountsPhone() {
+        User target = donor();
+        target.setPhone("+23276111111");
+        stubTarget(target);
+
+        AdminUserResponse updated = service.editAccount(target.getId(), edit("076 222 222", null, null), admin());
+
+        // Normalised by Business Rule 13's shared function, whichever way it was typed.
+        assertThat(updated.phone()).isEqualTo("+23276222222");
+        assertThat(target.getPhone()).isEqualTo("+23276222222");
+        verify(auditLogService).record(ADMIN_ID, AuditAction.ACCOUNT_EDITED, target,
+            "Phone changed from +23276111111 to +23276222222.");
+    }
+
+    @Test
+    void aPhoneBelongingToAnotherAccountIsRefusedAndNothingChanges() {
+        User target = donor();
+        target.setPhone("+23276111111");
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        // Stored internationally; typed locally — still the same number.
+        when(userRepository.existsByPhone("+23276222222")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.editAccount(target.getId(), edit("076222222", null, null), admin()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessage("An account already exists for this phone number.");
+
+        assertThat(target.getPhone()).isEqualTo("+23276111111");
+        verify(userRepository, never()).save(any(User.class));
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void keepingAnAccountsOwnPhoneIsNotAClashWithItself() {
+        User target = donor();
+        target.setPhone("+23276111111");
+        stubTarget(target);
+
+        service.editAccount(target.getId(), edit("+232 76 111 111", null, null), admin());
+
+        verify(userRepository, never()).existsByPhone(any());
+    }
+
+    @Test
+    void movingBloodBankStaffToAnotherBankIsRecordedWithBothBanks() {
+        User target = stubTarget(bankStaff()); // at Makeni Regional Blood Bank
+        target.setPhone("+23276111111");
+        BloodBank other = new BloodBank();
+        other.setId(BANK_ID);
+        other.setName("Holy Spirit Blood Bank");
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(other));
+
+        AdminUserResponse updated = service.editAccount(target.getId(), edit("+23276111111", BANK_ID, null), admin());
+
+        assertThat(updated.bloodBankName()).isEqualTo("Holy Spirit Blood Bank");
+        verify(auditLogService).record(ADMIN_ID, AuditAction.ACCOUNT_EDITED, target,
+            "Blood bank changed from Makeni Regional Blood Bank to Holy Spirit Blood Bank.");
+    }
+
+    @Test
+    void theFacilityRuleIsJudgedAgainstTheRoleTheAccountAlreadyHas() {
+        // Staff must keep a facility; a donor or administrator must not be given one —
+        // the same rule as account creation (Business Rule 14).
+        User hospitalTarget = hospitalStaff();
+        hospitalTarget.setPhone("+23276111111");
+        when(userRepository.findById(hospitalTarget.getId())).thenReturn(Optional.of(hospitalTarget));
+        assertThatThrownBy(() -> service.editAccount(hospitalTarget.getId(), edit("+23276111111", null, null), admin()))
+            .extracting(ex -> ((InvalidFieldException) ex).getField())
+            .isEqualTo("hospitalId");
+
+        User donorTarget = donor();
+        donorTarget.setPhone("+23276222222");
+        when(userRepository.findById(donorTarget.getId())).thenReturn(Optional.of(donorTarget));
+        assertThatThrownBy(() -> service.editAccount(donorTarget.getId(), edit("+23276222222", null, HOSPITAL_ID), admin()))
+            .extracting(ex -> ((InvalidFieldException) ex).getField())
+            .isEqualTo("hospitalId");
+
+        verify(userRepository, never()).save(any(User.class));
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void roleCannotBeChangedByAnEdit() {
+        User target = donor();
+
+        assertThatThrownBy(() -> service.editAccount(target.getId(),
+                new EditAccountPayload("+23276111111", null, null, java.util.Map.of("role", "ADMIN")), admin()))
+            .isInstanceOf(InvalidFieldException.class)
+            .hasMessageContaining("role cannot be changed");
+
+        // Refused on the shape of the request alone, before the account is even
+        // looked up — so nothing about it can have been touched.
+        verify(userRepository, never()).findById(any());
+        verify(userRepository, never()).save(any(User.class));
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void anAdministratorCannotEditTheirOwnPhoneOrFacilityHere() {
+        // Business Rule 16 keeps every account holder, administrators included, from
+        // changing their own phone; this endpoint must not be a way round that.
+        assertThatThrownBy(() -> service.editAccount(ADMIN_ID, edit("+23276999999", null, null), admin()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("another administrator");
+
+        verify(userRepository, never()).findById(any());
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void anEditThatChangesNothingRecordsNothing() {
+        User target = stubTarget(bankStaff());
+        target.setPhone("+23276111111");
+        UUID sameBank = target.getBloodBank().getId();
+        when(bloodBankRepository.findById(sameBank)).thenReturn(Optional.of(target.getBloodBank()));
+
+        service.editAccount(target.getId(), edit("+23276111111", sameBank, null), admin());
+
+        verifyNoInteractions(auditLogService);
     }
 }

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
+import com.bloodlink.admin.dto.EditAccountPayload;
 import com.bloodlink.admin.dto.UpdateUserStatusPayload;
 import com.bloodlink.security.AuthenticatedUser;
 
@@ -64,8 +65,30 @@ public class AdminUserController {
      * refused in the filter chain with a 403 (RestAccessDeniedHandler).
      */
     @PostMapping
-    public ResponseEntity<CreatedAccountResponse> create(@Valid @RequestBody CreateStaffAccountPayload payload) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(adminUserService.createStaffAccount(payload));
+    public ResponseEntity<CreatedAccountResponse> create(
+        @Valid @RequestBody CreateStaffAccountPayload payload,
+        @AuthenticationPrincipal AuthenticatedUser principal
+    ) {
+        // The principal is the administrator the audit log records as having
+        // created the account (Business Rule 17).
+        return ResponseEntity.status(HttpStatus.CREATED).body(adminUserService.createStaffAccount(payload, principal));
+    }
+
+    /**
+     * Changes another account's phone and facility — Business Rule 17.
+     *
+     * A separate sub-resource rather than more fields on PATCH /{userId}: that route
+     * sets status and nothing else, and the Suspend/Activate buttons rely on it
+     * staying exactly that. Role is not changeable here (see EditAccountPayload),
+     * and neither is the caller's own account (see AdminUserService.editAccount).
+     */
+    @PatchMapping("/{userId}/details")
+    public AdminUserResponse editDetails(
+        @PathVariable UUID userId,
+        @Valid @RequestBody EditAccountPayload payload,
+        @AuthenticationPrincipal AuthenticatedUser principal
+    ) {
+        return adminUserService.editAccount(userId, payload, principal);
     }
 
     /**

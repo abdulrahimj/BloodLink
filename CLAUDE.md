@@ -185,11 +185,27 @@ reach to clear it. See Business Rule 12.
 | is_read | boolean |
 | created_at | timestamp |
 
+### AuditLog
+| field | type |
+|---|---|
+| id | UUID, PK |
+| actor_user_id | UUID, FK -> User — the administrator who acted |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED |
+| target_user_id | UUID, FK -> User — the account acted upon |
+| details | text — what changed, in words, as of that moment; never a password |
+| created_at | timestamp |
+
+Added in V12 (table `audit_log`) for Business Rule 17. **Append-only**: no row is ever updated or
+deleted. Enforced at four levels — no endpoint but GET, `AuditLogRepository` extends Spring Data's bare
+`Repository` (not `JpaRepository`, which would bring `deleteAll`), the entity is Hibernate `@Immutable`
+with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the database itself. Both
+foreign keys are ON DELETE NO ACTION, so a user who appears in the log can never be deleted.
+
 ### Relationships
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
 BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
 BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
-BloodBank 1–N AppealCooldown
+BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target)
 
 ---
 
@@ -437,13 +453,44 @@ BloodBank 1–N AppealCooldown
     - **Known limits, not handled here:** tokens issued before a password change stay valid until they
       expire (JWTs are stateless — the 24h lifetime is the bound), and the current-password check is
       not rate-limited, the same as login.
+17. **An administrator may change another account's phone and facility, and every administrator action
+    on an account is recorded in a permanent, append-only audit log.**
+    - **Editing: `PATCH /api/admin/users/{id}/details`**, admin-only (SecurityConfig's `/api/admin/**`).
+      Phone goes through Business Rule 13's `PhoneNumber.normalize` and the same duplicate check as
+      registration (409, compared normalised; keeping the account's own number is not a clash). Facility
+      follows Business Rule 14's required/forbidden rule — one shared method,
+      `AdminUserService.assignFacility`, used by both creation and editing — judged against the role the
+      account **already has**. The request always carries the full desired state (phone, plus the
+      facility the role requires).
+    - **Not editable here:** role (deliberately out of scope — a DONOR has a linked Donor row a role
+      change would affect, which needs its own decision; a `role` in the request is refused with a 400
+      saying so), and anything else (name, email, status) via the same capture-and-refuse approach as
+      Business Rule 16. **Nor the caller's own account** (409): Business Rule 16 already keeps every
+      account holder, admins included, from changing their own phone, and this must not be a side door.
+    - **What is logged — the four actions, from day one:** ACCOUNT_CREATED (Business Rule 14's create),
+      ACCOUNT_EDITED, ACCOUNT_SUSPENDED and ACCOUNT_REACTIVATED (the existing status PATCH) — each with
+      the acting admin, the affected account, a human-readable `details` snapshot ("Phone changed from
+      +232… to +232…. Blood bank changed from X to Y.") and the time. Only real changes are logged: a
+      status set to what it already was, or an edit that changes nothing, records nothing. The generated
+      password (Business Rule 14) never appears in an entry. Reads are not logged.
+    - **Same transaction as the action.** `AuditLogService.record` is `Propagation.MANDATORY`: it refuses
+      to run without the caller's transaction, so an action and its entry commit or roll back together —
+      the log can never show a change that did not happen, or miss one that did.
+    - **Append-only, at four levels** — see the AuditLog schema section. Read with
+      `GET /api/admin/audit-log` (every entry, newest first); the Admin Console's Audit Log page shows it
+      with no row actions. Any other method on that path is a 405 and a single entry has no route (404).
+    - **Known limits:** the whole log is returned in one response (fine at a few entries a week; paging
+      would be the owner's call later). A database superuser could still drop the triggers deliberately —
+      nothing inside PostgreSQL can stop its own owner; the triggers stop every accidental or
+      application-level change. A moved staff member's server-side access follows the new facility on
+      their next request, but their browser shows the old facility until they sign in again.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's request status, view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, approve/reject/fulfil incoming requests, send donation appeals
-- **Administrator** — create staff and administrator accounts (Business Rule 14), manage all user accounts (activate/suspend), view aggregate reports (donation trends, request outcomes)
+- **Administrator** — create staff and administrator accounts (Business Rule 14), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -468,8 +515,9 @@ BloodBank 1–N AppealCooldown
     disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
-    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`), every one of which is `@Transactional` and
-    rolls back everything it writes, so re-running them never leaves residue to clean up.
+    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`),
+    every one of which is `@Transactional` and rolls back everything it writes, so re-running them never
+    leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,
     not the number of test classes, is what would break the "always safe to rerun" guarantee this

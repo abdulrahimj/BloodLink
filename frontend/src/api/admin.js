@@ -45,6 +45,32 @@ export function updateUserStatus(userId, status) {
   });
 }
 
+/**
+ * PATCH /api/admin/users/{id}/details — changes another account's phone and
+ * facility (Business Rule 17).
+ *
+ * Always the whole desired state: `phone`, plus `bloodBankId` for blood bank
+ * staff or `hospitalId` for hospital staff (null otherwise). Role cannot be
+ * changed here, and an administrator cannot use this on their own account —
+ * both are refused server-side. Resolves to the updated account, in the same
+ * shape the User Accounts table renders. Every real change is recorded in the
+ * audit log.
+ */
+export function editAccountDetails(userId, { phone, bloodBankId = null, hospitalId = null }) {
+  return apiRequest(`/api/admin/users/${userId}/details`, {
+    method: 'PATCH',
+    body: { phone, bloodBankId, hospitalId },
+  });
+}
+
+/**
+ * GET /api/admin/audit-log — every recorded administrator action, newest first.
+ * Read-only: the log has no endpoint that changes or removes an entry.
+ */
+export function getAuditLog() {
+  return apiRequest('/api/admin/audit-log');
+}
+
 /** GET /api/admin/reports/donations — six months of citywide donation counts,
  *  oldest first, for the trend chart. Every month appears even at zero. */
 export function getDonationTrends() {

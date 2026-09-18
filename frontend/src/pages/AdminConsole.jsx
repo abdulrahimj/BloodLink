@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  getAdminUsers, createStaffAccount, updateUserStatus, getDonationTrends, getRequestOutcomes,
+  getAdminUsers, createStaffAccount, updateUserStatus, editAccountDetails, getAuditLog,
+  getDonationTrends, getRequestOutcomes,
 } from "../api/admin.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
-import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 
 /* ================================================================
    BloodLink — Admin Console (System Administrator)
@@ -102,13 +103,24 @@ const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
  *  state rather than a URL hash, the same way BloodBankPortal switches Dashboard /
  *  Blood Inventory: App.jsx's hash routing chooses which portal a role sees, and
  *  nothing inside a portal has ever needed its own address. */
-const VIEW = { DASHBOARD: "dashboard", USERS: "users", SETTINGS: "settings" };
+const VIEW = { DASHBOARD: "dashboard", USERS: "users", AUDIT: "audit", SETTINGS: "settings" };
 
 /** The header's title and subtitle for each view. */
 const HEADINGS = {
   [VIEW.DASHBOARD]: { title: "System Administration", sub: "BloodLink · Makeni City deployment" },
-  [VIEW.USERS]: { title: "User Accounts", sub: "Create, suspend and reactivate accounts across all four roles" },
+  [VIEW.USERS]: { title: "User Accounts", sub: "Create, edit, suspend and reactivate accounts across all four roles" },
+  [VIEW.AUDIT]: { title: "Audit Log", sub: "Every administrator action, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
+};
+
+/** How each audit action reads, and the badge tone it wears: the two that remove
+ *  or restrict access in red and green (the same pair Suspend/Activate use), a
+ *  creation in navy, an edit in amber. */
+const AUDIT_ACTION = {
+  ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
+  ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
+  ACCOUNT_SUSPENDED: { label: "Suspended", tone: "ad-au-suspended" },
+  ACCOUNT_REACTIVATED: { label: "Reactivated", tone: "ad-au-reactivated" },
 };
 
 /** The role filter's choices, in the order the buttons appear. "ALL" first, then
@@ -417,6 +429,24 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-act--go { border-color: rgba(30,127,69,.35); color: var(--green); }
         .ad-act--go:hover { background: rgba(30,127,69,.07); border-color: var(--green); }
         .ad-act-error { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--red); font-weight: 600; white-space: normal; margin-top: 3px; }
+        /* Edit sits beside Suspend/Activate. Navy outline: it changes an account
+           without granting or removing access, so it takes neither the red of
+           Suspend nor the green of Activate. */
+        .ad-acts { display: flex; align-items: center; gap: 6px; }
+        .ad-act--edit { border-color: rgba(28,58,94,.35); color: var(--navy); }
+        .ad-act--edit:hover { background: rgba(28,58,94,.07); border-color: var(--navy); }
+
+        /* ===== AUDIT LOG ===== */
+        .ad-table--log td { vertical-align: top; }
+        /* Details are sentences ("Blood bank changed from … to …"): wrap them
+           instead of cutting them off with an ellipsis like the other cells. */
+        .ad-log-details { white-space: normal !important; line-height: 1.45; color: #3A3A3A; }
+        .ad-log-when { font-weight: 600; }
+        .ad-log-ago { font-size: clamp(8.5px, 1.2vh, 11px); margin-top: 2px; }
+        .ad-au-created     { background: var(--navy); }
+        .ad-au-edited      { background: var(--amber); }
+        .ad-au-suspended   { background: var(--red); }
+        .ad-au-reactivated { background: var(--green); }
 
         /* Wiring states — additive, same tokens, for real async data. */
         .ad-loading, .ad-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
@@ -571,16 +601,16 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
-        {/* Dashboard, User Accounts and Settings are wired; the rest remain the
-            mockup's own inert entries, exactly as before — nothing behind them
-            exists yet. */}
+        {/* Dashboard, User Accounts, Audit Log and Settings are wired; the rest
+            remain the mockup's own inert entries, exactly as before — nothing
+            behind them exists yet. */}
         <nav className="ad-nav">
           <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
           <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
           <button type="button"><BankIcon /> Blood Banks</button>
           <button type="button"><HospitalIcon /> Hospitals</button>
           <button type="button"><ChartIcon /> Reports</button>
-          <button type="button"><LogIcon /> Audit Log</button>
+          <NavButton view={VIEW.AUDIT} current={view} onSelect={setView}><LogIcon /> Audit Log</NavButton>
           <NavButton view={VIEW.SETTINGS} current={view} onSelect={setView}><GearIcon /> Settings</NavButton>
         </nav>
 
@@ -609,11 +639,15 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
             reports failed to load can still change their own password. */}
         {view === VIEW.SETTINGS && <ProfileSettings onUserUpdated={handleUserUpdated} />}
 
-        {view !== VIEW.SETTINGS && loading && (
+        {/* Like Settings, the log fetches its own data and does not wait on the
+            console overview's. */}
+        {view === VIEW.AUDIT && <AuditLogView />}
+
+        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && loading && (
           <div className="ad-loading"><div className="ad-sub">Loading system overview…</div></div>
         )}
 
-        {view !== VIEW.SETTINGS && !loading && error && (
+        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && !loading && error && (
           <div className="ad-error">
             <div className="ad-error-msg">{error}</div>
             <button type="button" className="ad-retry" onClick={() => window.location.reload()}>
@@ -622,7 +656,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           </div>
         )}
 
-        {view !== VIEW.SETTINGS && !loading && !error && outcomes && (
+        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && !loading && !error && outcomes && (
           view === VIEW.USERS ? (
             <UserAccountsView
               user={user}
@@ -744,6 +778,9 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
   const [confirmingSuspend, setConfirmingSuspend] = useState(null);
   const cancelSuspendRef = useRef(null);
 
+  // The account whose phone / facility is being edited, or null (Business Rule 17).
+  const [editing, setEditing] = useState(null);
+
   // Guards the async status write against this view having been left (the
   // administrator clicking Dashboard mid-request) before the response arrives.
   const mountedRef = useRef(true);
@@ -792,6 +829,13 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
     const targetUserId = confirmingSuspend.id;
     setConfirmingSuspend(null);
     applyStatus(targetUserId, "SUSPENDED");
+  }
+
+  /** Replaces the edited row with the server's version of it — the same
+   *  reconcile-from-the-response approach applyStatus takes. */
+  function handleEdited(updated) {
+    setUsers((current) => current.map((u) => (u.id === updated.id ? updated : u)));
+    setEditing(null);
   }
 
   /**
@@ -885,12 +929,12 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
           <table className="ad-table">
             <thead>
               <tr>
-                <th style={{ width: "24%" }}>User</th>
-                <th style={{ width: "16%" }}>Role</th>
-                <th style={{ width: "20%" }}>Facility</th>
-                <th style={{ width: "11%" }}>Status</th>
-                <th style={{ width: "13%" }}>Joined</th>
-                <th style={{ width: "16%" }}>Action</th>
+                <th style={{ width: "22%" }}>User</th>
+                <th style={{ width: "15%" }}>Role</th>
+                <th style={{ width: "19%" }}>Facility</th>
+                <th style={{ width: "10%" }}>Status</th>
+                <th style={{ width: "12%" }}>Joined</th>
+                <th style={{ width: "22%" }}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -927,26 +971,40 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
                     <td><span className={`ad-badge ad-b-${u.status.toLowerCase()}`}>{statusLabel(u.status)}</span></td>
                     <td className="ad-muted">{formatRelativeTime(u.createdAt)}</td>
                     <td>
-                      {u.status === "ACTIVE" ? (
+                      <div className="ad-acts">
+                        {/* Disabled on your own row for the same reason the server
+                            refuses it: Business Rule 16 keeps every account holder,
+                            administrators included, from changing their own phone. */}
                         <button
                           type="button"
-                          className="ad-act"
+                          className="ad-act ad-act--edit"
                           disabled={busy || isSelf}
-                          title={isSelf ? "You cannot suspend your own account." : undefined}
-                          onClick={() => setConfirmingSuspend(u)}
+                          title={isSelf ? "Another administrator has to change your phone or facility." : undefined}
+                          onClick={() => setEditing(u)}
                         >
-                          {busy ? "…" : "Suspend"}
+                          Edit
                         </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="ad-act ad-act--go"
-                          disabled={busy}
-                          onClick={() => applyStatus(u.id, "ACTIVE")}
-                        >
-                          {busy ? "…" : "Activate"}
-                        </button>
-                      )}
+                        {u.status === "ACTIVE" ? (
+                          <button
+                            type="button"
+                            className="ad-act"
+                            disabled={busy || isSelf}
+                            title={isSelf ? "You cannot suspend your own account." : undefined}
+                            onClick={() => setConfirmingSuspend(u)}
+                          >
+                            {busy ? "…" : "Suspend"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ad-act ad-act--go"
+                            disabled={busy}
+                            onClick={() => applyStatus(u.id, "ACTIVE")}
+                          >
+                            {busy ? "…" : "Activate"}
+                          </button>
+                        )}
+                      </div>
                       {actionError?.userId === u.id && (
                         <div className="ad-act-error">{actionError.message}</div>
                       )}
@@ -977,6 +1035,16 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
         />
       )}
 
+      {editing && (
+        <EditAccountDialog
+          account={editing}
+          banks={banks}
+          hospitals={hospitals}
+          onCancel={() => setEditing(null)}
+          onSaved={handleEdited}
+        />
+      )}
+
       {newCredentials && (
         <NewAccountCredentials
           result={newCredentials}
@@ -984,6 +1052,232 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Edit another account's phone and facility — Business Rule 17.
+ *
+ * Pre-filled with what the account has now, so saving without touching anything
+ * sends the current values back; Save stays disabled until something differs, and
+ * the server records nothing for a save that changes nothing anyway.
+ *
+ * The facility picker appears only for the two staff roles, and it is the one the
+ * account's existing role calls for — role itself is shown but not editable here.
+ * Changing it is deliberately out of scope: a donor account has a linked donor
+ * record a role change would affect, and that needs a decision of its own.
+ */
+function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
+  const needsHospital = account.role === "HOSPITAL_STAFF";
+  const needsBank = account.role === "BLOOD_BANK_STAFF";
+
+  const [phone, setPhone] = useState(account.phone);
+  const [hospitalId, setHospitalId] = useState(account.hospitalId ?? "");
+  const [bloodBankId, setBloodBankId] = useState(account.bloodBankId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const phoneRef = useRef(null);
+
+  /** Escape closes, and focus starts on the phone — the same keyboard handling
+   *  as this screen's other dialogs. */
+  useEffect(() => {
+    phoneRef.current?.focus();
+    const onKeyDown = (event) => { if (event.key === "Escape" && !saving) onCancel(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onCancel, saving]);
+
+  const changed =
+    phone.trim() !== account.phone
+    || (needsHospital && hospitalId !== (account.hospitalId ?? ""))
+    || (needsBank && bloodBankId !== (account.bloodBankId ?? ""));
+
+  function inputClass(base, field) {
+    return `${base}${fieldErrors[field] ? ` ${base}--bad` : ""}`;
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (saving || !changed) return;
+
+    setSaving(true);
+    setError(null);
+    setFieldErrors({});
+    try {
+      const updated = await editAccountDetails(account.id, {
+        // Sent as typed; the server normalises it (Business Rule 13).
+        phone: phone.trim(),
+        hospitalId: needsHospital ? hospitalId || null : null,
+        bloodBankId: needsBank ? bloodBankId || null : null,
+      });
+      onSaved(updated);
+    } catch (err) {
+      // A phone already in use (409), a malformed phone or a missing facility (400,
+      // keyed to the field). The backend's messages are written for display.
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="ad-scrim"
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onCancel(); }}
+    >
+      <form
+        className="ad-dialog ad-dialog--form"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ad-edit-title"
+        onSubmit={handleSubmit}
+        noValidate
+      >
+        <div className="ad-dialog-title" id="ad-edit-title">Edit {account.fullName}</div>
+        <div className="ad-dialog-body">
+          Changes to the sign-in phone number take effect at their next sign-in. Every change is
+          recorded in the Audit Log under your name.
+        </div>
+
+        {error && <div className="ad-form-alert" role="alert">{error}</div>}
+
+        <div className="ad-form">
+          <div className="ad-field">
+            <span className="ad-label">Role</span>
+            <div>
+              <span className={`ad-pill ${rolePill(account.role)}`}>{ROLE_LABEL[account.role] ?? account.role}</span>
+            </div>
+            <span className="ad-hint">Role cannot be changed here.</span>
+          </div>
+
+          <div className="ad-field">
+            <label className="ad-label" htmlFor="ad-edit-phone">Phone number</label>
+            <input
+              id="ad-edit-phone" ref={phoneRef} className={inputClass("ad-input", "phone")} type="tel"
+              autoComplete="off" placeholder="076 900 005 or +232 76 900 005"
+              value={phone} onChange={(e) => setPhone(e.target.value)}
+            />
+            {fieldErrors.phone && <span className="ad-err">{fieldErrors.phone}</span>}
+            <span className="ad-hint">This is what they sign in with.</span>
+          </div>
+
+          {needsHospital && (
+            <div className="ad-field">
+              <label className="ad-label" htmlFor="ad-edit-hospital">Hospital</label>
+              <select
+                id="ad-edit-hospital" className={inputClass("ad-select", "hospitalId")}
+                value={hospitalId} onChange={(e) => setHospitalId(e.target.value)}
+              >
+                <option value="">Select a hospital…</option>
+                {hospitals.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
+              {fieldErrors.hospitalId && <span className="ad-err">{fieldErrors.hospitalId}</span>}
+            </div>
+          )}
+
+          {needsBank && (
+            <div className="ad-field">
+              <label className="ad-label" htmlFor="ad-edit-bank">Blood bank</label>
+              <select
+                id="ad-edit-bank" className={inputClass("ad-select", "bloodBankId")}
+                value={bloodBankId} onChange={(e) => setBloodBankId(e.target.value)}
+              >
+                <option value="">Select a blood bank…</option>
+                {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              {fieldErrors.bloodBankId && <span className="ad-err">{fieldErrors.bloodBankId}</span>}
+            </div>
+          )}
+        </div>
+
+        <div className="ad-dialog-actions">
+          <button type="button" className="ad-dialog-cancel" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="ad-dialog-confirm ad-dialog-confirm--go" disabled={saving || !changed}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Audit Log — every administrator action, newest first (Business Rule 17).
+ *
+ * Read-only by construction, not just by omission of buttons: the backend has no
+ * endpoint that changes or removes an entry, and the database refuses it too. So
+ * this table has no row actions at all.
+ *
+ * Fetched fresh each time the page is opened rather than kept with the console's
+ * other data: entries are added by actions taken on other pages (User Accounts),
+ * and a log that needed a reload to show what was just done would read as one
+ * that missed it.
+ */
+function AuditLogView() {
+  const [entries, setEntries] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAuditLog()
+      .then((data) => { if (!cancelled) setEntries(data); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (error) {
+    return <div className="ad-error"><div className="ad-error-msg">{error}</div></div>;
+  }
+  if (!entries) {
+    return <div className="ad-loading"><div className="ad-sub">Loading audit log…</div></div>;
+  }
+
+  return (
+    <div className="ad-panel ad-table-panel">
+      <div className="ad-panel-head">
+        <div className="ad-panel-title">Recorded actions</div>
+        <div className="ad-panel-link">{entries.length} total</div>
+      </div>
+      <div className="ad-table-scroll">
+        <table className="ad-table ad-table--log">
+          <thead>
+            <tr>
+              <th style={{ width: "15%" }}>When</th>
+              <th style={{ width: "11%" }}>Action</th>
+              <th style={{ width: "16%" }}>Performed by</th>
+              <th style={{ width: "20%" }}>Account</th>
+              <th style={{ width: "38%" }}>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.length === 0 && (
+              <tr><td colSpan={5} className="ad-empty">No administrator actions have been recorded yet.</td></tr>
+            )}
+            {entries.map((entry) => {
+              const action = AUDIT_ACTION[entry.action] ?? { label: entry.action, tone: "" };
+              return (
+                <tr key={entry.id}>
+                  <td>
+                    <div className="ad-log-when">{formatDateTime(entry.createdAt)}</div>
+                    <div className="ad-muted ad-log-ago">{formatRelativeTime(entry.createdAt)}</div>
+                  </td>
+                  <td><span className={`ad-badge ${action.tone}`}>{action.label}</span></td>
+                  <td>{entry.actorName}</td>
+                  <td>
+                    <div className="ad-user-name">{entry.targetName}</div>
+                    <div className="ad-muted ad-log-ago">{ROLE_LABEL[entry.targetRole] ?? entry.targetRole}</div>
+                  </td>
+                  <td className="ad-log-details">{entry.details}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

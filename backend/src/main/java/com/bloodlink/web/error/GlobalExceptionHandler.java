@@ -11,12 +11,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.method.ParameterValidationResult;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Path;
@@ -374,11 +377,55 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception ex) {
+        // (See handleMethodNotAllowed and handleNoSuchEndpoint below: two ordinary
+        // client mistakes this backstop used to swallow and misreport as a 500.)
         log.error("Unhandled exception reached GlobalExceptionHandler", ex);
         return ResponseEntity.internalServerError().body(ApiError.of(
             HttpStatus.INTERNAL_SERVER_ERROR.value(),
             "Internal Server Error",
             "Something went wrong on our end. Please try again, and contact support if it continues."
+        ));
+    }
+
+    /**
+     * A request with an HTTP method the address does not support — DELETE on
+     * {@code /api/admin/audit-log}, which only answers GET (Business Rule 17).
+     *
+     * A 405 with the {@code Allow} header naming what the address does accept, as
+     * HTTP specifies. Before this handler the catch-all above took it: every wrong
+     * method anywhere in the API came back as "Something went wrong on our end" with
+     * an ERROR-level stack trace in the log — telling the caller the server was
+     * broken when it was working exactly as designed, and making "this endpoint does
+     * not exist" impossible to tell apart from "this endpoint crashed".
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleMethodNotAllowed(HttpRequestMethodNotSupportedException ex) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+            .headers(ex.getHeaders())
+            .body(ApiError.of(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                "Method Not Allowed",
+                "This action is not supported at this address."
+            ));
+    }
+
+    /**
+     * A request to an address no endpoint answers — e.g.
+     * {@code DELETE /api/admin/audit-log/{id}}, for which there has never been a
+     * route. A 404, for the same reason as the 405 above: until this handler it was
+     * reported as a server failure.
+     *
+     * Spring MVC raises NoResourceFoundException for this (the request falls through
+     * every controller to the static-resource handler, which has nothing either);
+     * NoHandlerFoundException is covered too, for the configuration that raises that
+     * one instead.
+     */
+    @ExceptionHandler({ NoResourceFoundException.class, NoHandlerFoundException.class })
+    public ResponseEntity<ApiError> handleNoSuchEndpoint(Exception ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiError.of(
+            HttpStatus.NOT_FOUND.value(),
+            "Not Found",
+            "There is nothing at this address."
         ));
     }
 }
