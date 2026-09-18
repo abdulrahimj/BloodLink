@@ -403,6 +403,40 @@ BloodBank 1–N AppealCooldown
       committed `application.properties.example`, and `.dockerignore` keeps a developer's local
       `application.properties` out of the build — it holds their credentials, and a fresh clone does
       not have one, which previously made the image fail at startup on every machine but its author's.
+16. **Every signed-in user manages their own name, email and password from Profile Settings — and a
+    password change requires the current password.** One shared screen
+    (`frontend/src/components/ProfileSettings.jsx`) for all four roles, opened from each portal's
+    Settings sidebar link; one set of endpoints behind it, `/api/users/me`, open to any valid token and
+    acting only on the caller's own account (the id comes from the token — the URL cannot name anyone
+    else). Before this rule there was no way to change a password after registration at all.
+    - **Editable, by every role including DONOR and ADMIN:** `full_name` and `email`
+      (`PATCH /api/users/me`), normalised as registration does (trimmed; email lower-cased) and still
+      unique — a clash with another account is a 409, re-saving your own is not. And the password
+      (`PATCH /api/users/me/password`).
+    - **Not editable by the account holder, for any role — ADMIN included:** `phone` (the login
+      credential, Business Rule 13), `role`, `blood_bank_id` / `hospital_id` (Business Rules 8, 9) and
+      `status`. The screen shows them read-only. A request that carries any of them — or any property
+      the endpoint does not accept — is **refused whole with a 400 naming the field**, never partly
+      applied and never silently ignored with a 200. The payload records capture unrecognised
+      properties with `@JsonAnySetter` precisely so they can be refused, because the JSON mapper would
+      otherwise drop them and report success. Note that no endpoint edits a phone, role or facility
+      after an account exists, for anyone: today those are database changes, so the screen says they
+      "cannot be changed here" rather than pointing at an in-app fix that does not exist.
+    - **A password change must prove the current password**, checked with `PasswordEncoder.matches`
+      against the stored BCrypt hash — the same comparison login uses. A session left open on a shared
+      machine must not be enough to set a new password and lock the owner out. Wrong current password:
+      **401 with a field error on `currentPassword`** and nothing written. The new password follows
+      registration's rule (8–72 characters), and one identical to the current password is refused (400)
+      rather than "succeeding" without changing anything. Name and email need no current password:
+      neither is a credential.
+    - **That 401 must not sign the user out.** `frontend/src/api/client.js` discards the session on a
+      401 because that normally means the token is dead. A 401 that carries field errors is instead the
+      server rejecting something the user typed, and keeps the session; session-level 401s
+      (`RestAuthenticationEntryPoint`) never carry field errors, which is what makes the distinction
+      reliable. Any future endpoint that answers 401 about a typed credential must name the field too.
+    - **Known limits, not handled here:** tokens issued before a password change stay valid until they
+      expire (JWTs are stateless — the 24h lifetime is the bound), and the current-password check is
+      not rate-limited, the same as login.
 
 ## Actors (roles) and what each can do
 
@@ -410,6 +444,7 @@ BloodBank 1–N AppealCooldown
 - **Hospital Staff** — submit blood requests, track their hospital's request status, view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, approve/reject/fulfil incoming requests, send donation appeals
 - **Administrator** — create staff and administrator accounts (Business Rule 14), manage all user accounts (activate/suspend), view aggregate reports (donation trends, request outcomes)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
 
@@ -433,7 +468,7 @@ BloodBank 1–N AppealCooldown
     disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
-    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`), every one of which is `@Transactional` and
+    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`), every one of which is `@Transactional` and
     rolls back everything it writes, so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,

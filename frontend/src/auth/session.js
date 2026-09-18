@@ -53,6 +53,28 @@ export function getUser() {
   }
 }
 
+/**
+ * Merges changed fields into the stored user summary — used after Profile Settings
+ * saves a new name or email, so a refresh shows the new name instead of the one the
+ * user signed in with.
+ *
+ * Writes to whichever store currently holds the session, so the "Remember me"
+ * choice made at sign-in is kept: a session that was meant to end with the tab
+ * must not be promoted to one that survives it just because the user renamed
+ * themselves. Does nothing when signed out.
+ */
+export function updateSessionUser(changes) {
+  const store = localStorage.getItem(TOKEN_KEY) !== null ? localStorage
+    : sessionStorage.getItem(TOKEN_KEY) !== null ? sessionStorage
+    : null;
+  const current = getUser();
+  if (!store || !current) return null;
+
+  const updated = { ...current, ...changes };
+  store.setItem(USER_KEY, JSON.stringify(updated));
+  return updated;
+}
+
 /** True when a token is present. Not proof of validity — the server decides that. */
 export function isSignedIn() {
   return getToken() !== null;

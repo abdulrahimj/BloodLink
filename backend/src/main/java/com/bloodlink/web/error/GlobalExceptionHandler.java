@@ -307,6 +307,24 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    /**
+     * A wrong current password on a password change (Business Rule 16).
+     *
+     * 401, as a failed proof of identity, but — unlike the login failure above —
+     * specific, and keyed to the "currentPassword" field. The field is load-bearing:
+     * it is what lets the frontend tell this 401 apart from an expired session and
+     * keep the user signed in. See IncorrectCurrentPasswordException.
+     */
+    @ExceptionHandler(IncorrectCurrentPasswordException.class)
+    public ResponseEntity<ApiError> handleIncorrectCurrentPassword(IncorrectCurrentPasswordException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiError.of(
+            HttpStatus.UNAUTHORIZED.value(),
+            "Unauthorized",
+            ex.getMessage(),
+            Map.of("currentPassword", ex.getMessage())
+        ));
+    }
+
     /** A correct password on a suspended account. See AccountSuspendedException for
      *  why this is 403 (not 401) and why it is allowed to be specific. */
     @ExceptionHandler(AccountSuspendedException.class)

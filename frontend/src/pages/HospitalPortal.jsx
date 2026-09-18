@@ -24,7 +24,7 @@ import { getHospitals } from "../api/hospitals.js";
    hospital, whatever they pick here (see RequestService.createRequest).
    ================================================================ */
 
-export default function HospitalPortal({ user, onSignOut }) {
+export default function HospitalPortal({ user, onSignOut, onUserUpdated }) {
   const [hospital, setHospital] = useState(
     user.hospitalId ? { id: user.hospitalId, name: null } : null
   );
@@ -71,7 +71,7 @@ export default function HospitalPortal({ user, onSignOut }) {
     );
   }
 
-  return <HospitalDashboard hospital={hospital} user={user} onSignOut={onSignOut} />;
+  return <HospitalDashboard hospital={hospital} user={user} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />;
 }
 
 /**

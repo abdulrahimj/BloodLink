@@ -34,8 +34,14 @@ export class ApiError extends Error {
  * Attaches the bearer token when one is stored, unless `auth: false` — which the
  * register and login calls use, since sending a stale token to them is meaningless.
  *
- * A 401 on an authenticated call means the token expired or was rejected, so the
- * stored session is discarded rather than left to fail every subsequent request.
+ * A 401 on an authenticated call usually means the token expired or was rejected,
+ * so the stored session is discarded rather than left to fail every subsequent
+ * request. The one exception is a 401 that names a form field: that is the server
+ * refusing something the user typed — today, a wrong current password on the
+ * Profile Settings password form (Business Rule 16) — not refusing the session.
+ * Signing the user out for a typo would lose their session over nothing, so the
+ * session is only discarded for a 401 with no field errors, which is the only kind
+ * the backend's token check (RestAuthenticationEntryPoint) ever sends.
  */
 export async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -57,13 +63,15 @@ export async function apiRequest(path, { method = 'GET', body, auth = true } = {
     throw new ApiError('Could not reach the BloodLink server. Check your connection and try again.', 0);
   }
 
-  if (response.status === 401 && auth && token) {
-    clearSession();
-  }
-
   // 204 and other empty bodies would break response.json(), so read as text first.
   const text = await response.text();
   const payload = text ? safeParse(text) : null;
+
+  // Read after the body, because the body is what says which kind of 401 this is.
+  const rejectsTypedField = payload?.fieldErrors && Object.keys(payload.fieldErrors).length > 0;
+  if (response.status === 401 && auth && token && !rejectsTypedField) {
+    clearSession();
+  }
 
   if (!response.ok) {
     throw new ApiError(

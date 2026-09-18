@@ -21,7 +21,7 @@ import { getBloodBanks } from "../api/bloodBanks.js";
        fit it.
    ================================================================ */
 
-export default function BloodBankPortal({ user, onSignOut }) {
+export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
   const [bank, setBank] = useState(
     user.bloodBankId ? { id: user.bloodBankId, name: null } : null
   );
@@ -52,7 +52,12 @@ export default function BloodBankPortal({ user, onSignOut }) {
     );
   }
 
-  const shared = { bloodBankId: bank.id, user, onSignOut, activeView: view, onNavigate: setView };
+  // Three views, two page components. "settings" (Business Rule 16) is shown by
+  // the Dashboard page, which swaps its main area for the shared Profile Settings
+  // screen and keeps its sidebar, header and live bell — rather than a third
+  // whole-page copy of that sidebar and its styles. Going from Dashboard to
+  // Settings and back keeps the same component mounted, so nothing reloads.
+  const shared = { bloodBankId: bank.id, user, onSignOut, activeView: view, onNavigate: setView, onUserUpdated };
   return view === "inventory"
     ? <BloodBankInventory {...shared} />
     : <BloodBankDashboard {...shared} />;

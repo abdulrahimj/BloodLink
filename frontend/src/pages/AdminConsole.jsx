@@ -4,6 +4,7 @@ import {
 } from "../api/admin.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
+import ProfileSettings from "../components/ProfileSettings.jsx";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 
 /* ================================================================
@@ -19,12 +20,16 @@ import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js"
    fixtures are replaced with fetched data, and a loading/error pair was
    added using the same idiom as the other wired portals.
 
-   Two views, switched from the sidebar the way BloodBankPortal switches its
+   Three views, switched from the sidebar the way BloodBankPortal switches its
    own (plain state, no URL routing):
      • Dashboard (DashboardView) — read-only: the four stat cards and two
        charts, nothing that changes anything.
      • User Accounts (UserAccountsView) — the account table with its
        Suspend/Activate actions, the Create Account flow, and a role filter.
+     • Settings — the shared ProfileSettings screen every role uses for its
+       own name, email and password (Business Rule 16). An administrator
+       edits their own account there exactly as anyone else does, and, like
+       anyone else, cannot change their own phone.
    The mockup drew the user table beneath the charts on one screen; it was
    moved to its own page once the table gained a Create Account flow and a
    donor register that only grows — a list to work through does not belong
@@ -93,11 +98,18 @@ function statusLabel(status) {
  *  endpoint regardless — offering it would be offering something that cannot work. */
 const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
 
-/** The two views this console switches between. Held as plain
+/** The views this console switches between. Held as plain
  *  state rather than a URL hash, the same way BloodBankPortal switches Dashboard /
  *  Blood Inventory: App.jsx's hash routing chooses which portal a role sees, and
  *  nothing inside a portal has ever needed its own address. */
-const VIEW = { DASHBOARD: "dashboard", USERS: "users" };
+const VIEW = { DASHBOARD: "dashboard", USERS: "users", SETTINGS: "settings" };
+
+/** The header's title and subtitle for each view. */
+const HEADINGS = {
+  [VIEW.DASHBOARD]: { title: "System Administration", sub: "BloodLink · Makeni City deployment" },
+  [VIEW.USERS]: { title: "User Accounts", sub: "Create, suspend and reactivate accounts across all four roles" },
+  [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
+};
 
 /** The role filter's choices, in the order the buttons appear. "ALL" first, then
  *  the four roles in ROLE_LABEL's own order. */
@@ -113,7 +125,7 @@ const ROLE_FILTERS = ["ALL", "DONOR", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADM
  * Accounts page is already reflected in those cards when the administrator
  * switches back, with no refetch and no chance of the two pages disagreeing.
  */
-export default function AdminConsole({ user, onSignOut }) {
+export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [view, setView] = useState(VIEW.DASHBOARD);
 
   const [users, setUsers] = useState([]);
@@ -162,7 +174,20 @@ export default function AdminConsole({ user, onSignOut }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onUsers = view === VIEW.USERS;
+  /**
+   * After the administrator saves their own name or email in Profile Settings:
+   * passes it up to App (header avatar, stored session) and also patches their own
+   * row in the account list this console already holds — otherwise the User
+   * Accounts table would keep showing the old name for them until a reload.
+   */
+  function handleUserUpdated(changes) {
+    onUserUpdated?.(changes);
+    setUsers((current) =>
+      current
+        .map((u) => (u.id === user.id ? { ...u, ...changes } : u))
+        .sort((a, b) => a.fullName.localeCompare(b.fullName))
+    );
+  }
 
   return (
     <div className="ad-root">
@@ -546,28 +571,17 @@ export default function AdminConsole({ user, onSignOut }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
-        {/* Dashboard and User Accounts are wired; the rest remain the mockup's own
-            inert entries, exactly as before — nothing behind them exists yet. */}
+        {/* Dashboard, User Accounts and Settings are wired; the rest remain the
+            mockup's own inert entries, exactly as before — nothing behind them
+            exists yet. */}
         <nav className="ad-nav">
-          <button
-            type="button" className={onUsers ? "" : "is-active"}
-            aria-current={onUsers ? undefined : "page"}
-            onClick={() => setView(VIEW.DASHBOARD)}
-          >
-            <GridIcon /> Dashboard
-          </button>
-          <button
-            type="button" className={onUsers ? "is-active" : ""}
-            aria-current={onUsers ? "page" : undefined}
-            onClick={() => setView(VIEW.USERS)}
-          >
-            <UsersIcon /> User Accounts
-          </button>
+          <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
+          <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
           <button type="button"><BankIcon /> Blood Banks</button>
           <button type="button"><HospitalIcon /> Hospitals</button>
           <button type="button"><ChartIcon /> Reports</button>
           <button type="button"><LogIcon /> Audit Log</button>
-          <button type="button"><GearIcon /> Settings</button>
+          <NavButton view={VIEW.SETTINGS} current={view} onSelect={setView}><GearIcon /> Settings</NavButton>
         </nav>
 
         <button type="button" className="ad-logout" onClick={onSignOut}><LogoutIcon /> Logout</button>
@@ -577,10 +591,8 @@ export default function AdminConsole({ user, onSignOut }) {
       <main className="ad-main">
         <div className="ad-top">
           <div>
-            <div className="ad-title">{onUsers ? "User Accounts" : "System Administration"}</div>
-            <div className="ad-sub">
-              {onUsers ? "Create, suspend and reactivate accounts across all four roles" : "BloodLink · Makeni City deployment"}
-            </div>
+            <div className="ad-title">{HEADINGS[view].title}</div>
+            <div className="ad-sub">{HEADINGS[view].sub}</div>
           </div>
           <div className="ad-top-right">
             <div className="ad-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -592,11 +604,16 @@ export default function AdminConsole({ user, onSignOut }) {
           </div>
         </div>
 
-        {loading && (
+        {/* Settings needs none of the console's overview data, so it is not held
+            behind that data's loading state or its errors — an administrator whose
+            reports failed to load can still change their own password. */}
+        {view === VIEW.SETTINGS && <ProfileSettings onUserUpdated={handleUserUpdated} />}
+
+        {view !== VIEW.SETTINGS && loading && (
           <div className="ad-loading"><div className="ad-sub">Loading system overview…</div></div>
         )}
 
-        {!loading && error && (
+        {view !== VIEW.SETTINGS && !loading && error && (
           <div className="ad-error">
             <div className="ad-error-msg">{error}</div>
             <button type="button" className="ad-retry" onClick={() => window.location.reload()}>
@@ -605,8 +622,8 @@ export default function AdminConsole({ user, onSignOut }) {
           </div>
         )}
 
-        {!loading && !error && outcomes && (
-          onUsers ? (
+        {view !== VIEW.SETTINGS && !loading && !error && outcomes && (
+          view === VIEW.USERS ? (
             <UserAccountsView
               user={user}
               users={users}
@@ -1302,6 +1319,23 @@ function SuspendConfirmation({ targetUser, cancelRef, onCancel, onConfirm }) {
 }
 
 /* ================= HELPERS ================= */
+
+/** A sidebar entry wired to one of the console's views: highlighted, and marked
+ *  as the current page for screen readers, when that view is showing. */
+function NavButton({ view, current, onSelect, children }) {
+  const active = view === current;
+  return (
+    <button
+      type="button"
+      className={active ? "is-active" : ""}
+      aria-current={active ? "page" : undefined}
+      onClick={() => onSelect(view)}
+    >
+      {children}
+    </button>
+  );
+}
+
 function roleColor(role) {
   if (role === "DONOR") return "#C8102E";
   if (role === "HOSPITAL_STAFF") return "#1C3A5E";

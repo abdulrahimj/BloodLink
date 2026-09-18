@@ -4,6 +4,7 @@ import { getBankDashboard } from "../api/bloodBanks.js";
 import { actOnRequest, getRequests } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
@@ -56,7 +57,10 @@ function titleCase(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNavigate }) {
+export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNavigate, activeView, onUserUpdated }) {
+  // BloodBankPortal shows this page for both "dashboard" and "settings"; on the
+  // latter, the main area is the shared Profile Settings screen (Business Rule 16).
+  const onSettings = activeView === "settings";
   const [stock, setStock] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [requests, setRequests] = useState([]);
@@ -461,12 +465,24 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         <div className="bb-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "BLOOD BANK STAFF"}</div>
 
         <nav className="bb-nav">
-          <button type="button" className="is-active"><GridIcon /> Dashboard</button>
+          <button
+            type="button" className={onSettings ? "" : "is-active"}
+            aria-current={onSettings ? undefined : "page"}
+            onClick={() => onNavigate("dashboard")}
+          >
+            <GridIcon /> Dashboard
+          </button>
           <button type="button" onClick={() => onNavigate("inventory")}><DropletOutlineIcon /> Blood Inventory</button>
           <button type="button"><TruckIcon /> Blood Logistics</button>
           <button type="button"><UsersIcon /> Donors</button>
           <button type="button"><ChartIcon /> Report</button>
-          <button type="button"><GearIcon /> Settings</button>
+          <button
+            type="button" className={onSettings ? "is-active" : ""}
+            aria-current={onSettings ? "page" : undefined}
+            onClick={() => onNavigate("settings")}
+          >
+            <GearIcon /> Settings
+          </button>
         </nav>
 
         <button type="button" className="bb-logout" onClick={onSignOut}><LogoutIcon /> Logout</button>
@@ -475,8 +491,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
       <main className="bb-main">
         <div className="bb-top">
           <div>
-            <div className="bb-title">{dashboard?.bloodBankName ?? "Blood Bank Dashboard"}</div>
-            <div className="bb-sub">Stock and request overview</div>
+            <div className="bb-title">{onSettings ? "Profile Settings" : (dashboard?.bloodBankName ?? "Blood Bank Dashboard")}</div>
+            <div className="bb-sub">{onSettings ? "Your name, email and password" : "Stock and request overview"}</div>
           </div>
           <div className="bb-top-right">
             <div className="bb-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -490,15 +506,17 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           </div>
         </div>
 
-        {loading && (
+        {onSettings && <ProfileSettings onUserUpdated={onUserUpdated} />}
+
+        {!onSettings && loading && (
           <div className="bb-loading"><div className="bb-sub">Loading dashboard…</div></div>
         )}
 
-        {!loading && error && (
+        {!onSettings && !loading && error && (
           <div className="bb-error"><div className="bb-error-msg">{error}</div></div>
         )}
 
-        {!loading && !error && dashboard && (
+        {!onSettings && !loading && !error && dashboard && (
           <>
             <div className="bb-stats">
               <Stat tone="red" icon={<DropletIcon />} figure={dashboard.totalUnits} label="Available Units" note="Across all groups" />

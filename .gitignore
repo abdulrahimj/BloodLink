@@ -4,3 +4,7 @@
 backend/src/main/resources/application.properties
 # Docker Compose's real secrets. Only .env.example, which holds placeholders, is committed.
 .env
+
+# Scratch space for AI-assisted work (test scripts, screenshots, logs, browser
+# profiles). Not project content; never committed.
+.agent-scratch/

@@ -4,6 +4,7 @@ import { getInventory } from "../api/inventory.js";
 import { getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
@@ -85,7 +86,12 @@ function citywideAvailability(inventoriesByBank) {
   });
 }
 
-export default function HospitalDashboard({ hospital, user, onSignOut }) {
+export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpdated }) {
+  // "dashboard" or "settings" — the Settings sidebar entry opens the shared
+  // Profile Settings screen in this page's main area, keeping its sidebar, header
+  // and live bell (Business Rule 16). Leaving and returning keeps the request
+  // form's half-typed contents, since this component stays mounted throughout.
+  const [view, setView] = useState("dashboard");
   const [group, setGroup] = useState("O-");
   const [units, setUnits] = useState(2);
   const [urgency, setUrgency] = useState("EMERGENCY");
@@ -497,13 +503,27 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
 
         <div className="hp-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "HOSPITAL STAFF"}</div>
 
+        {/* Dashboard and Settings are wired; the middle four are still the
+            mockup's inert entries. */}
         <nav className="hp-nav">
-          <button type="button" className="is-active"><GridIcon /> Dashboard</button>
+          <button
+            type="button" className={view === "dashboard" ? "is-active" : ""}
+            aria-current={view === "dashboard" ? "page" : undefined}
+            onClick={() => setView("dashboard")}
+          >
+            <GridIcon /> Dashboard
+          </button>
           <button type="button"><PlusIcon /> New Request</button>
           <button type="button"><ClockIcon /> Request History</button>
           <button type="button"><DropletIcon /> Blood Availability</button>
           <button type="button"><ChartIcon /> Report</button>
-          <button type="button"><GearIcon /> Settings</button>
+          <button
+            type="button" className={view === "settings" ? "is-active" : ""}
+            aria-current={view === "settings" ? "page" : undefined}
+            onClick={() => setView("settings")}
+          >
+            <GearIcon /> Settings
+          </button>
         </nav>
 
         <button type="button" className="hp-logout" onClick={onSignOut}><LogoutIcon /> Logout</button>
@@ -513,8 +533,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
       <main className="hp-main">
         <div className="hp-top">
           <div>
-            <div className="hp-title">{hospital.name ?? "Hospital Portal"}</div>
-            <div className="hp-sub">Blood request desk</div>
+            <div className="hp-title">{view === "settings" ? "Profile Settings" : (hospital.name ?? "Hospital Portal")}</div>
+            <div className="hp-sub">{view === "settings" ? "Your name, email and password" : "Blood request desk"}</div>
           </div>
           <div className="hp-top-right">
             <div className="hp-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -528,15 +548,17 @@ export default function HospitalDashboard({ hospital, user, onSignOut }) {
           </div>
         </div>
 
-        {loading && (
+        {view === "settings" && <ProfileSettings onUserUpdated={onUserUpdated} />}
+
+        {view === "dashboard" && loading && (
           <div className="hp-loading"><div className="hp-sub">Loading request desk…</div></div>
         )}
 
-        {!loading && error && (
+        {view === "dashboard" && !loading && error && (
           <div className="hp-error"><div className="hp-error-msg">{error}</div></div>
         )}
 
-        {!loading && !error && (
+        {view === "dashboard" && !loading && !error && (
           <>
             {/* ---- stat cards ---- */}
             <div className="hp-stats">

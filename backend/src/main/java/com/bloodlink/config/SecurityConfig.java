@@ -148,6 +148,15 @@ public class SecurityConfig {
                 // scoping to the recipient happens in the service layer.
                 .requestMatchers("/api/notifications/**").authenticated()
 
+                // --- The caller's own account (Business Rule 16) ---
+                // Every role has a name, email and password to manage, so any valid
+                // token will do. Scoping is by construction: the controller reads the
+                // account id from the token and the URL cannot name anyone else's.
+                // Named explicitly rather than left to the default below, so that a
+                // later tightening of that default cannot lock everyone out of their
+                // own settings by accident.
+                .requestMatchers("/api/users/me", "/api/users/me/**").authenticated()
+
                 // Default deny: anything not named above still requires a token.
                 .anyRequest().authenticated()
             )

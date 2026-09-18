@@ -605,7 +605,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           <button type="button"><TruckIcon /> Blood Logistics</button>
           <button type="button"><UsersIcon /> Donors</button>
           <button type="button"><ChartIcon /> Report</button>
-          <button type="button"><GearIcon /> Settings</button>
+          <button type="button" onClick={() => onNavigate("settings")}><GearIcon /> Settings</button>
         </nav>
 
         <button type="button" className="bi-logout" onClick={onSignOut}><LogoutIcon /> Logout</button>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* ================================================================
@@ -110,7 +111,11 @@ function bloodGroupTag(bloodType) {
   return null;
 }
 
-export default function DonorPortal({ user, onSignOut }) {
+export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
+  // "dashboard" or "settings" — the Settings sidebar entry opens the shared
+  // Profile Settings screen in the main area, keeping this sidebar, header and
+  // bell (Business Rule 16). Plain state, as every other portal switches views.
+  const [view, setView] = useState("dashboard");
   const [profile, setProfile] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -154,8 +159,11 @@ export default function DonorPortal({ user, onSignOut }) {
   }, []);
 
   // The session already has the name from login/register — shown immediately so the
-  // header never has to wait on this call just to greet the donor.
-  const displayName = profile?.fullName ?? user?.fullName ?? "";
+  // header never has to wait on this call just to greet the donor. Preferred over
+  // the dashboard's copy because it is the one Profile Settings updates the moment
+  // a new name is saved; the dashboard's was fetched once, on arrival. Both read
+  // the same column, so otherwise they never differ.
+  const displayName = user?.fullName ?? profile?.fullName ?? "";
   const firstName = displayName.split(" ")[0] || displayName;
 
   const isEligible = profile?.eligibilityStatus === "ELIGIBLE";
@@ -416,13 +424,27 @@ export default function DonorPortal({ user, onSignOut }) {
 
         <div className="dn-role">DONOR</div>
 
+        {/* Dashboard and Settings are wired; the middle four are still the
+            mockup's inert entries. */}
         <nav className="dn-nav">
-          <button type="button" className="is-active"><GridIcon /> Dashboard</button>
+          <button
+            type="button" className={view === "dashboard" ? "is-active" : ""}
+            aria-current={view === "dashboard" ? "page" : undefined}
+            onClick={() => setView("dashboard")}
+          >
+            <GridIcon /> Dashboard
+          </button>
           <button type="button"><ClockIcon /> Donation History</button>
           <button type="button"><DropletOutlineIcon /> Donation Appeals</button>
           <button type="button"><HeartIcon /> My Impact</button>
           <button type="button"><AwardIcon /> Certificate</button>
-          <button type="button"><GearIcon /> Settings</button>
+          <button
+            type="button" className={view === "settings" ? "is-active" : ""}
+            aria-current={view === "settings" ? "page" : undefined}
+            onClick={() => setView("settings")}
+          >
+            <GearIcon /> Settings
+          </button>
         </nav>
 
         <button type="button" className="dn-logout" onClick={onSignOut}><LogoutIcon /> Logout</button>
@@ -432,8 +454,12 @@ export default function DonorPortal({ user, onSignOut }) {
       <main className="dn-main">
         <div className="dn-top">
           <div>
-            <div className="dn-title">Hello{firstName ? `, ${firstName}` : ""}</div>
-            <div className="dn-sub">Voluntary donor · Makeni City</div>
+            <div className="dn-title">
+              {view === "settings" ? "Profile Settings" : `Hello${firstName ? `, ${firstName}` : ""}`}
+            </div>
+            <div className="dn-sub">
+              {view === "settings" ? "Your name, email and password" : "Voluntary donor · Makeni City"}
+            </div>
           </div>
           <div className="dn-top-right">
             <div className="dn-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -447,13 +473,15 @@ export default function DonorPortal({ user, onSignOut }) {
           </div>
         </div>
 
-        {loading && (
+        {view === "settings" && <ProfileSettings onUserUpdated={onUserUpdated} />}
+
+        {view === "dashboard" && loading && (
           <div className="dn-loading">
             <div className="dn-sub">Loading your dashboard…</div>
           </div>
         )}
 
-        {!loading && error && (
+        {view === "dashboard" && !loading && error && (
           <div className="dn-error">
             <div className="dn-error-msg">{error}</div>
             <button type="button" className="dn-retry" onClick={() => window.location.reload()}>
@@ -462,7 +490,7 @@ export default function DonorPortal({ user, onSignOut }) {
           </div>
         )}
 
-        {!loading && !error && profile && (
+        {view === "dashboard" && !loading && !error && profile && (
           <>
             {/* ---- stat cards ---- */}
             <div className="dn-stats">

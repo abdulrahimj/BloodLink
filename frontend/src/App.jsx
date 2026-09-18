@@ -6,7 +6,7 @@ import DonorPortal from './pages/DonorPortal.jsx';
 import BloodBankPortal from './pages/BloodBankPortal.jsx';
 import HospitalPortal from './pages/HospitalPortal.jsx';
 import AdminConsole from './pages/AdminConsole.jsx';
-import { clearSession, getUser, isSignedIn } from './auth/session.js';
+import { clearSession, getUser, isSignedIn, updateSessionUser } from './auth/session.js';
 
 /* ================================================================
    BloodLink — app shell
@@ -79,18 +79,32 @@ export default function App() {
     window.location.hash = '#login';
   }
 
+  /**
+   * Called by Profile Settings after the user saves a new name or email
+   * (Business Rule 16). Updates both copies of the signed-in user: this state,
+   * so every portal's header and avatar re-render with the new name at once, and
+   * the stored session, so a refresh does not bring the old name back. The token
+   * itself is untouched — the server builds the caller's identity from its id and
+   * role, never from the name inside it.
+   */
+  function handleUserUpdated(changes) {
+    const stored = updateSessionUser(changes);
+    setUser((current) => (current ? { ...current, ...(stored ?? changes) } : current));
+  }
+
   if (user) {
+    const portalProps = { user, onSignOut: handleSignOut, onUserUpdated: handleUserUpdated };
     if (user.role === 'DONOR') {
-      return <DonorPortal user={user} onSignOut={handleSignOut} />;
+      return <DonorPortal {...portalProps} />;
     }
     if (user.role === 'BLOOD_BANK_STAFF') {
-      return <BloodBankPortal user={user} onSignOut={handleSignOut} />;
+      return <BloodBankPortal {...portalProps} />;
     }
     if (user.role === 'HOSPITAL_STAFF') {
-      return <HospitalPortal user={user} onSignOut={handleSignOut} />;
+      return <HospitalPortal {...portalProps} />;
     }
     if (user.role === 'ADMIN') {
-      return <AdminConsole user={user} onSignOut={handleSignOut} />;
+      return <AdminConsole {...portalProps} />;
     }
     return <SignedInPlaceholder user={user} onSignOut={handleSignOut} />;
   }
