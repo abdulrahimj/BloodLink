@@ -43,6 +43,12 @@ import lombok.NoArgsConstructor;
  * Both people are held as associations rather than copied names, so the log page
  * shows who they are now; what the action changed is captured as text in
  * {@link #details} at the moment it happened, so that part never shifts.
+ *
+ * <h2>One subject per entry</h2>
+ * An account action's subject is {@link #target}; a facility creation's (Business
+ * Rule 19, V14) is {@link #targetBloodBank} or {@link #targetHospital}. Exactly one
+ * of the three is set, matching the action — the factory methods below build only
+ * those shapes, and V14's CHECK constraint refuses any other at the database.
  */
 @Entity
 @Table(name = "audit_log")
@@ -65,10 +71,21 @@ public class AuditLog {
     @Column(name = "action", nullable = false, length = 32, updatable = false)
     private AuditAction action;
 
-    /** The account the action was done to. */
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "target_user_id", nullable = false, updatable = false)
+    /** The account the action was done to — set for the four ACCOUNT_ actions,
+     *  null for a facility creation (V14). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_user_id", updatable = false)
     private User target;
+
+    /** The blood bank created — set only for BLOOD_BANK_CREATED (Business Rule 19). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_blood_bank_id", updatable = false)
+    private BloodBank targetBloodBank;
+
+    /** The hospital created — set only for HOSPITAL_CREATED (Business Rule 19). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_hospital_id", updatable = false)
+    private Hospital targetHospital;
 
     /** What changed, in words, as of the moment it changed. Never a password. */
     @Column(name = "details", nullable = false, updatable = false, columnDefinition = "text")
@@ -82,12 +99,44 @@ public class AuditLog {
      * here; there is no later step that fills anything in.
      */
     public static AuditLog record(User actor, AuditAction action, User target, String details) {
+        requireAccountAction(action);
         AuditLog entry = new AuditLog();
         entry.actor = actor;
         entry.action = action;
         entry.target = target;
         entry.details = details;
         return entry;
+    }
+
+    /** A new blood bank, as a BLOOD_BANK_CREATED entry (Business Rule 19). */
+    public static AuditLog recordBloodBankCreated(User actor, BloodBank bank, String details) {
+        AuditLog entry = new AuditLog();
+        entry.actor = actor;
+        entry.action = AuditAction.BLOOD_BANK_CREATED;
+        entry.targetBloodBank = bank;
+        entry.details = details;
+        return entry;
+    }
+
+    /** A new hospital, as a HOSPITAL_CREATED entry (Business Rule 19). */
+    public static AuditLog recordHospitalCreated(User actor, Hospital hospital, String details) {
+        AuditLog entry = new AuditLog();
+        entry.actor = actor;
+        entry.action = AuditAction.HOSPITAL_CREATED;
+        entry.targetHospital = hospital;
+        entry.details = details;
+        return entry;
+    }
+
+    /**
+     * Refuses a facility action passed through the account factory. V14's
+     * audit_log_target_matches_action constraint would refuse the row anyway; this
+     * fails at the line that made the mistake, instead of at a later flush.
+     */
+    private static void requireAccountAction(AuditAction action) {
+        if (!action.isAccountAction()) {
+            throw new IllegalStateException(action + " does not take a user account as its subject.");
+        }
     }
 
     @PrePersist

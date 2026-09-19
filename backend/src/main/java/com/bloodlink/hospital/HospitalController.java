@@ -11,7 +11,8 @@ import com.bloodlink.hospital.dto.HospitalResponse;
 import com.bloodlink.repository.HospitalRepository;
 
 /**
- * The fixed hospital reference list, seeded by V6 and never self-registering.
+ * The hospital reference list — seeded by V6, never self-registering, and added to
+ * only by an administrator (AdminFacilityController, Business Rule 19).
  *
  * Deliberately a controller with no service behind it: unlike blood banks there is
  * no aggregate view or business rule attached to a hospital yet — this is a plain

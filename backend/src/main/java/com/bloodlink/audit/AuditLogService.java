@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.audit.dto.AuditLogEntryResponse;
 import com.bloodlink.domain.AuditLog;
+import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.repository.AuditLogRepository;
@@ -50,6 +52,24 @@ public class AuditLogService {
     public void record(UUID actorId, AuditAction action, User target, String details) {
         User actor = userRepository.getReferenceById(actorId);
         auditLogRepository.save(AuditLog.record(actor, action, target, details));
+    }
+
+    /**
+     * Records a new blood bank as BLOOD_BANK_CREATED (Business Rule 19). MANDATORY
+     * for the same reason as {@link #record}: the bank and its entry commit or roll
+     * back together.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordBloodBankCreated(UUID actorId, BloodBank bank, String details) {
+        User actor = userRepository.getReferenceById(actorId);
+        auditLogRepository.save(AuditLog.recordBloodBankCreated(actor, bank, details));
+    }
+
+    /** Records a new hospital as HOSPITAL_CREATED (Business Rule 19). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordHospitalCreated(UUID actorId, Hospital hospital, String details) {
+        User actor = userRepository.getReferenceById(actorId);
+        auditLogRepository.save(AuditLog.recordHospitalCreated(actor, hospital, details));
     }
 
     /**

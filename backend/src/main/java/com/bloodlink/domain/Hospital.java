@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Seeded, not self-registering: "Makeni Regional Hospital", "Holy Spirit Hospital".
+ * Seeded (V6): "Makeni Regional Hospital", "Holy Spirit Hospital". Never
+ * self-registering; further hospitals are added only by an administrator
+ * (POST /api/admin/hospitals, Business Rule 19). Name is unique, case-insensitively (V14).
  */
 @Entity
 @Table(name = "hospitals")

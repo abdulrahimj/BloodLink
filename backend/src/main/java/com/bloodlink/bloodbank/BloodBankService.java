@@ -43,7 +43,8 @@ public class BloodBankService {
         this.inventoryService = inventoryService;
     }
 
-    /** The fixed reference list — seeded, never self-registering. */
+    /** The reference list — seeded, never self-registering, added to only by an
+     *  administrator (Business Rule 19). */
     @Transactional(readOnly = true)
     public List<BloodBankResponse> listAll() {
         return bloodBankRepository.findAllByOrderByNameAsc().stream()

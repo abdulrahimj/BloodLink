@@ -33,14 +33,28 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
      * Fetch-joined because the page shows both names on every row, and open-in-view
      * is off, so the lazy associations would otherwise fail once mapped outside the
      * transaction (or cost one query per row inside it).
+     *
+     * The three subjects are LEFT joins because each entry has exactly one of them
+     * (V14): an inner join on the account would silently drop every facility
+     * creation from the page, and an inner join on a facility every account action.
      */
-    @Query("select a from AuditLog a join fetch a.actor join fetch a.target order by a.createdAt desc, a.id desc")
+    @Query("select a from AuditLog a join fetch a.actor left join fetch a.target"
+        + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
+        + " order by a.createdAt desc, a.id desc")
     List<AuditLog> findAllNewestFirst();
 
     /** Entries about one account, oldest first — used by tests to check exactly
      *  what an action recorded. */
     @Query("select a from AuditLog a join fetch a.actor join fetch a.target where a.target.id = :targetId order by a.createdAt asc")
     List<AuditLog> findByTargetIdOldestFirst(@Param("targetId") UUID targetId);
+
+    /** Creation entries for one blood bank — used by tests (Business Rule 19). */
+    @Query("select a from AuditLog a join fetch a.actor join fetch a.targetBloodBank where a.targetBloodBank.id = :bankId")
+    List<AuditLog> findByTargetBloodBankId(@Param("bankId") UUID bankId);
+
+    /** Creation entries for one hospital — used by tests (Business Rule 19). */
+    @Query("select a from AuditLog a join fetch a.actor join fetch a.targetHospital where a.targetHospital.id = :hospitalId")
+    List<AuditLog> findByTargetHospitalId(@Param("hospitalId") UUID hospitalId);
 
     long count();
 }

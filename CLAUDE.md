@@ -99,7 +99,8 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | location | varchar |
 | contact_phone | varchar |
 
-Seeded, not self-registering: **Makeni Regional Blood Bank**, **Holy Spirit Blood Bank**.
+Seeded, not self-registering: **Makeni Regional Blood Bank**, **Holy Spirit Blood Bank**. Further banks
+are added only by an administrator (Business Rule 19). `name` is unique case-insensitively (V14, `uq_blood_banks_name`).
 
 ### Hospital
 | field | type |
@@ -109,7 +110,8 @@ Seeded, not self-registering: **Makeni Regional Blood Bank**, **Holy Spirit Bloo
 | location | varchar |
 | contact_phone | varchar |
 
-Seeded, not self-registering: **Makeni Regional Hospital**, **Holy Spirit Hospital**.
+Seeded, not self-registering: **Makeni Regional Hospital**, **Holy Spirit Hospital**. Further hospitals
+are added only by an administrator (Business Rule 19). `name` is unique case-insensitively (V14, `uq_hospitals_name`).
 
 ### BloodInventory
 | field | type |
@@ -190,22 +192,27 @@ reach to clear it. See Business Rule 12.
 |---|---|
 | id | UUID, PK |
 | actor_user_id | UUID, FK -> User — the administrator who acted |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED |
-| target_user_id | UUID, FK -> User — the account acted upon |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (last two added in V14) |
+| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions only |
+| target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
+| target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | details | text — what changed, in words, as of that moment; never a password |
 | created_at | timestamp |
 
 Added in V12 (table `audit_log`) for Business Rule 17. **Append-only**: no row is ever updated or
 deleted. Enforced at four levels — no endpoint but GET, `AuditLogRepository` extends Spring Data's bare
 `Repository` (not `JpaRepository`, which would bring `deleteAll`), the entity is Hibernate `@Immutable`
-with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the database itself. Both
-foreign keys are ON DELETE NO ACTION, so a user who appears in the log can never be deleted.
+with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the database itself. Every
+foreign key is ON DELETE NO ACTION, so a user or facility that appears in the log can never be deleted.
+**Exactly one target per row, matching its action** — V14's `audit_log_target_matches_action` CHECK
+replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody.
 
 ### Relationships
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
 BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
 BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
-BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target)
+BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
+BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
 
 ---
 
@@ -510,13 +517,48 @@ BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N A
       `@NotBlank @Email`, and its own duplicate message.
     - **Frontend:** the Register form marks email "(optional)" and sends blank as `null`; Profile Settings
       shows "(optional)" for donors and treats a null email as empty (it previously assumed one existed).
+19. **An administrator adds new blood banks and hospitals from the Admin Console — create only.**
+    `POST /api/admin/blood-banks` and `POST /api/admin/hospitals` (`AdminFacilityController` /
+    `AdminFacilityService`), each taking `{ name, location, contactPhone }` and returning 201 with the new
+    row in the same shape as `GET /api/blood-banks` / `GET /api/hospitals`.
+    - **Create only — no edit, no delete.** Changing or removing an existing facility means deciding what
+      happens to the staff, stock, requests and donations tied to it; that is a deliberately separate,
+      later decision. No PATCH or DELETE route exists for either.
+    - **Admin-only**, by SecurityConfig's existing `/api/admin/**` rule: any other role's token is a 403 in
+      the filter chain, no token a 401.
+    - **Name is unique within its type, case-insensitively.** V14 adds unique indexes on `lower(name)`
+      (`uq_blood_banks_name`, `uq_hospitals_name`); before storing, the service trims the name and collapses
+      runs of spaces (`AdminFacilityService.normaliseName`), so "holy  spirit BLOOD bank" is the same bank.
+      A clash is a **409 "A blood bank named "X" already exists."** (or "A hospital named …"), checked up front
+      and also translated from the index's violation if two administrators race. A hospital *may* share a
+      name with a blood bank — Holy Spirit is both. V14 refuses to run, naming the rows, if duplicates already
+      exist, rather than guessing which one is real.
+    - **`contactPhone` is only required, never normalised.** It is a display-only facility number (Business
+      Rule 13 already excludes `contact_phone`), and a front-desk line may be a landline or carry an extension.
+      All three fields are `@NotBlank`, sized to their V1 columns (255 / 255 / 32).
+    - **A new blood bank needs no inventory seeding.** No `BloodInventory` rows are written:
+      `InventoryService.listInventory` already reports all eight groups for every bank, filling a missing
+      row as 0 units — Critical under Business Rule 3 — and the first "Add New Batch" or recorded donation
+      creates the real row.
+    - **Audited like Business Rule 17's actions**: `BLOOD_BANK_CREATED` / `HOSPITAL_CREATED`, in the same
+      transaction (`AuditLogService.recordBloodBankCreated` / `recordHospitalCreated`, both
+      `Propagation.MANDATORY`), naming the administrator, pointing at the new facility through
+      `target_blood_bank_id` / `target_hospital_id`, with details such as "Created blood bank X, location Y,
+      contact phone Z." The Audit Log page's "Subject" column labels these "Blood bank" / "Hospital" instead of
+      a role (`AuditLogEntryResponse.targetType`).
+    - **Frontend:** the Admin Console's Blood Banks and Hospitals sidebar links (previously inert) open one
+      shared page, `FacilitiesView`: a "Create New" button with an inline form at the top, and that type's full
+      list below, read from the existing public listing endpoints. No search, filtering or paging — two of each
+      today. A new facility joins the list the console already holds, so the Partner Facilities card and the
+      staff-account pickers pick it up without a reload.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's request status, view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, approve/reject/fulfil incoming requests, send donation appeals
-- **Administrator** — create staff and administrator accounts (Business Rule 14), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
+- **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
+  hospitals (Business Rule 19), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -542,7 +584,7 @@ BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N A
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
-    `DonorOptionalEmailIT`), every one of which is `@Transactional` and rolls back everything it writes,
+    `DonorOptionalEmailIT`, `AdminFacilityCreationIT`), every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,

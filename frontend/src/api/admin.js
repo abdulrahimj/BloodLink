@@ -1,7 +1,7 @@
 /* ================================================================
    BloodLink — admin calls
 
-   Account management and citywide reporting, all restricted server-side to
+   Account management, adding facilities, and citywide reporting, all restricted server-side to
    ADMIN (SecurityConfig gates the whole /api/admin/** prefix on the role, so
    there is nothing to scope here the way a bank- or hospital-facing call
    would need to — an administrator's view is never "my own facility").
@@ -61,6 +61,24 @@ export function editAccountDetails(userId, { phone, bloodBankId = null, hospital
     method: 'PATCH',
     body: { phone, bloodBankId, hospitalId },
   });
+}
+
+/**
+ * POST /api/admin/blood-banks — adds a blood bank (Business Rule 19).
+ *
+ * `payload` is { name, location, contactPhone }, all required. Resolves to the new
+ * row in the same shape GET /api/blood-banks returns, so it can be added straight
+ * to that list. A name another blood bank already has (ignoring case and spacing)
+ * is a 409. The contact phone is stored as typed — it is a facility's display
+ * number, not a login, so Business Rule 13's format does not apply.
+ */
+export function createBloodBank(payload) {
+  return apiRequest('/api/admin/blood-banks', { method: 'POST', body: payload });
+}
+
+/** POST /api/admin/hospitals — adds a hospital; the same rules as createBloodBank. */
+export function createHospital(payload) {
+  return apiRequest('/api/admin/hospitals', { method: 'POST', body: payload });
 }
 
 /**

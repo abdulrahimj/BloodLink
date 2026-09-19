@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   getAdminUsers, createStaffAccount, updateUserStatus, editAccountDetails, getAuditLog,
-  getDonationTrends, getRequestOutcomes,
+  getDonationTrends, getRequestOutcomes, createBloodBank, createHospital,
 } from "../api/admin.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
@@ -34,8 +34,10 @@ import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "
    The mockup drew the user table beneath the charts on one screen; it was
    moved to its own page once the table gained a Create Account flow and a
    donor register that only grows — a list to work through does not belong
-   on a summary screen. The other sidebar entries (Blood Banks, Hospitals,
-   Reports, Audit Log, Settings) are still the mockup's inert buttons.
+   on a summary screen. Audit Log and Settings were wired later, and Blood
+   Banks and Hospitals after them (Business Rule 19): each lists that type's
+   facilities and lets an administrator add one — create only, no edit or
+   delete. Reports is still the mockup's inert button.
 
    The notification bell is deliberately left exactly as the mockup drew it —
    a static icon with an always-on dot, no live count. No Notification type
@@ -103,24 +105,53 @@ const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
  *  state rather than a URL hash, the same way BloodBankPortal switches Dashboard /
  *  Blood Inventory: App.jsx's hash routing chooses which portal a role sees, and
  *  nothing inside a portal has ever needed its own address. */
-const VIEW = { DASHBOARD: "dashboard", USERS: "users", AUDIT: "audit", SETTINGS: "settings" };
+const VIEW = {
+  DASHBOARD: "dashboard", USERS: "users", BANKS: "banks", HOSPITALS: "hospitals",
+  AUDIT: "audit", SETTINGS: "settings",
+};
 
 /** The header's title and subtitle for each view. */
 const HEADINGS = {
   [VIEW.DASHBOARD]: { title: "System Administration", sub: "BloodLink · Makeni City deployment" },
   [VIEW.USERS]: { title: "User Accounts", sub: "Create, edit, suspend and reactivate accounts across all four roles" },
+  [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
+  [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.AUDIT]: { title: "Audit Log", sub: "Every administrator action, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
 /** How each audit action reads, and the badge tone it wears: the two that remove
  *  or restrict access in red and green (the same pair Suspend/Activate use), a
- *  creation in navy, an edit in amber. */
+ *  creation in navy, an edit in amber. A facility being added is a creation too,
+ *  so it wears the same navy; the Subject column says what kind of thing it was. */
 const AUDIT_ACTION = {
   ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
   ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
   ACCOUNT_SUSPENDED: { label: "Suspended", tone: "ad-au-suspended" },
   ACCOUNT_REACTIVATED: { label: "Reactivated", tone: "ad-au-reactivated" },
+  BLOOD_BANK_CREATED: { label: "Created", tone: "ad-au-created" },
+  HOSPITAL_CREATED: { label: "Created", tone: "ad-au-created" },
+};
+
+/** The line under an audit entry's subject: the account's role, or which kind of
+ *  facility it is (Business Rule 19 — a facility has no role). */
+function auditSubjectKind(entry) {
+  if (entry.targetType === "BLOOD_BANK") return "Blood bank";
+  if (entry.targetType === "HOSPITAL") return "Hospital";
+  return ROLE_LABEL[entry.targetRole] ?? entry.targetRole;
+}
+
+/** What the Blood Banks and Hospitals pages differ by — everything else about the
+ *  two is the same page (FacilitiesView). */
+const FACILITY_KIND = {
+  [VIEW.BANKS]: {
+    noun: "blood bank", plural: "Blood Banks", create: createBloodBank,
+    namePlaceholder: "e.g. Kabala Road Blood Bank",
+  },
+  [VIEW.HOSPITALS]: {
+    noun: "hospital", plural: "Hospitals", create: createHospital,
+    namePlaceholder: "e.g. Teko Barracks Hospital",
+  },
 };
 
 /** The role filter's choices, in the order the buttons appear. "ALL" first, then
@@ -579,6 +610,21 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-summary { font-size: clamp(11px, 1.55vh, 13.5px); line-height: 1.6; color: #3A3A3A; }
         .ad-summary b { color: var(--ink); }
 
+        /* ===== BLOOD BANKS / HOSPITALS — Business Rule 19 ===== */
+        /* The "add one" panel sits above the list and sizes to its content; the
+           list below takes the rest of the page, like the User Accounts table. */
+        .ad-fac-top { flex: 0 0 auto; }
+        .ad-fac-head { align-items: center; }
+        .ad-fac-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: clamp(8px, .9vw, 14px); }
+        /* Green: something was added and it worked — the app's success tone. */
+        .ad-fac-done {
+          background: #E7F2EB; color: var(--green); border-radius: 7px;
+          font-size: clamp(10px, 1.4vh, 12.5px); font-weight: 600; line-height: 1.45;
+          padding: clamp(7px, 1.1vh, 10px) 11px;
+        }
+        .ad-fac-done b { color: var(--green); }
+        .ad-row-new td { background: #F3F9F5; }
+
         @media (prefers-reduced-motion: reduce) { .ad-root * { transition: none !important; } }
       `}</style>
 
@@ -601,14 +647,13 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
-        {/* Dashboard, User Accounts, Audit Log and Settings are wired; the rest
-            remain the mockup's own inert entries, exactly as before — nothing
-            behind them exists yet. */}
+        {/* Every entry is wired except Reports, which remains the mockup's own
+            inert button — nothing behind it exists yet. */}
         <nav className="ad-nav">
           <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
           <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
-          <button type="button"><BankIcon /> Blood Banks</button>
-          <button type="button"><HospitalIcon /> Hospitals</button>
+          <NavButton view={VIEW.BANKS} current={view} onSelect={setView}><BankIcon /> Blood Banks</NavButton>
+          <NavButton view={VIEW.HOSPITALS} current={view} onSelect={setView}><HospitalIcon /> Hospitals</NavButton>
           <button type="button"><ChartIcon /> Reports</button>
           <NavButton view={VIEW.AUDIT} current={view} onSelect={setView}><LogIcon /> Audit Log</NavButton>
           <NavButton view={VIEW.SETTINGS} current={view} onSelect={setView}><GearIcon /> Settings</NavButton>
@@ -664,6 +709,15 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
               setUsers={setUsers}
               banks={banks}
               hospitals={hospitals}
+            />
+          ) : view === VIEW.BANKS || view === VIEW.HOSPITALS ? (
+            // Keyed by view so switching between the two pages starts each with
+            // its own closed, empty form rather than carrying one over.
+            <FacilitiesView
+              key={view}
+              kind={FACILITY_KIND[view]}
+              facilities={view === VIEW.BANKS ? banks : hospitals}
+              setFacilities={view === VIEW.BANKS ? setBanks : setHospitals}
             />
           ) : (
             <DashboardView
@@ -1205,6 +1259,186 @@ function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
 }
 
 /**
+ * Blood Banks / Hospitals — one page, used for both (Business Rule 19).
+ *
+ * Lists that type's facilities, with a "Create New" button at the top that opens
+ * an inline form above the list. Create only: there is no edit or delete, because
+ * changing or removing a facility means deciding what happens to the staff, stock
+ * and requests tied to it — a separate, later decision. No search, filtering or
+ * paging either; at two of each today, the whole list fits on screen.
+ *
+ * The list is the one the console shell already fetched (GET /api/blood-banks or
+ * /api/hospitals) and shares with the Dashboard's Partner Facilities card and the
+ * User Accounts pickers. A new facility is added to that shared list from the 201
+ * response, so it appears here, in that card and in those pickers at once, without
+ * a reload.
+ */
+function FacilitiesView({ kind, facilities, setFacilities }) {
+  const [creating, setCreating] = useState(false);
+  const [justAdded, setJustAdded] = useState(null);
+
+  /** Adds the new row in name order — the order the GET endpoint returns — so it
+   *  sits where a reload would put it. */
+  function handleCreated(created) {
+    setFacilities((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+    setCreating(false);
+    setJustAdded(created);
+  }
+
+  return (
+    <>
+      <div className="ad-panel ad-fac-top">
+        <div className="ad-panel-head ad-fac-head">
+          <div className="ad-panel-title">Add a {kind.noun}</div>
+          {!creating && (
+            <button type="button" className="ad-new" onClick={() => { setCreating(true); setJustAdded(null); }}>
+              <PlusIcon /> Create New
+            </button>
+          )}
+        </div>
+
+        {creating ? (
+          <CreateFacilityForm kind={kind} onCancel={() => setCreating(false)} onCreated={handleCreated} />
+        ) : justAdded ? (
+          <div className="ad-fac-done" role="status">
+            <b>{justAdded.name}</b> has been added and recorded in the Audit Log.
+          </div>
+        ) : (
+          <div className="ad-hint">
+            New {kind.noun}s are available immediately — in staff pickers and across BloodLink. They cannot be
+            edited or removed here once created, so check the name before saving.
+          </div>
+        )}
+      </div>
+
+      <div className="ad-panel ad-table-panel">
+        <div className="ad-panel-head">
+          <div className="ad-panel-title">All {kind.plural}</div>
+          <div className="ad-panel-link">{facilities.length} total</div>
+        </div>
+        <div className="ad-table-scroll">
+          <table className="ad-table">
+            <thead>
+              <tr>
+                <th style={{ width: "40%" }}>Name</th>
+                <th style={{ width: "35%" }}>Location</th>
+                <th style={{ width: "25%" }}>Contact phone</th>
+              </tr>
+            </thead>
+            <tbody>
+              {facilities.length === 0 && (
+                <tr><td colSpan={3} className="ad-empty">No {kind.noun}s on record.</td></tr>
+              )}
+              {facilities.map((f) => (
+                <tr key={f.id} className={justAdded?.id === f.id ? "ad-row-new" : undefined}>
+                  <td><span className="ad-user-name">{f.name}</span></td>
+                  <td>{f.location}</td>
+                  <td className="ad-muted">{f.contactPhone}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The inline form behind "Create New". Three fields, all required; the server
+ * checks them too and its messages are shown beside the field they concern.
+ *
+ * A duplicate name comes back as a 409 with a message naming it, shown at the top
+ * of the form. The contact phone is sent as typed: it is a facility's front-desk
+ * number, not a login, so it is not reformatted (Business Rule 13 does not apply).
+ */
+function CreateFacilityForm({ kind, onCancel, onCreated }) {
+  const [form, setForm] = useState({ name: "", location: "", contactPhone: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const nameRef = useRef(null);
+
+  useEffect(() => { nameRef.current?.focus(); }, []);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function inputClass(field) {
+    return `ad-input${fieldErrors[field] ? " ad-input--bad" : ""}`;
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (submitting) return;
+
+    setSubmitting(true);
+    setError(null);
+    setFieldErrors({});
+    try {
+      const created = await kind.create({
+        name: form.name.trim(),
+        location: form.location.trim(),
+        contactPhone: form.contactPhone.trim(),
+      });
+      onCreated(created);
+    } catch (err) {
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="ad-form" onSubmit={handleSubmit} noValidate aria-label={`New ${kind.noun}`}>
+      {error && <div className="ad-form-alert" role="alert">{error}</div>}
+
+      <div className="ad-fac-fields">
+        <div className="ad-field">
+          <label className="ad-label" htmlFor="ad-fac-name">Name</label>
+          <input
+            id="ad-fac-name" ref={nameRef} className={inputClass("name")} type="text" autoComplete="off"
+            placeholder={kind.namePlaceholder}
+            value={form.name} onChange={(e) => update("name", e.target.value)}
+          />
+          {fieldErrors.name && <span className="ad-err">{fieldErrors.name}</span>}
+        </div>
+
+        <div className="ad-field">
+          <label className="ad-label" htmlFor="ad-fac-location">Location</label>
+          <input
+            id="ad-fac-location" className={inputClass("location")} type="text" autoComplete="off"
+            placeholder="e.g. Kabala Road, Makeni"
+            value={form.location} onChange={(e) => update("location", e.target.value)}
+          />
+          {fieldErrors.location && <span className="ad-err">{fieldErrors.location}</span>}
+        </div>
+
+        <div className="ad-field">
+          <label className="ad-label" htmlFor="ad-fac-phone">Contact phone</label>
+          <input
+            id="ad-fac-phone" className={inputClass("contactPhone")} type="tel" autoComplete="off"
+            placeholder="e.g. 076 900 005"
+            value={form.contactPhone} onChange={(e) => update("contactPhone", e.target.value)}
+          />
+          {fieldErrors.contactPhone && <span className="ad-err">{fieldErrors.contactPhone}</span>}
+        </div>
+      </div>
+
+      <div className="ad-dialog-actions">
+        <button type="button" className="ad-dialog-cancel" onClick={onCancel} disabled={submitting}>
+          Cancel
+        </button>
+        <button type="submit" className="ad-dialog-confirm ad-dialog-confirm--go" disabled={submitting}>
+          {submitting ? "Saving…" : `Create ${kind.noun}`}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
  * Audit Log — every administrator action, newest first (Business Rule 17).
  *
  * Read-only by construction, not just by omission of buttons: the backend has no
@@ -1248,7 +1482,9 @@ function AuditLogView() {
               <th style={{ width: "15%" }}>When</th>
               <th style={{ width: "11%" }}>Action</th>
               <th style={{ width: "16%" }}>Performed by</th>
-              <th style={{ width: "20%" }}>Account</th>
+              {/* "Subject" rather than "Account": since Business Rule 19 an entry can
+                  be about a blood bank or hospital as well as an account. */}
+              <th style={{ width: "20%" }}>Subject</th>
               <th style={{ width: "38%" }}>Details</th>
             </tr>
           </thead>
@@ -1268,7 +1504,7 @@ function AuditLogView() {
                   <td>{entry.actorName}</td>
                   <td>
                     <div className="ad-user-name">{entry.targetName}</div>
-                    <div className="ad-muted ad-log-ago">{ROLE_LABEL[entry.targetRole] ?? entry.targetRole}</div>
+                    <div className="ad-muted ad-log-ago">{auditSubjectKind(entry)}</div>
                   </td>
                   <td className="ad-log-details">{entry.details}</td>
                 </tr>

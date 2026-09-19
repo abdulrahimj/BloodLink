@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Seeded, not self-registering: "Makeni Regional Blood Bank", "Holy Spirit Blood Bank".
+ * Seeded (V4): "Makeni Regional Blood Bank", "Holy Spirit Blood Bank". Never
+ * self-registering; further banks are added only by an administrator
+ * (POST /api/admin/blood-banks, Business Rule 19). Name is unique, case-insensitively (V14).
  */
 @Entity
 @Table(name = "blood_banks")
