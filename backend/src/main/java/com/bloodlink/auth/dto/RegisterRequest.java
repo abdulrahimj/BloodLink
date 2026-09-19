@@ -5,7 +5,6 @@ import java.time.LocalDate;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Gender;
 
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Past;
@@ -33,9 +32,15 @@ public record RegisterRequest(
     @Size(max = 32)
     String phone,
 
-    @NotBlank(message = "Email address is required")
-    @Email(message = "Enter a valid email address")
-    @Size(max = 255)
+    /**
+     * Optional (Business Rule 18): null or blank means the donor has no email.
+     * The format check is not an annotation here: blank has to be accepted and
+     * converted to null, and Bean Validation's @Email is too loose (it accepts
+     * "name@gmail"), so AuthService applies EmailAddress.normalizeOptional, which
+     * does both and reports a bad address on this field. Only the length is bounded
+     * here, at the column width, so an oversized value is refused before anything else.
+     */
+    @Size(max = 255, message = "Email address must be 255 characters or fewer")
     String email,
 
     @NotNull(message = "Date of birth is required")

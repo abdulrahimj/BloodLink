@@ -281,6 +281,55 @@ class AccountServiceTest {
         assertThat(updated.fullName()).isEqualTo("Renamed");
     }
 
+    // ---------- email by role (Business Rule 18) ----------
+
+    @Test
+    void aDonorWithNoEmailCanRenameThemselvesAndKeepNone() {
+        account.setRole(Role.DONOR);
+        account.setEmail(null);
+
+        AccountResponse updated = service.updateMyDetails(account.getId(), details("Isatu Renamed", ""));
+
+        assertThat(updated.fullName()).isEqualTo("Isatu Renamed");
+        assertThat(updated.email()).isNull();
+        verify(userRepository, never()).existsByEmail(any());
+    }
+
+    @Test
+    void aDonorCanRemoveTheirEmail() {
+        account.setRole(Role.DONOR);
+
+        AccountResponse updated = service.updateMyDetails(account.getId(), details("Isatu Bangura", "   "));
+
+        assertThat(updated.email()).isNull();
+    }
+
+    @Test
+    void aDonorsNewEmailGetsTheSameFormatCheckAsRegistration() {
+        account.setRole(Role.DONOR);
+
+        assertThatThrownBy(() -> service.updateMyDetails(account.getId(), details("Isatu Bangura", "isatu@gmail")))
+            .isInstanceOf(InvalidFieldException.class)
+            .extracting(ex -> ((InvalidFieldException) ex).getField())
+            .isEqualTo("email");
+
+        assertThat(account.getEmail()).isEqualTo("isatu@example.com");
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @ParameterizedTest(name = "a {0} account must keep an email")
+    @ValueSource(strings = { "ADMIN", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF" })
+    void staffAndAdministratorsMustKeepAnEmail(String role) {
+        account.setRole(Role.valueOf(role));
+
+        assertThatThrownBy(() -> service.updateMyDetails(account.getId(), details("Isatu Bangura", " ")))
+            .isInstanceOf(InvalidFieldException.class)
+            .hasMessage("Email address is required");
+
+        assertThat(account.getEmail()).isEqualTo("isatu@example.com");
+        verify(userRepository, never()).save(any(User.class));
+    }
+
     // ---------- reading ----------
 
     @Test

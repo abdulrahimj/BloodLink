@@ -37,7 +37,12 @@ public class User {
     @Column(name = "full_name", nullable = false)
     private String fullName;
 
-    @Column(name = "email", nullable = false, unique = true)
+    /**
+     * Optional for DONOR, required for every other role (Business Rule 18, V13).
+     * Null — never an empty string — when a donor registered without one. Still
+     * unique when present; any number of donors may have none.
+     */
+    @Column(name = "email", unique = true)
     private String email;
 
     @Column(name = "password_hash", nullable = false)

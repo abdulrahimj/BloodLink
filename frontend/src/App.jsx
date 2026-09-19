@@ -134,7 +134,8 @@ function SignedInPlaceholder({ user, onSignOut }) {
         <p className="status status--ok">
           {user.fullName} · {user.role}
         </p>
-        <p>{user.email} · {user.phone}</p>
+        {/* A donor may have no email (Business Rule 18) — list only what exists. */}
+        <p>{[user.email, user.phone].filter(Boolean).join(" · ")}</p>
         <button type="button" onClick={onSignOut}>Sign out</button>
       </section>
     </main>

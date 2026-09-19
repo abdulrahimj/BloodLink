@@ -70,7 +70,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 |---|---|
 | id | UUID, PK |
 | full_name | varchar |
-| email | varchar |
+| email | varchar, unique — nullable since V13, but only for DONOR (DB check `users_email_required_for_staff`); "none" is always NULL, never `''` (`users_email_not_blank`). See Business Rule 18. |
 | password_hash | varchar |
 | role | enum: DONOR, HOSPITAL_STAFF, BLOOD_BANK_STAFF, ADMIN |
 | phone | varchar — unique (V2) and the login credential; stored in exactly one normalised format, `+232` + 8 digits. See Business Rule 13. |
@@ -484,6 +484,32 @@ BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N A
       nothing inside PostgreSQL can stop its own owner; the triggers stop every accidental or
       application-level change. A moved staff member's server-side access follows the new facility on
       their next request, but their browser shows the old facility until they sign in again.
+18. **Email is optional for donors, format-checked when given, and unique when present. Staff and
+    administrator accounts still require one, exactly as before.** Many donors have a phone but no email,
+    and phone is the login (Business Rule 13), so requiring an email turned some away for no reason.
+    - **Blank means none, stored as NULL.** `EmailAddress.normalizeOptional` (`backend/.../common/`) is the
+      one shared function — the same pattern as `PhoneNumber.normalize`: null/blank → `null`; anything else
+      is trimmed, lower-cased and must match `name@domain.tld` (dotted domain, 2–24 letter ending; no
+      leading/trailing/double dots; ≤ 64 before the `@`, ≤ 254 overall). A bad address is a 400 on the
+      `email` field. Deliberately stricter than Bean Validation's `@Email`, which accepts `name@gmail`.
+    - **Format only — never a network check.** No DNS or deliverability lookup: that would put a network
+      call inside registration, against this system's requirement to work over intermittent connections.
+      Known limit: addresses in non-Latin scripts are refused (the donor can register without one).
+    - **Unique when present:** a clash is a 409 with the message **"This email is already registered"**,
+      compared after lower-casing. The duplicate check is skipped entirely when there is no email.
+    - **Two donors with no email never collide — by standard SQL NULL semantics, not custom code.** V1's
+      `users_email_key` is a plain `UNIQUE (email)`, which in PostgreSQL is NULLS DISTINCT: NULL never
+      equals NULL, so any number of rows may have none while two real addresses still cannot match. Do
+      not change it to NULLS NOT DISTINCT. Because two `''` values *would* collide, V13 forbids storing
+      an empty string at all (`users_email_not_blank`), and requires an email for every non-DONOR role
+      (`users_email_required_for_staff`).
+    - **Where it applies:** donor registration (`POST /api/auth/register`) and a donor's own Profile
+      Settings (Business Rule 16) — a donor may leave the email blank there too (keeping or clearing it),
+      with the same format check. For every other role Profile Settings still requires one. Staff and
+      administrator creation (Business Rule 14, `CreateStaffAccountPayload`) is **unchanged**:
+      `@NotBlank @Email`, and its own duplicate message.
+    - **Frontend:** the Register form marks email "(optional)" and sends blank as `null`; Profile Settings
+      shows "(optional)" for donors and treats a null email as empty (it previously assumed one existed).
 
 ## Actors (roles) and what each can do
 
@@ -515,9 +541,9 @@ BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N A
     disagree, something that was not yours was destroyed — say so immediately rather than reporting success.
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
-    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`),
-    every one of which is `@Transactional` and rolls back everything it writes, so re-running them never
-    leaves residue to clean up.
+    (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
+    `DonorOptionalEmailIT`), every one of which is `@Transactional` and rolls back everything it writes,
+    so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,
     not the number of test classes, is what would break the "always safe to rerun" guarantee this

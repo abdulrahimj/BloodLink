@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { changeMyPassword, getMyAccount, updateMyDetails } from "../api/account.js";
+import { initials } from "../lib/dates.js";
 
 /* ================================================================
    BloodLink — Profile Settings (Business Rule 16)
@@ -111,14 +112,20 @@ export default function ProfileSettings({ onUserUpdated }) {
  * enabled once something has actually changed.
  */
 function DetailsCard({ account, onSaved }) {
+  // A donor may have no email at all (Business Rule 18) — the account arrives with
+  // email: null. The input always holds a string, so "none" is "" here; comparing
+  // against account.email directly would call .trim() on null and break the screen.
+  const storedEmail = account.email ?? "";
+  const emailOptional = account.role === "DONOR";
+
   const [fullName, setFullName] = useState(account.fullName);
-  const [email, setEmail] = useState(account.email);
+  const [email, setEmail] = useState(storedEmail);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [saved, setSaved] = useState(false);
 
-  const changed = fullName.trim() !== account.fullName || email.trim().toLowerCase() !== account.email;
+  const changed = fullName.trim() !== account.fullName || email.trim().toLowerCase() !== storedEmail;
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -129,11 +136,13 @@ function DetailsCard({ account, onSaved }) {
     setFieldErrors({});
     setSaved(false);
     try {
+      // Blank is sent as-is: for a donor the server stores it as "no email"; for
+      // any other role it is refused with a message under the box.
       const updated = await updateMyDetails({ fullName: fullName.trim(), email: email.trim() });
       // Re-seed the inputs from what the server stored (e.g. the lower-cased
       // email), so "changed" goes back to false and Save disables again.
       setFullName(updated.fullName);
-      setEmail(updated.email);
+      setEmail(updated.email ?? "");
       setSaved(true);
       onSaved(updated);
     } catch (err) {
@@ -147,7 +156,9 @@ function DetailsCard({ account, onSaved }) {
   return (
     <form className="ps-card" onSubmit={handleSubmit} noValidate>
       <div className="ps-card-head">
-        <div className="ps-avatar" aria-hidden="true">{initialsOf(account.fullName)}</div>
+        {/* The app's shared initials() — the same one every portal's header avatar
+            uses, so the two circles on this screen always show the same letters. */}
+        <div className="ps-avatar" aria-hidden="true">{initials(account.fullName)}</div>
         <div>
           <div className="ps-card-title">Your details</div>
           <div className="ps-card-sub">How you appear across BloodLink.</div>
@@ -164,7 +175,10 @@ function DetailsCard({ account, onSaved }) {
         />
       </Field>
 
-      <Field label="Email address" htmlFor="ps-email" error={fieldErrors.email}>
+      <Field
+        label={emailOptional ? "Email address (optional)" : "Email address"}
+        htmlFor="ps-email" error={fieldErrors.email}
+      >
         <input
           id="ps-email" className={inputClass(fieldErrors.email)} type="email" autoComplete="email"
           value={email} onChange={(e) => { setEmail(e.target.value); setSaved(false); }}
@@ -353,15 +367,6 @@ function Field({ label, htmlFor, error, hint, children }) {
 
 function inputClass(error) {
   return `ps-input${error ? " ps-input--bad" : ""}`;
-}
-
-/** "Isatu Bangura" -> "IB"; one name -> its first letter. */
-function initialsOf(name) {
-  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0][0];
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
-  return (first + last).toUpperCase();
 }
 
 function LockIcon() {

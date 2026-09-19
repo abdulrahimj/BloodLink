@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.auth.dto.RegisterRequest;
+import com.bloodlink.common.EmailAddress;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.User;
@@ -68,17 +69,22 @@ public class AuthService {
      *
      * Phone and email are both normalised before anything is checked or written, for
      * the same reason: each is a unique identifier compared by exact string equality,
-     * so the stored spelling decides whether a later match succeeds. Email is lower-cased;
-     * phone goes through {@link PhoneNumber#normalize} — the same call login makes, so
-     * the value written here is character-for-character the value login will compare
-     * against, whichever of the two accepted formats either was typed in.
+     * so the stored spelling decides whether a later match succeeds. Phone goes through
+     * {@link PhoneNumber#normalize} — the same call login makes, so the value written
+     * here is character-for-character the value login will compare against, whichever
+     * of the two accepted formats was typed in. Email is optional for a donor (Business
+     * Rule 18) and goes through {@link EmailAddress#normalizeOptional}: blank becomes
+     * no email at all, anything else is lower-cased and must look like a real address.
      */
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         // Also the format gate: an unusable number is a 400 naming the phone field,
         // raised before any row is written, rather than an account nobody can sign into.
         String phone = PhoneNumber.normalize(request.phone());
-        String email = request.email().trim().toLowerCase();
+        // Optional (Business Rule 18): null when the donor left it blank; otherwise
+        // trimmed, lower-cased and format-checked — a malformed address is a 400 on
+        // the email field, raised here before anything is written.
+        String email = EmailAddress.normalizeOptional(request.email());
 
         // Checked up front so a duplicate returns an actionable 409 naming the field,
         // rather than a constraint violation surfacing from the database as a 500.
@@ -86,8 +92,11 @@ public class AuthService {
         if (userRepository.existsByPhone(phone)) {
             throw new ConflictException("An account already exists for this phone number.");
         }
-        if (userRepository.existsByEmail(email)) {
-            throw new ConflictException("An account already exists for this email address.");
+        // Only an address that exists can clash. No email is never a conflict — not
+        // even with another donor who also has none — so the check is skipped rather
+        // than asking the database whether a NULL is "taken".
+        if (email != null && userRepository.existsByEmail(email)) {
+            throw new ConflictException("This email is already registered");
         }
 
         User user = new User();

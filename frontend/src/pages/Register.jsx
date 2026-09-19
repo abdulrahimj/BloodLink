@@ -99,7 +99,9 @@ export default function Register({ onSignedIn }) {
       const auth = await registerDonor({
         fullName: form.fullName.trim(),
         phone: form.phone.trim(),
-        email: form.email.trim(),
+        // Optional (Business Rule 18): blank is sent as null, meaning "no email".
+        // The server checks the format of anything else and lower-cases it.
+        email: form.email.trim() || null,
         dateOfBirth: form.dateOfBirth,
         gender: form.gender,
         // "I don't know yet", or nothing chosen at all, is sent as null — the group
@@ -111,8 +113,13 @@ export default function Register({ onSignedIn }) {
       onSignedIn?.(auth);
     } catch (err) {
       // Covers a duplicate phone/email (409) and field validation failures (400);
-      // the backend's message is written for display, so it is shown verbatim.
-      setError(err.message);
+      // the backend's message is written for display, so it is shown verbatim —
+      // once. A single-field refusal (a malformed email or phone) carries the same
+      // sentence as its message and its field error, so the banner is skipped when
+      // the box already says it; a general one ("Please correct the highlighted
+      // fields.") matches no field and still shows at the top.
+      const fieldMessages = Object.values(err.fieldErrors ?? {});
+      setError(fieldMessages.includes(err.message) ? null : err.message);
       setFieldErrors(err.fieldErrors ?? {});
     } finally {
       setSubmitting(false);
@@ -188,6 +195,7 @@ export default function Register({ onSignedIn }) {
         /* Wiring states — added for real submit feedback, using the existing tokens. */
         .au-input--bad { border-color: var(--red); }
         .au-err { font-size: clamp(9px, 1.25vh, 11px); font-weight: 500; color: var(--red); }
+        .au-optional { font-weight: 500; color: var(--ink-muted); }
         .au-alert {
           background: rgba(200,16,46,.07);
           border: 1.5px solid rgba(200,16,46,.28);
@@ -299,7 +307,11 @@ export default function Register({ onSignedIn }) {
               {fieldErrors.phone && <span className="au-err">{fieldErrors.phone}</span>}
             </div>
             <div className="au-field">
-              <label className="au-label" htmlFor="rg-email">Email Address</label>
+              {/* Optional: many donors have a phone but no email, and phone is
+                  the sign-in (Business Rule 18). */}
+              <label className="au-label" htmlFor="rg-email">
+                Email Address <span className="au-optional">(optional)</span>
+              </label>
               <input
                 id="rg-email" className={inputClass("email")} type="email"
                 placeholder="you@example.com" autoComplete="email"

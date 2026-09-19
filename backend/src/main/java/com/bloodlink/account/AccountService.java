@@ -12,7 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.account.dto.AccountResponse;
 import com.bloodlink.account.dto.ChangePasswordPayload;
 import com.bloodlink.account.dto.UpdateAccountPayload;
+import com.bloodlink.common.EmailAddress;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.IncorrectCurrentPasswordException;
@@ -84,17 +86,22 @@ public class AccountService {
      * Normalised the way registration normalises them — name trimmed, email trimmed
      * and lower-cased — so "Isatu@Example.com" and "isatu@example.com" remain one
      * address and the unique constraint means what it says.
+     *
+     * Email follows the account's role (Business Rule 18): a donor may leave it blank,
+     * which keeps or clears it to none, and a donor's address gets the same strict
+     * format check as registration. Every other role must keep one, as before.
      */
     @Transactional
     public AccountResponse updateMyDetails(UUID userId, UpdateAccountPayload payload) {
         rejectUnrecognised(payload.unrecognised(), "fullName", "email");
 
         User user = load(userId);
-        String email = payload.email().trim().toLowerCase();
+        String email = emailFor(user, payload.email());
 
-        // Only an email that actually changes can collide. Re-saving your own address
-        // must not be refused as "already registered" — by you.
-        if (!email.equals(user.getEmail()) && userRepository.existsByEmail(email)) {
+        // Only an email that actually changes can collide — re-saving your own address
+        // must not be refused as "already registered" by you — and no email never
+        // collides with anything.
+        if (email != null && !email.equals(user.getEmail()) && userRepository.existsByEmail(email)) {
             throw new ConflictException("An account already exists for this email address.");
         }
 
@@ -169,6 +176,25 @@ public class AccountService {
             field,
             "'" + field + "' cannot be changed here. This request accepts only: " + String.join(", ", allowed) + "."
         );
+    }
+
+    /**
+     * The email to store for this account, by its role (Business Rule 18).
+     *
+     * A donor's goes through the same shared function registration uses, so the two
+     * cannot disagree about what a valid address is or what "blank" means. Staff and
+     * administrators must have one — V13's users_email_required_for_staff constraint
+     * would refuse the write anyway, but a 400 on the field says it far better than a
+     * database error would.
+     */
+    private static String emailFor(User user, String raw) {
+        if (user.getRole() == Role.DONOR) {
+            return EmailAddress.normalizeOptional(raw);
+        }
+        if (raw == null || raw.isBlank()) {
+            throw new InvalidFieldException("email", "Email address is required");
+        }
+        return raw.trim().toLowerCase();
     }
 
     /** The caller's row. A missing one is a 404, though a valid token for a

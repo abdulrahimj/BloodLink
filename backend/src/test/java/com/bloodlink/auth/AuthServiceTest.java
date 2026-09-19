@@ -37,6 +37,7 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.security.JwtService;
 import com.bloodlink.web.error.AccountSuspendedException;
 import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.InvalidPhoneNumberException;
 
 /**
@@ -89,10 +90,16 @@ class AuthServiceTest {
      *  it — the point of several tests below is that the way it is typed does not
      *  change what gets stored. */
     private static RegisterRequest request(String bloodTypeLabel, String phone) {
+        return withEmail(bloodTypeLabel, phone, "Aminata@Example.com");
+    }
+
+    /** A registration with the email given exactly as the test needs — including
+     *  none at all, which Business Rule 18 allows. */
+    private static RegisterRequest withEmail(String bloodTypeLabel, String phone, String email) {
         return new RegisterRequest(
             "Aminata Kamara",
             phone,
-            "Aminata@Example.com",
+            email,
             LocalDate.of(2000, 1, 1),
             Gender.FEMALE,
             bloodTypeLabel,
@@ -230,11 +237,54 @@ class AuthServiceTest {
     @Test
     void duplicateEmailIsRefusedAndNothingIsWritten() {
         AuthService service = newService();
-        when(userRepository.existsByEmail(anyString())).thenReturn(true);
+        // Compared after lower-casing: the stored address and the typed one differ
+        // only in case, and are still the same address.
+        when(userRepository.existsByEmail("aminata@example.com")).thenReturn(true);
 
         assertThatThrownBy(() -> service.register(request("O+")))
             .isInstanceOf(ConflictException.class)
-            .hasMessageContaining("email address");
+            .hasMessage("This email is already registered");
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(donorRepository, never()).save(any(Donor.class));
+    }
+
+    // ---------- optional, format-checked email (Business Rule 18) ----------
+
+    @Test
+    void aDonorCanRegisterWithNoEmail() {
+        newService().register(withEmail("O+", "+232 76 000 001", null));
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+
+        assertThat(captor.getValue().getEmail()).isNull();
+        // No address, nothing to be a duplicate of — the database is not even asked.
+        verify(userRepository, never()).existsByEmail(any());
+    }
+
+    @Test
+    void aBlankEmailIsStoredAsNoEmailNotAsAnEmptyString() {
+        // An empty string would collide with the next donor who also left it blank;
+        // NULL never collides with anything (V13).
+        newService().register(withEmail("O+", "+232 76 000 001", "   "));
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+
+        assertThat(captor.getValue().getEmail()).isNull();
+        verify(userRepository, never()).existsByEmail(any());
+    }
+
+    @Test
+    void aMalformedEmailIsRefusedOnTheEmailFieldAndNothingIsWritten() {
+        AuthService service = newService();
+
+        // The typo this check exists for: a domain with no ending. Bean Validation's
+        // own @Email would have let it through.
+        assertThatThrownBy(() -> service.register(withEmail("O+", "+232 76 000 001", "aminata@gmail")))
+            .isInstanceOf(InvalidFieldException.class)
+            .satisfies(ex -> assertThat(((InvalidFieldException) ex).getField()).isEqualTo("email"));
 
         verify(userRepository, never()).save(any(User.class));
         verify(donorRepository, never()).save(any(Donor.class));

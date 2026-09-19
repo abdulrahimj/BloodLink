@@ -24,9 +24,11 @@ import jakarta.validation.constraints.Size;
  * request with a 400 naming it. Nothing is half-applied: a request that also tried
  * to change the phone changes neither the phone nor the name.
  *
- * Both fields are required — this is the Profile Settings form's "Save changes",
- * which always submits both — rather than PATCH's usual "send only what changed".
- * A blank name or email is never a valid state to leave an account in.
+ * Both fields are always sent — this is the Profile Settings form's "Save changes",
+ * which submits both — rather than PATCH's usual "send only what changed". A blank
+ * name is never valid. A blank email is valid only for a DONOR, who may have none
+ * (Business Rule 18); for every other role AccountService refuses it, since staff
+ * and administrator accounts must keep one (Business Rule 14).
  */
 public record UpdateAccountPayload(
 
@@ -34,7 +36,9 @@ public record UpdateAccountPayload(
     @Size(max = 255)
     String fullName,
 
-    @NotBlank(message = "Email address is required")
+    /** Required for staff and administrators, optional for donors — which of the
+     *  two depends on the account's role, so AccountService decides, not an
+     *  annotation here. @Email accepts blank, so it only ever judges a real value. */
     @Email(message = "Enter a valid email address")
     @Size(max = 255)
     String email,
