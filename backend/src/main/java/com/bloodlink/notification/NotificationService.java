@@ -1,9 +1,11 @@
 package com.bloodlink.notification;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -19,7 +21,9 @@ import com.bloodlink.domain.enums.NotificationType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.notification.dto.NotificationResponse;
+import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
@@ -28,12 +32,18 @@ import com.bloodlink.web.error.NotFoundException;
 /**
  * Everything that produces a Notification, and the read side the bell icon uses.
  *
- * The four notification types in the agreed schema each have one trigger method
- * here, and each is called from the service that owns the event rather than the
- * other way round — InventoryService and RequestService know when stock moved or a
- * request changed hands; this class knows who should hear about it and how to say
- * it. Keeping the "who and how" in one place is what stops the wording and the
- * recipient rules drifting apart across four call sites.
+ * Each notification type in the agreed schema has its trigger method here, and each
+ * is called from the service that owns the event rather than the other way round —
+ * InventoryService and RequestService know when stock moved or a request received
+ * units; this class knows who should hear about it and how to say it. Keeping the
+ * "who and how" in one place is what stops the wording and the recipient rules
+ * drifting apart across call sites.
+ *
+ * REQUEST_STATUS_CHANGE has two triggers rather than one ({@link
+ * #notifyRequestStatusChange} and {@link #notifyRequestPartlyFilled}), because
+ * since Business Rule 20 a request can move without reaching a new resting state —
+ * but both speak to the same audience, the hospital that raised it, which is what
+ * makes them one type.
  *
  * Every trigger does the same two things in the same order: write a Notification
  * row per recipient (the durable record, readable later over REST), then hand it to
@@ -54,6 +64,10 @@ public class NotificationService {
     private final UserRepository userRepository;
     private final DonorRepository donorRepository;
     private final BloodInventoryRepository bloodInventoryRepository;
+    // Both only for notifyRequestProgress: which banks exist, and which of them
+    // have declined the request and so are no longer watching it.
+    private final BloodBankRepository bloodBankRepository;
+    private final BloodRequestDeclineRepository declineRepository;
     private final NotificationPublisher publisher;
 
     NotificationService(
@@ -61,12 +75,16 @@ public class NotificationService {
         UserRepository userRepository,
         DonorRepository donorRepository,
         BloodInventoryRepository bloodInventoryRepository,
+        BloodBankRepository bloodBankRepository,
+        BloodRequestDeclineRepository declineRepository,
         NotificationPublisher publisher
     ) {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.donorRepository = donorRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
+        this.bloodBankRepository = bloodBankRepository;
+        this.declineRepository = declineRepository;
         this.publisher = publisher;
     }
 
@@ -306,43 +324,42 @@ public class NotificationService {
     // ================================================================
 
     /**
-     * Tells the hospital that raised a request what has happened to it — approved,
-     * rejected, or fulfilled.
+     * Tells the hospital that raised a request what has happened to it — units
+     * received, the whole amount covered, or the request closed.
      *
      * Addressed to the staff of that hospital only. Under Business Rule 9 a hospital
      * sees nothing of another hospital's requests, and an outcome notification is
      * part of the request, so the same boundary applies here.
      *
+     * The partial case is the one Business Rule 20 added, and it says the figures
+     * rather than a state: a ward told only "partially fulfilled" still has to go
+     * and look up how much arrived, and how much is still coming, which is the only
+     * thing it actually needs to know to plan around.
+     *
      * A rejection says what it costs, because the hospital's next move depends on
-     * it: the request is closed for every blood bank, not only the one that turned
-     * it down, so waiting for a second bank to pick it up is not an option and a new
-     * request has to be raised. That is the consequence flagged for review in
-     * CLAUDE.md Business Rule 11, and until that decision changes, being explicit
-     * about it here is what stops a ward waiting on a request that is already dead.
+     * it: every blood bank declined it while nothing had been contributed, so
+     * waiting for one to pick it up is not an option and a new request has to be
+     * raised. (A request that has received units never reaches this state — see
+     * Business Rule 20 — so this message can never appear about blood that partly
+     * arrived.)
      */
     @Transactional
     public void notifyRequestStatusChange(BloodRequest request) {
-        BloodBank bank = request.getFulfilledByBloodBank();
+        BloodBank bank = request.getLastContributedByBloodBank();
+        String bankName = bank == null ? "a blood bank" : bank.getName();
         String subject = "Your request for %s of %s".formatted(
             units(request.getUnitsRequested()), request.getBloodType().getLabel()
         );
 
         String message = switch (request.getStatus()) {
-            case APPROVED -> "%s was approved by %s. The units will be issued on fulfilment."
-                .formatted(subject, bank == null ? "a blood bank" : bank.getName());
-            case FULFILLED -> "%s has been fulfilled by %s. The units have been issued."
-                .formatted(subject, bank == null ? "a blood bank" : bank.getName());
-            // Reaching REJECTED now means every blood bank declined it, not just one
-            // (Business Rule 11) — the message says so, because "rejected" alone
-            // would leave a hospital wondering whether another bank might still pick
-            // it up, which under the old shared-rejection behaviour it could not, and
-            // under the new per-bank behaviour it already has had the chance to.
+            case FULFILLED -> "%s has been fulfilled in full. The last units were issued by %s."
+                .formatted(subject, bankName);
+            case PARTIALLY_FULFILLED -> null; // said by notifyRequestPartlyFilled, which knows the figures
             case REJECTED -> ("%s was declined by every blood bank, so it is now closed. "
                 + "Please submit a new request if the blood is still needed.").formatted(subject);
-            // PENDING is the state a request is created in, never one it changes to —
-            // nothing in Business Rule 5's lifecycle leads back to it. Listed so that
-            // adding a status later fails the build here rather than silently
-            // notifying a hospital with an empty message.
+            // PENDING is the state a request is created in, and the state it stays in
+            // when a decline is not the last one outstanding. Nothing to tell the
+            // hospital either way: the request is exactly as live as it was.
             case PENDING -> null;
         };
 
@@ -355,6 +372,92 @@ public class NotificationService {
             message,
             NotificationType.REQUEST_STATUS_CHANGE
         );
+    }
+
+    /**
+     * Tells the hospital that some of its requested units have arrived, and how many
+     * are still to come (Business Rule 20).
+     *
+     * Separate from {@link #notifyRequestStatusChange} because it needs the figures
+     * that only the contribution itself knows, and because it is genuinely different
+     * news: the request has not reached a new resting state, it has moved. A
+     * contribution that completes the request is not announced here — that is a
+     * fulfilment, and the hospital hears it as one.
+     */
+    @Transactional
+    public void notifyRequestPartlyFilled(
+        BloodRequest request, BloodBank contributingBank, int unitsContributed, int unitsContributedTotal
+    ) {
+        int outstanding = request.getUnitsRequested() - unitsContributedTotal;
+        String message = "%s has issued %s towards your request for %s of %s — %d of %d units received, %s still needed."
+            .formatted(
+                contributingBank.getName(),
+                units(unitsContributed),
+                units(request.getUnitsRequested()),
+                request.getBloodType().getLabel(),
+                unitsContributedTotal,
+                request.getUnitsRequested(),
+                units(outstanding)
+            );
+
+        dispatch(
+            userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, request.getHospital().getId()),
+            message,
+            NotificationType.REQUEST_STATUS_CHANGE
+        );
+    }
+
+    // ================================================================
+    // REQUEST_PROGRESS
+    // ================================================================
+
+    /**
+     * Tells the *other* blood banks that the units outstanding on a request have
+     * changed — Business Rule 20.
+     *
+     * This is what stops cooperative fulfilment turning into duplicated fulfilment.
+     * Every bank sees every open request now, so without this two banks can each be
+     * looking at "4 units needed", each set out to cover all four, and the second
+     * one issue units nobody needed — real blood off a real shelf, for a request
+     * that was already covered.
+     *
+     * Who hears it:
+     *   • Not the contributing bank. It performed the act; its own screen already
+     *     shows the result, and telling it what it just did is noise.
+     *   • Not a bank that has declined this request. It has given its final answer
+     *     and the request is not in its queue — an alert about it would be about
+     *     something that bank can no longer act on.
+     *   • Every other bank's staff, including when the contribution completed the
+     *     request. "Nothing more is needed" is precisely the message a bank about to
+     *     issue its own units needs most.
+     */
+    @Transactional
+    public void notifyRequestProgress(
+        BloodRequest request, BloodBank contributingBank, int unitsContributed, int unitsContributedTotal
+    ) {
+        int outstanding = request.getUnitsRequested() - unitsContributedTotal;
+        String message = outstanding <= 0
+            ? "%s of %s for %s is now fully covered — %s issued by %s. No further units are needed."
+                .formatted(
+                    units(request.getUnitsRequested()), request.getBloodType().getLabel(),
+                    request.getHospital().getName(), units(unitsContributed), contributingBank.getName()
+                )
+            : "%s has issued %s towards %s's request for %s of %s — %s still needed."
+                .formatted(
+                    contributingBank.getName(), units(unitsContributed), request.getHospital().getName(),
+                    units(request.getUnitsRequested()), request.getBloodType().getLabel(), units(outstanding)
+                );
+
+        Set<UUID> excluded = new HashSet<>(declineRepository.findBloodBankIdsByRequestId(request.getId()));
+        excluded.add(contributingBank.getId());
+
+        List<User> recipients = bloodBankRepository.findAll().stream()
+            .map(BloodBank::getId)
+            .filter(bankId -> !excluded.contains(bankId))
+            .flatMap(bankId -> userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bankId).stream())
+            .toList();
+
+        dispatch(recipients, message, NotificationType.REQUEST_PROGRESS);
     }
 
     // ================================================================

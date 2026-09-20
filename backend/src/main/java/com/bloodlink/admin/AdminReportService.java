@@ -93,11 +93,14 @@ public class AdminReportService {
             ));
 
         long pending = counts.getOrDefault(RequestStatus.PENDING, 0L);
-        long approved = counts.getOrDefault(RequestStatus.APPROVED, 0L);
+        // The slice APPROVED used to occupy. A request "part way there" is the
+        // honest middle state now that several banks can fill one request
+        // (Business Rule 20); APPROVED, a claim with no units behind it, is gone.
+        long partiallyFulfilled = counts.getOrDefault(RequestStatus.PARTIALLY_FULFILLED, 0L);
         long fulfilled = counts.getOrDefault(RequestStatus.FULFILLED, 0L);
         long rejected = counts.getOrDefault(RequestStatus.REJECTED, 0L);
 
-        return new RequestOutcomeResponse(pending, approved, fulfilled, rejected,
-            pending + approved + fulfilled + rejected);
+        return new RequestOutcomeResponse(pending, partiallyFulfilled, fulfilled, rejected,
+            pending + partiallyFulfilled + fulfilled + rejected);
     }
 }

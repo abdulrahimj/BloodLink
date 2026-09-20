@@ -20,7 +20,6 @@ import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
-import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.inventory.dto.AddBatchRequest;
@@ -31,7 +30,7 @@ import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.AppealCooldownRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
-import com.bloodlink.repository.BloodRequestRepository;
+import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
@@ -52,7 +51,7 @@ public class InventoryService {
     private final BloodBankRepository bloodBankRepository;
     private final BloodInventoryRepository bloodInventoryRepository;
     private final UserRepository userRepository;
-    private final BloodRequestRepository bloodRequestRepository;
+    private final BloodRequestContributionRepository contributionRepository;
     private final NotificationService notificationService;
     // Both only for the Send Appeal button's state on each row (Business Rule 12):
     // the repository supplies this bank's cooldown rows, the policy turns them and
@@ -64,7 +63,7 @@ public class InventoryService {
         BloodBankRepository bloodBankRepository,
         BloodInventoryRepository bloodInventoryRepository,
         UserRepository userRepository,
-        BloodRequestRepository bloodRequestRepository,
+        BloodRequestContributionRepository contributionRepository,
         NotificationService notificationService,
         AppealCooldownRepository appealCooldownRepository,
         AppealCooldownPolicy appealCooldownPolicy
@@ -72,7 +71,7 @@ public class InventoryService {
         this.bloodBankRepository = bloodBankRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
         this.userRepository = userRepository;
-        this.bloodRequestRepository = bloodRequestRepository;
+        this.contributionRepository = contributionRepository;
         this.notificationService = notificationService;
         this.appealCooldownRepository = appealCooldownRepository;
         this.appealCooldownPolicy = appealCooldownPolicy;
@@ -140,9 +139,10 @@ public class InventoryService {
         YearMonth thisMonth = YearMonth.now();
         Instant monthStart = thisMonth.atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant monthEnd = thisMonth.plusMonths(1).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
-        long unitsIssued = bloodRequestRepository.sumUnitsForBankAndStatusInRange(
-            bloodBankId, RequestStatus.FULFILLED, monthStart, monthEnd
-        );
+        // Summed from this bank's own contributions (Business Rule 20), not from the
+        // size of requests it fulfilled: a request may now be filled by two banks,
+        // and each bank's figure has to be the units that actually left its shelf.
+        long unitsIssued = contributionRepository.sumUnitsForBankInRange(bloodBankId, monthStart, monthEnd);
 
         return new InventorySummaryResponse(
             bank.getId(), bank.getName(), totalUnits, expiringSoonUnits, criticalGroups,

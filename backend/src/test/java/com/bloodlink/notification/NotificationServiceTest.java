@@ -32,7 +32,9 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService.AppealReach;
 import com.bloodlink.notification.dto.NotificationResponse;
+import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
@@ -59,6 +61,8 @@ class NotificationServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private DonorRepository donorRepository;
     @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodBankRepository bloodBankRepository;
+    @Mock private BloodRequestDeclineRepository declineRepository;
     @Mock private NotificationPublisher publisher;
 
     private NotificationService service;
@@ -66,7 +70,8 @@ class NotificationServiceTest {
     @BeforeEach
     void setUp() {
         service = new NotificationService(
-            notificationRepository, userRepository, donorRepository, bloodInventoryRepository, publisher
+            notificationRepository, userRepository, donorRepository, bloodInventoryRepository,
+            bloodBankRepository, declineRepository, publisher
         );
     }
 
@@ -113,7 +118,7 @@ class NotificationServiceTest {
         request.setUnitsRequested(4);
         request.setUrgencyLevel(UrgencyLevel.EMERGENCY);
         request.setStatus(status);
-        request.setFulfilledByBloodBank(fulfiller);
+        request.setLastContributedByBloodBank(fulfiller);
         return request;
     }
 
@@ -359,21 +364,107 @@ class NotificationServiceTest {
     // ---------- REQUEST_STATUS_CHANGE ----------
 
     @Test
-    void anApprovalTellsTheRaisingHospitalWhichBankTookIt() {
+    void aFulfilmentTellsTheRaisingHospitalWhichBankIssuedTheLastUnits() {
         User hospitalStaff = user("Isatu Turay");
         when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
             .thenReturn(List.of(hospitalStaff));
         echoSavedNotifications();
 
         service.notifyRequestStatusChange(
-            request(RequestStatus.APPROVED, bank(BANK_ID, "Makeni Regional Blood Bank"))
+            request(RequestStatus.FULFILLED, bank(BANK_ID, "Makeni Regional Blood Bank"))
         );
 
         List<Notification> rows = capturedRows();
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getType()).isEqualTo(NotificationType.REQUEST_STATUS_CHANGE);
         assertThat(rows.get(0).getRecipient()).isEqualTo(hospitalStaff);
-        assertThat(rows.get(0).getMessage()).contains("approved by Makeni Regional Blood Bank");
+        assertThat(rows.get(0).getMessage())
+            .contains("fulfilled in full", "Makeni Regional Blood Bank");
+    }
+
+    /**
+     * Business Rule 20's partial case. The hospital is told the figures rather than
+     * a state, because "partially fulfilled" alone leaves a ward having to go and
+     * look up the only two numbers it can act on: what arrived, and what has not.
+     */
+    @Test
+    void aPartialContributionTellsTheHospitalHowManyUnitsArrivedAndHowManyAreLeft() {
+        User hospitalStaff = user("Isatu Turay");
+        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+            .thenReturn(List.of(hospitalStaff));
+        echoSavedNotifications();
+
+        // 3 of the 4 requested units now in, 1 still outstanding.
+        service.notifyRequestPartlyFilled(
+            request(RequestStatus.PARTIALLY_FULFILLED, bank(BANK_ID, "Makeni Regional Blood Bank")),
+            bank(BANK_ID, "Makeni Regional Blood Bank"), 3, 3
+        );
+
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.REQUEST_STATUS_CHANGE);
+        assertThat(rows.get(0).getMessage())
+            .contains("Makeni Regional Blood Bank", "3 units", "3 of 4 units received", "1 unit still needed");
+    }
+
+    // ---------- REQUEST_PROGRESS (Business Rule 20) ----------
+
+    /**
+     * The alert that stops two banks covering the same gap: every bank still
+     * watching the request hears what is left — except the one that just gave, which
+     * already knows.
+     */
+    @Test
+    void aContributionTellsTheOtherBanksWhatIsStillNeeded() {
+        BloodBank contributor = bank(BANK_ID, "Makeni Regional Blood Bank");
+        BloodBank otherBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
+        when(bloodBankRepository.findAll()).thenReturn(List.of(contributor, otherBank));
+        User otherBankStaff = user("Mohamed Kamara");
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+            .thenReturn(List.of(otherBankStaff));
+        echoSavedNotifications();
+
+        service.notifyRequestProgress(request(RequestStatus.PARTIALLY_FULFILLED, contributor), contributor, 3, 3);
+
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.REQUEST_PROGRESS);
+        assertThat(rows.get(0).getRecipient()).isEqualTo(otherBankStaff);
+        assertThat(rows.get(0).getMessage()).contains("1 unit still needed");
+        // Never back to the bank that made the contribution.
+        verify(userRepository, never()).findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID);
+    }
+
+    @Test
+    void aBankThatDeclinedTheRequestIsNotToldAboutItsProgress() {
+        BloodBank contributor = bank(BANK_ID, "Makeni Regional Blood Bank");
+        BloodBank otherBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
+        BloodRequest request = request(RequestStatus.PARTIALLY_FULFILLED, contributor);
+        when(bloodBankRepository.findAll()).thenReturn(List.of(contributor, otherBank));
+        // The only other bank has already said it cannot help.
+        when(declineRepository.findBloodBankIdsByRequestId(request.getId())).thenReturn(List.of(OTHER_BANK_ID));
+
+        service.notifyRequestProgress(request, contributor, 1, 1);
+
+        // Nobody left to tell — and no empty row written for the sake of it.
+        verify(notificationRepository).saveAll(List.of());
+        verifyNoInteractions(publisher);
+    }
+
+    @Test
+    void aContributionThatCompletesARequestTellsTheOtherBanksToStop() {
+        BloodBank contributor = bank(BANK_ID, "Makeni Regional Blood Bank");
+        BloodBank otherBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
+        when(bloodBankRepository.findAll()).thenReturn(List.of(contributor, otherBank));
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+            .thenReturn(List.of(user("Mohamed Kamara")));
+        echoSavedNotifications();
+
+        // All 4 units now covered — the message a bank about to issue its own needs.
+        service.notifyRequestProgress(request(RequestStatus.FULFILLED, contributor), contributor, 4, 4);
+
+        assertThat(capturedRows().get(0).getMessage())
+            .contains("fully covered", "No further units are needed");
     }
 
     @Test

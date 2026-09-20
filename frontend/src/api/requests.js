@@ -37,21 +37,25 @@ export function getRequests(bloodBankId) {
 }
 
 /**
- * PATCH /api/requests/{id} — one step along the request lifecycle.
+ * PATCH /api/requests/{id} — a blood bank contributing to a request, or declining
+ * it (Business Rule 20).
  *
- * `action` is APPROVE, REJECT or FULFIL — the transition, not the target status,
- * because fulfilling also deducts stock and must never be reachable by simply
- * declaring a request finished.
+ * `action` is CONTRIBUTE or REJECT. `units` applies to CONTRIBUTE only, and the
+ * server caps it at whatever is still outstanding: between the panel being drawn
+ * and the button being pressed, another bank may have covered part of the request,
+ * and the response says what was actually recorded. Asking for more units than this
+ * bank holds is refused (409) rather than capped.
  *
  * `bloodBankId` is required only when the caller is an ADMIN acting on a bank's
  * behalf; bank staff act as their own bank and the backend ignores it for them.
  *
- * Fails with a 409 (ApiError.status) when the transition is illegal or the bank
- * no longer holds enough stock — both carry a message written to be shown as-is.
+ * Fails with a 409 (ApiError.status) when the request is already closed, when this
+ * bank has already declined it, or when the stock has moved — each carries a
+ * message written to be shown as-is.
  */
-export function actOnRequest(requestId, action, bloodBankId) {
+export function actOnRequest(requestId, action, bloodBankId, units = null) {
   return apiRequest(`/api/requests/${requestId}`, {
     method: 'PATCH',
-    body: { action, bloodBankId: bloodBankId ?? null },
+    body: { action, bloodBankId: bloodBankId ?? null, units },
   });
 }

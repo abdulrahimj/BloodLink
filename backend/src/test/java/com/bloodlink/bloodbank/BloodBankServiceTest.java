@@ -16,7 +16,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.bloodlink.bloodbank.dto.DashboardResponse;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.inventory.InventoryService;
@@ -61,7 +60,7 @@ class BloodBankServiceTest {
 
         when(donationRepository.countByBloodBankIdAndDonationDateBetween(any(), any(), any())).thenReturn(12L);
         when(donationRepository.countDistinctDonorsByBloodBankId(BANK_ID)).thenReturn(512L);
-        when(bloodRequestRepository.countActionableForBankByStatus(BANK_ID, RequestStatus.PENDING)).thenReturn(2L);
+        when(bloodRequestRepository.countOpenForBank(BANK_ID)).thenReturn(2L);
 
         DashboardResponse dashboard = service.getDashboard(BANK_ID);
 
@@ -69,9 +68,9 @@ class BloodBankServiceTest {
         assertThat(dashboard.totalUnits()).isEqualTo(89);
         assertThat(dashboard.donationsThisMonth()).isEqualTo(12);
         assertThat(dashboard.registeredDonorsCount()).isEqualTo(512);
-        // Actionable-for-this-bank, matching the panel below the card — not every
-        // pending request in the city.
-        assertThat(dashboard.pendingRequestsCount()).isEqualTo(2);
+        // Open-for-this-bank, matching the panel below the card — not every
+        // unfilled request in the city (Business Rule 20).
+        assertThat(dashboard.openRequestsCount()).isEqualTo(2);
     }
 
     @Test

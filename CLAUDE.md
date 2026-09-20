@@ -39,7 +39,8 @@ client→server messages:
 | LOW_STOCK_ALERT | that bank's BLOOD_BANK_STAFF | a stock change drops a group into Low or Critical |
 | DONATION_APPEAL | **eligible** donors (Business Rule 2) whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
 | NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
-| REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | a request is approved, rejected or fulfilled |
+| REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | units arrive against a request, it is fulfilled, or it closes |
+| REQUEST_PROGRESS | BLOOD_BANK_STAFF at every other bank still watching it | a bank contributes, changing the units outstanding (Business Rule 20) |
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -143,8 +144,8 @@ One row per (blood_bank_id, blood_type) — not one row per unit.
 | blood_type | enum |
 | units_requested | int |
 | urgency_level | enum: ROUTINE, URGENT, EMERGENCY |
-| status | enum: PENDING, APPROVED, FULFILLED, REJECTED |
-| fulfilled_by_blood_bank_id | UUID, FK -> BloodBank, nullable until approved |
+| status | enum: PENDING, PARTIALLY_FULFILLED, FULFILLED, REJECTED — APPROVED removed in V15 (Business Rule 20); derived from the contributions, never set by hand |
+| last_contributed_by_blood_bank_id | UUID, FK -> BloodBank, nullable — renamed from `fulfilled_by_blood_bank_id` in V15. Means "the bank that contributed most recently", a display convenience; BloodRequestContribution is the source of truth for who gave what. See Business Rule 20. |
 | patient_reference | varchar, nullable — optional ward/patient note from hospital staff |
 | created_at | timestamp |
 
@@ -159,6 +160,23 @@ One row per (blood_bank_id, blood_type) — not one row per unit.
 One row per (blood_request, blood_bank) pair, unique on that pair (`uq_decline_request_bank`) —
 added in V9 as the per-bank response table Business Rule 11 anticipated. A row here means "this bank
 has declined this request"; it does not change `BloodRequest.status`. See Business Rule 11.
+
+### BloodRequestContribution
+| field | type |
+|---|---|
+| id | UUID, PK |
+| blood_request_id | UUID, FK -> BloodRequest, ON DELETE CASCADE |
+| blood_bank_id | UUID, FK -> BloodBank, ON DELETE CASCADE |
+| units_contributed | int — always > 0 (DB CHECK) |
+| contributed_at | timestamp |
+
+Added in V15 for Business Rule 20. One row per act of giving: **no unique constraint on
+(request, bank)** — unlike BloodRequestDecline, a bank may contribute to the same request several
+times as stock arrives. This table is the source of truth for how much of a request is covered and
+by whom; `BloodRequest.status` and `last_contributed_by_blood_bank_id` are both derived from it.
+There is deliberately no database-level cap on the sum per request — a CHECK cannot see other rows
+and a trigger could not see an uncommitted concurrent one; the pessimistic row lock in
+`RequestService` is the real guard. See Business Rule 20.
 
 ### AppealCooldown
 | field | type |
@@ -183,7 +201,7 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, NEW_REQUEST, REQUEST_STATUS_CHANGE |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15) |
 | is_read | boolean |
 | created_at | timestamp |
 
@@ -211,6 +229,7 @@ replaces the NOT NULL it removed from `target_user_id`, so an account action can
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
 BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
 BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
+BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContribution ·
 BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
 BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
 
@@ -232,8 +251,11 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
 4. **`Donation.blood_type` is independently recorded, not copied from `Donor.blood_type`.** Blood type
    is re-verified by testing at every donation; the donation record must reflect what was tested at
    that time, not silently follow later edits to the donor's profile.
-5. **BloodRequest status lifecycle:** PENDING → APPROVED → FULFILLED, or PENDING → REJECTED.
-   Fulfilment must decrement `BloodInventory.units_available` for the fulfilling blood bank.
+5. **BloodRequest status lifecycle** — **superseded by Business Rule 20.** It now reads
+   PENDING → PARTIALLY_FULFILLED → FULFILLED (or straight to FULFILLED), or PENDING → REJECTED;
+   APPROVED no longer exists. What survives unchanged is the half that always mattered: units
+   leaving a bank must decrement that bank's `BloodInventory.units_available`, in the same
+   transaction as the record of them leaving.
 6. **A hospital's request can be fulfilled by any blood bank**, not only one tied to that hospital —
    there is no fixed hospital-to-blood-bank ownership.
 7. **When new stock accumulates onto an existing BloodInventory row** (same blood bank + blood type),
@@ -254,10 +276,11 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
    hospital automatically — a hospital cannot submit a request on another hospital's behalf. Hospital
    staff only see their own hospital's requests; blood bank staff see every unclaimed request
    (`fulfilled_by_blood_bank_id IS NULL`) plus anything their own bank has already approved or fulfilled.
-10. **Approving a request also requires sufficient stock at that moment, not only fulfilling it.**
-    Approval removes a request from every other blood bank's queue, so approving without enough stock
-    would strand the hospital behind a bank that turns out unable to help. Actual deduction from
-    inventory still only happens at fulfilment.
+10. **Approving a request also requires sufficient stock at that moment** — **superseded by
+    Business Rule 20, and no longer applicable.** There is no approval step: a bank issues units when
+    it acts, so the stock check and the deduction are the same moment. The concern behind this rule —
+    a hospital stranded behind a bank that claimed its request and could not help — is now impossible
+    rather than guarded against, because nothing claims a request exclusively any more.
 11. **Rejecting a request is per blood bank, not shared.** One bank declining records a
     `BloodRequestDecline` row for that (request, bank) pair and does **not** change
     `BloodRequest.status`: the request stays PENDING and stays fully visible and actionable to every
@@ -273,8 +296,13 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       request early.
     - The hospital is notified **only** on the closing decline. A decline that leaves the request live
       is not news the hospital can act on, and `notifyRequestStatusChange` sends nothing for PENDING.
-    - Approval and fulfilment are unchanged — a request is already claimed exclusively via
-      `fulfilled_by_blood_bank_id` the moment one bank approves it (rules 5, 6, 10).
+    - **Business Rule 20 adds two things here and changes nothing else.** A bank that has contributed
+      units may not then decline the same request (409) — the two are opposite answers to one
+      question, and a decline counts towards closing a request that bank just helped fill. And a
+      request that has received any units **never closes by decline**, however many banks decline the
+      remainder; only an untouched (PENDING) request still closes when every bank has declined. The
+      exclusive claim this rule's earlier wording referred to — one bank owning a request from
+      approval onward — no longer exists.
     This replaces the earlier shared-rejection behaviour, which was flagged for review because one
     bank lacking stock closed a request another bank could have filled. Schema added in `V9`.
 12. **A donation appeal is rate-limited per (blood bank, blood group) by a cooldown.** Each send
@@ -551,12 +579,93 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       list below, read from the existing public listing endpoints. No search, filtering or paging — two of each
       today. A new facility joins the list the console already holds, so the Partner Facilities card and the
       staff-account pickers pick it up without a reload.
+20. **A blood request is filled cooperatively: any bank with stock contributes units towards it until
+    it is covered.** This replaces the single-bank model, in which one bank approved a request —
+    claiming it exclusively — and later fulfilled it in one all-or-nothing step. A request for 4 units
+    that no single bank could cover could not be filled at all, even when two banks holding 2 units
+    each could have filled it together. Schema: `V15`.
+    - **Lifecycle:** PENDING → PARTIALLY_FULFILLED (units received, some still outstanding) →
+      FULFILLED, or straight to FULFILLED when one contribution covers the whole amount; or
+      PENDING → REJECTED exactly as Business Rule 11 already describes. **Status is derived from
+      the arithmetic after every contribution, never set by hand**, which is why there is no
+      "mark fulfilled" action anywhere.
+    - **APPROVED is gone.** It meant "a bank has claimed this and will fill it later", and the claim
+      was the very thing that stopped a second bank helping. `V15` converts any existing APPROVED
+      request back to PENDING with its claiming bank cleared (nothing had been issued against it),
+      and converts every FULFILLED one into a single contribution of its full size so past
+      fulfilments survive in the new table.
+    - **One action, `CONTRIBUTE`, replacing Approve and Fulfil** (`PATCH /api/requests/{id}` with
+      `units`). It deducts the acting bank's stock immediately, writes a `BloodRequestContribution`
+      row, and updates the status — all in one transaction, so units can never leave stock without
+      being recorded or be recorded without leaving stock. `REJECT` is unchanged (Business Rule 11).
+    - **Units are capped at what is still outstanding, not refused.** Between the operator reading
+      the screen and pressing the button another bank may have covered part of it; that is not their
+      mistake to be punished for, so the server records what is genuinely wanted and reports it back.
+      **More units than the bank actually holds is refused** (409 naming both figures) — that is a
+      mistake about its own shelf, and silently issuing fewer than typed would leave the operator
+      believing they had sent more.
+    - **`fulfilled_by_blood_bank_id` was repurposed, not dropped** — renamed to
+      `last_contributed_by_blood_bank_id`, meaning "the bank that contributed most recently". A single
+      column cannot name several contributors, so leaving the old name would assert something untrue;
+      dropping it would lose a useful pointer for the one-name display case and the notification
+      wording. **`BloodRequestContribution` is the source of truth** for who gave what and how much.
+    - **A request with units outstanding stays visible and actionable to every bank** (PENDING and
+      PARTIALLY_FULFILLED alike), which reverses the old "disappears from other queues on approval"
+      behaviour. A bank also keeps any request it has contributed to, closed or not, as its own
+      history; a request another bank completed without it never appears.
+      `BloodRequestRepository.findActionableForBank` is the one place this is expressed.
+    - **A bank that contributes is done with declining, and a bank that declines is done
+      contributing.** Both are refused with a 409. Known limit: a bank that declined and later
+      receives stock cannot contribute to that request — its decline was its final answer, and the
+      request is not in its queue to act on anyway. Revisit only if it happens in practice.
+    - **A partially fulfilled request never auto-closes**, however many banks decline the remainder —
+      deliberately different from an untouched one (Business Rule 11). Real progress exists, the ward
+      has blood it can use, and stock that completes it may arrive tomorrow. Doubly ensured: a
+      contributor cannot decline, so a request with contributions can never collect a full set of
+      declines, and `RequestService.reject` closes only a PENDING request regardless.
+    - **Concurrency: the pessimistic row lock on the request is the whole guarantee.** Both banks see
+      every open request, so two contributing at the same instant is ordinary rather than rare.
+      `findByIdForUpdate` locks the request row *before* the contributed total is read, so the second
+      transaction waits and then reads a total that includes the first — and its units are capped
+      against what is genuinely left. Without it both would read "4 needed", both would deduct 4, and
+      a hospital that asked for 4 units would be sent 8. `PartialFulfilmentRaceIT` proves this with
+      two real threads, two real transactions, and its own throwaway database.
+    - **`REQUEST_PROGRESS`, a fifth notification type**, goes to every *other* bank still watching a
+      request whenever its outstanding figure changes — not the contributing bank (it has the answer
+      in its own response) and not a bank that has declined (it can no longer act). Without it two
+      banks can each set out to cover the same shrinking gap. The hospital hears separately, as
+      REQUEST_STATUS_CHANGE, with the figures ("2 of 4 units received, 2 units still needed").
+    - **Units Issued** on the Inventory screen now sums this bank's own contributions by
+      `contributed_at`, rather than the full size of requests it fulfilled by their creation date —
+      more accurate on both counts once a request can be split between banks.
+    - **Frontend:** the Blood Bank Dashboard's row carries a units box (capped at the smaller of
+      outstanding and this bank's stock) plus Contribute and Decline; both portals show progress
+      ("2 of 4 units received · 2 still needed · from …") instead of a binary badge. The dashboard's
+      stat card becomes "Open Requests" (PENDING + PARTIALLY_FULFILLED), and the Admin Console's
+      request-outcomes donut shows "Partly filled" where "Approved" used to be.
+
+## Pending documentation updates (dissertation chapters — not acted on here)
+
+The code and this file are the source of truth; these are the places the written chapters have
+fallen behind and need a pass of their own. Nothing here is a task for a coding session — they are
+listed so nothing is forgotten when the chapters are next revised.
+
+- **Chapters 3, 4 and 5 — ERD.** Add `BloodRequestContribution` (Business Rule 20, V15) and its two
+  relationships (BloodRequest 1–N, BloodBank 1–N). On `BloodRequest`, rename
+  `fulfilled_by_blood_bank_id` to `last_contributed_by_blood_bank_id` and change its meaning to
+  "most recent contributor", and update the status enum: PARTIALLY_FULFILLED in, APPROVED out.
+- **Chapters 3, 4 and 5 — request lifecycle narrative and Figure 3.5.** The approve-then-fulfil
+  sequence is gone; a request is now filled by one or more contributions (Business Rule 20).
+- **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15).
+- **Chapters 3, 4 and 5 — ERD and narrative for facilities.** Blood banks and hospitals are no
+  longer purely seeded: an administrator creates them (Business Rule 19, V14), names are unique per
+  type, and `audit_log` gained `target_blood_bank_id` / `target_hospital_id` with two new actions.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
-- **Hospital Staff** — submit blood requests, track their hospital's request status, view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, approve/reject/fulfil incoming requests, send donation appeals
+- **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
@@ -584,12 +693,15 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
-    `DonorOptionalEmailIT`, `AdminFacilityCreationIT`), every one of which is `@Transactional` and rolls back everything it writes,
+    `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`), every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,
     not the number of test classes, is what would break the "always safe to rerun" guarantee this
-    convention exists for. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
+    convention exists for. A test that genuinely cannot roll back belongs on a database of its own:
+    `PartialFulfilmentRaceIT` (Business Rule 20) needs two real committed transactions to race, so it
+    creates `bloodlink_race_test` before its Spring context starts and drops it afterwards, touching
+    nothing shared. That is the pattern for any future test in the same position. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
     widened deliberately when `AdminAccountCreationIT` was added, since the guarantee comes from the
     rollback, not from there being a single class.)
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.

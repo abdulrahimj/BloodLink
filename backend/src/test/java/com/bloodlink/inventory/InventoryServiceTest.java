@@ -39,7 +39,7 @@ import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.AppealCooldownRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
-import com.bloodlink.repository.BloodRequestRepository;
+import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
@@ -58,7 +58,7 @@ class InventoryServiceTest {
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private BloodInventoryRepository bloodInventoryRepository;
     @Mock private UserRepository userRepository;
-    @Mock private BloodRequestRepository bloodRequestRepository;
+    @Mock private BloodRequestContributionRepository contributionRepository;
     @Mock private NotificationService notificationService;
     @Mock private AppealCooldownRepository appealCooldownRepository;
 
@@ -71,7 +71,7 @@ class InventoryServiceTest {
         // it would make every appealAvailability assertion below a test of the stub
         // rather than of the rule the screen actually gets.
         service = new InventoryService(
-            bloodBankRepository, bloodInventoryRepository, userRepository, bloodRequestRepository,
+            bloodBankRepository, bloodInventoryRepository, userRepository, contributionRepository,
             notificationService, appealCooldownRepository,
             new AppealCooldownPolicy(appealCooldownRepository)
         );

@@ -118,14 +118,14 @@ class AdminReportServiceTest {
         // read as zero, not disappear from the response.
         when(bloodRequestRepository.countGroupedByStatus()).thenReturn(List.of(
             statusRow(RequestStatus.PENDING, 3),
-            statusRow(RequestStatus.APPROVED, 2),
+            statusRow(RequestStatus.PARTIALLY_FULFILLED, 2),
             statusRow(RequestStatus.FULFILLED, 9)
         ));
 
         RequestOutcomeResponse outcomes = service.requestOutcomes();
 
         assertThat(outcomes.pending()).isEqualTo(3);
-        assertThat(outcomes.approved()).isEqualTo(2);
+        assertThat(outcomes.partiallyFulfilled()).isEqualTo(2);
         assertThat(outcomes.fulfilled()).isEqualTo(9);
         assertThat(outcomes.rejected()).isZero();
         assertThat(outcomes.total()).isEqualTo(14);
@@ -135,7 +135,7 @@ class AdminReportServiceTest {
     void theTotalIsTheSumOfAllFourStatuses() {
         when(bloodRequestRepository.countGroupedByStatus()).thenReturn(List.of(
             statusRow(RequestStatus.PENDING, 1),
-            statusRow(RequestStatus.APPROVED, 2),
+            statusRow(RequestStatus.PARTIALLY_FULFILLED, 2),
             statusRow(RequestStatus.FULFILLED, 3),
             statusRow(RequestStatus.REJECTED, 4)
         ));

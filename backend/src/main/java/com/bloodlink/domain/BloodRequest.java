@@ -62,10 +62,23 @@ public class BloodRequest {
     @Column(name = "patient_reference")
     private String patientReference;
 
-    /** Null until the request is approved; any blood bank may fulfil (Business Rule 6). */
+    /**
+     * The bank that contributed to this request most recently — null until some
+     * bank has (Business Rule 20).
+     *
+     * Not "the bank that owns this request": several banks may contribute to one
+     * request, and BloodRequestContribution is the source of truth for who gave
+     * what. This is a convenience pointer, kept for the display case that only
+     * needs one name ("2 of 4 units received, from Makeni Regional Blood Bank")
+     * and for the wording of the hospital's notification. Anything that needs
+     * totals, or every contributor, reads the contributions table.
+     *
+     * Renamed from fulfilled_by_blood_bank_id in V15, which is where the reasoning
+     * for keeping the column at all is set out in full.
+     */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "fulfilled_by_blood_bank_id")
-    private BloodBank fulfilledByBloodBank;
+    @JoinColumn(name = "last_contributed_by_blood_bank_id")
+    private BloodBank lastContributedByBloodBank;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

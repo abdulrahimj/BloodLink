@@ -5,9 +5,9 @@ package com.bloodlink.admin.dto;
  * Outcomes" donut.
  *
  * A fixed shape with one field per RequestStatus, rather than a list of
- * (status, count) pairs: there are exactly four statuses (Business Rule 5) and
+ * (status, count) pairs: there are exactly four statuses (Business Rule 20) and
  * that will not change without a schema migration, so the frontend can read
- * `.pending`, `.approved` and so on directly instead of searching a list for
+ * `.pending`, `.partiallyFulfilled` and so on directly instead of searching a list for
  * one it assumes is present — the same choice DashboardResponse already makes
  * for the Blood Bank Dashboard's stat cards.
  *
@@ -18,7 +18,9 @@ package com.bloodlink.admin.dto;
  */
 public record RequestOutcomeResponse(
     long pending,
-    long approved,
+    /** Some units received, some still outstanding (Business Rule 20) — the slice
+     *  the now-retired APPROVED used to hold. */
+    long partiallyFulfilled,
     long fulfilled,
     long rejected,
     long total

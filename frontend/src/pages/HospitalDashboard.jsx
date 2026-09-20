@@ -197,11 +197,16 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
       if (created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth()) {
         thisMonth += 1;
       }
-      if (r.status === "PENDING") pending += 1;
-      if (r.status === "FULFILLED") unitsReceived += r.unitsRequested;
+      // "Pending" is anything still waiting on units, which since Business Rule 20
+      // includes a request that is part way there: some blood has arrived, but the
+      // ward is still short and still waiting.
+      if (r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED") pending += 1;
+      // Units actually received, not units requested — a partially filled request
+      // contributes exactly what arrived, which is the figure a ward can plan with.
+      unitsReceived += r.unitsContributed;
       // "Highest priority" means the ones still needing attention — an emergency
-      // that has already been fulfilled or rejected is no longer a live case.
-      if (r.urgencyLevel === "EMERGENCY" && (r.status === "PENDING" || r.status === "APPROVED")) {
+      // that has been covered in full or closed is no longer a live case.
+      if (r.urgencyLevel === "EMERGENCY" && (r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED")) {
         openEmergencies += 1;
       }
     });
@@ -469,9 +474,19 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
           padding: 4px clamp(7px, .7vw, 11px); border-radius: 20px; color: #FFF;
         }
         .hp-b-pending   { background: var(--amber); }
-        .hp-b-approved  { background: var(--green); }
+        /* Part way there (Business Rule 20): green, because units really have
+           arrived — the line underneath says how many, and how many have not. */
+        .hp-b-partially-fulfilled { background: var(--green); }
         .hp-b-fulfilled { background: var(--navy); }
         .hp-b-rejected  { background: var(--red); }
+
+        /* "2 of 4 units received · 2 still to come · from …". Wraps rather than
+           truncating like .hp-item-sub above: every part of it is load-bearing,
+           and an ellipsis would cut off the banks' names. */
+        .hp-item-progress {
+          font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600;
+          color: var(--green); margin-top: 2px; line-height: 1.35;
+        }
 
         /* Wiring states — additive, same tokens, for real async data and a real form. */
         .hp-loading, .hp-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
@@ -563,8 +578,11 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
             {/* ---- stat cards ---- */}
             <div className="hp-stats">
               <Stat tone="navy" icon={<FileIcon />} figure={stats.thisMonth} label="Total Requests" note="This month" />
-              <Stat tone="amber" icon={<HourglassIcon />} figure={stats.pending} label="Pending Approval" note="Awaiting blood bank" />
-              <Stat tone="green" icon={<CheckIcon />} figure={stats.unitsReceived} label="Fulfilled" note="Units received" />
+              {/* "Awaiting units" rather than "Pending Approval": since Business
+                  Rule 20 nothing is approved, and a request part way through is
+                  still one this hospital is waiting on. */}
+              <Stat tone="amber" icon={<HourglassIcon />} figure={stats.pending} label="Awaiting Units" note="Not yet complete" />
+              <Stat tone="green" icon={<CheckIcon />} figure={stats.unitsReceived} label="Units Received" note="Across all requests" />
               <Stat tone="red" icon={<AlertIcon />} figure={stats.openEmergencies} label="Emergency Cases" note="Highest priority" />
             </div>
 
@@ -661,13 +679,30 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
                         <div className="hp-item-body">
                           <div className="hp-item-main">{r.bloodType} · {r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""}</div>
                           <div className="hp-item-sub">
-                            {/* No bank is named until one approves (Business Rule 6) —
-                                saying so is more useful than an empty gap. */}
-                            {r.fulfilledByBloodBankName ?? "Awaiting a blood bank"} · {formatRelativeTime(r.createdAt)}
+                            {/* No bank is named until one contributes (Business Rules 6
+                                and 20) — saying so is more useful than an empty gap. */}
+                            {r.lastContributedByBloodBankName ?? "Awaiting a blood bank"} · {formatRelativeTime(r.createdAt)}
                             {r.patientReference ? ` · ${r.patientReference}` : ""}
                           </div>
+                          {/* Where the blood actually came from, and how much is still
+                              coming (Business Rule 20). A request may be filled by
+                              several banks, so the ward is told each one by name — "2
+                              of 4 units received, from Makeni Regional Blood Bank" —
+                              rather than a single fulfilled/not-fulfilled state it
+                              cannot plan around. */}
+                          {r.unitsContributed > 0 && (
+                            <div className="hp-item-progress">
+                              {r.unitsContributed} of {r.unitsRequested} units received
+                              {r.unitsOutstanding > 0 ? ` · ${r.unitsOutstanding} still to come` : ""}
+                              {` · ${r.contributions
+                                .map((c) => `${c.unitsContributed} from ${c.bloodBankName}`)
+                                .join(", ")}`}
+                            </div>
+                          )}
                         </div>
-                        <div className={`hp-badge hp-b-${r.status.toLowerCase()}`}>{titleCase(r.status)}</div>
+                        <div className={`hp-badge hp-b-${r.status.toLowerCase().replace(/_/g, "-")}`}>
+                          {titleCase(r.status).replace(/_/g, " ")}
+                        </div>
                       </div>
                     ))}
                   </div>

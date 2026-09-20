@@ -1889,7 +1889,9 @@ function outcomeSlices(outcomes) {
   const pct = (n) => (outcomes.total === 0 ? 0 : Math.round((n / outcomes.total) * 100));
   return [
     { label: "Fulfilled", pct: pct(outcomes.fulfilled), color: "#1E7F45" },
-    { label: "Approved", pct: pct(outcomes.approved), color: "#1C3A5E" },
+    // The slice "Approved" used to hold. Since Business Rule 20 a request is never
+    // approved — it is filled cooperatively, so the middle state is part-filled.
+    { label: "Partly filled", pct: pct(outcomes.partiallyFulfilled), color: "#1C3A5E" },
     { label: "Pending", pct: pct(outcomes.pending), color: "#D98A1F" },
     { label: "Rejected", pct: pct(outcomes.rejected), color: "#C8102E" },
   ];

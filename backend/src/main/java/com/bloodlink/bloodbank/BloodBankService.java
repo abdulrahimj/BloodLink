@@ -10,7 +10,6 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.bloodbank.dto.BloodBankResponse;
 import com.bloodlink.bloodbank.dto.DashboardResponse;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -67,15 +66,15 @@ public class BloodBankService {
             bloodBankId, thisMonth.atDay(1), thisMonth.atEndOfMonth()
         );
         long registeredDonors = donationRepository.countDistinctDonorsByBloodBankId(bloodBankId);
-        // Counted over the same scope the requests panel lists, so "2 Pending
-        // Requests" always matches the two rows the operator can see and act on.
-        long pendingRequests = bloodRequestRepository.countActionableForBankByStatus(
-            bloodBankId, RequestStatus.PENDING
-        );
+        // Counted over the same scope the requests panel lists, so "2 Open Requests"
+        // always matches the rows the operator can see and act on. Since Business
+        // Rule 20 that includes partially fulfilled ones: units are still needed, and
+        // this bank can still supply them.
+        long openRequests = bloodRequestRepository.countOpenForBank(bloodBankId);
 
         return new DashboardResponse(
             bank.getId(), bank.getName(), totalUnits,
-            (int) donationsThisMonth, (int) pendingRequests, (int) registeredDonors
+            (int) donationsThisMonth, (int) openRequests, (int) registeredDonors
         );
     }
 }

@@ -43,29 +43,36 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     }
 
     /**
-     * "Incoming Hospital Requests" for one blood bank: everything this bank could
-     * still act on, plus everything it has already acted on, newest first — minus
-     * anything it has already declined.
+     * "Incoming Hospital Requests" for one blood bank: every request this bank can
+     * still contribute to, plus every request it has already contributed to, newest
+     * first — minus anything it has declined.
      *
-     * The two halves of the OR are what Business Rule 6 means in practice.
-     * fulfilled_by_blood_bank_id is null exactly while a request is unclaimed
-     * (PENDING) — any bank may take it, so every bank sees it. Once a bank approves,
-     * that column names the bank that owns the request from then on, so it stays in
-     * that bank's feed and drops out of every other bank's. Without the second half
-     * a bank would lose sight of a request the moment it approved it; without the
-     * first, no bank would ever see a request to approve.
+     * The first half of the OR is Business Rule 20's central reversal. A request
+     * with units still outstanding — PENDING, or PARTIALLY_FULFILLED because some
+     * other bank has covered part of it — stays visible to *every* bank, because
+     * every bank can still help with the remainder. Under the old model a bank's
+     * approval claimed the request exclusively and it vanished from every other
+     * queue, which is exactly what made a 4-unit request unfillable by two banks
+     * holding 2 units each.
      *
-     * The not-exists clause is Business Rule 11's per-bank half. A decline is now
-     * recorded per (request, bank) rather than by closing the request outright, so
-     * "I have turned this down" has to be expressed as a filter on this bank's own
-     * view: the request disappears from the declining bank's queue while staying
-     * fully visible and actionable in every other bank's. The clause is scoped to
-     * :bloodBankId alone — another bank's decline must never hide a request here,
-     * which is the entire point of the change.
+     * The second half keeps a bank's own history in front of it: a request it has
+     * contributed to stays in its queue after it closes, so the operator can see
+     * that it completed rather than watching it disappear the moment the last unit
+     * arrives from somewhere else. A request another bank completed, that this bank
+     * never touched, is not this bank's business and does not appear.
+     *
+     * The not-exists clause is Business Rule 11's per-bank half, unchanged: a
+     * decline hides the request from the declining bank's queue alone, never from
+     * anyone else's.
      */
     @Query("""
         select r from BloodRequest r
-        where (r.fulfilledByBloodBank is null or r.fulfilledByBloodBank.id = :bloodBankId)
+        where (r.status in (com.bloodlink.domain.enums.RequestStatus.PENDING,
+                            com.bloodlink.domain.enums.RequestStatus.PARTIALLY_FULFILLED)
+               or exists (
+                   select 1 from BloodRequestContribution c
+                   where c.bloodRequest.id = r.id and c.bloodBank.id = :bloodBankId
+               ))
           and not exists (
               select 1 from BloodRequestDecline d
               where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
@@ -77,56 +84,49 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     /** Every request, newest first — the ADMIN's citywide view. */
     List<BloodRequest> findAllByOrderByCreatedAtDesc();
 
-    /** The "Pending Requests" stat card, counted over the same actionable scope as
-     *  {@link #findActionableForBank} so the card and the panel below it agree —
-     *  including the declined-by-this-bank exclusion, without which the card would
-     *  keep counting requests this bank has turned down and no longer displays. */
+    /**
+     * The "Open Requests" stat card: requests this bank could contribute to right
+     * now — still short of units, and not declined by this bank.
+     *
+     * Counted over the same scope {@link #findActionableForBank} lists, minus the
+     * already-closed requests that query keeps for history, so the card never shows
+     * a number larger than the set of rows underneath it that still have a
+     * Contribute button. PARTIALLY_FULFILLED counts here as squarely as PENDING:
+     * both mean units are still needed.
+     */
     @Query("""
         select count(r) from BloodRequest r
-        where r.status = :status
-          and (r.fulfilledByBloodBank is null or r.fulfilledByBloodBank.id = :bloodBankId)
+        where r.status in (com.bloodlink.domain.enums.RequestStatus.PENDING,
+                           com.bloodlink.domain.enums.RequestStatus.PARTIALLY_FULFILLED)
           and not exists (
               select 1 from BloodRequestDecline d
               where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
           )
         """)
-    long countActionableForBankByStatus(
-        @Param("bloodBankId") UUID bloodBankId,
-        @Param("status") RequestStatus status
-    );
+    long countOpenForBank(@Param("bloodBankId") UUID bloodBankId);
 
     /**
-     * Loads one request with a row-level write lock, for the approve/reject/fulfil
-     * transition in RequestService.
+     * Loads one request with a row-level write lock, for the contribute and decline
+     * transitions in RequestService.
      *
-     * Two blood banks can open the same PENDING request at the same moment, and the
-     * status check and the status write are separate statements — without the lock,
-     * both would read PENDING, both would pass the check, and the second write would
-     * silently overwrite the first, handing one hospital's units to two banks. The
-     * lock makes the second transaction wait and then re-read the already-changed
-     * status, so it fails cleanly with a 409 instead.
+     * This is the whole concurrency guarantee behind Business Rule 20, and it
+     * matters more now than it did when a request was claimed by one bank. Every
+     * bank sees every open request, so two banks contributing to the same one at
+     * the same moment is an ordinary event. Each transaction reads the units
+     * contributed so far and subtracts from the request's total — separate
+     * statements — so without the lock both would read the same "2 already given",
+     * both would believe 2 were still needed, and a 4-unit request would be covered
+     * by 6 units of real blood. Locking the request row first serialises them: the
+     * second transaction waits, then reads a total that includes the first
+     * contribution, and its own units are capped against what is genuinely left.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from BloodRequest r where r.id = :id")
     Optional<BloodRequest> findByIdForUpdate(@Param("id") UUID id);
 
-    /**
-     * "Units Issued" on the Blood Inventory page: units this bank has fulfilled in
-     * a date range. There is no separate "fulfilled at" timestamp in the schema
-     * (Business Rule 5's lifecycle only records createdAt), so createdAt is the
-     * best available proxy for "this month" — a request raised late in one month and
-     * fulfilled early in the next is counted against the month it was raised.
-     */
-    @Query("""
-        select coalesce(sum(r.unitsRequested), 0) from BloodRequest r
-        where r.fulfilledByBloodBank.id = :bloodBankId
-          and r.status = :status
-          and r.createdAt >= :start and r.createdAt < :end
-        """)
-    long sumUnitsForBankAndStatusInRange(
-        @Param("bloodBankId") UUID bloodBankId,
-        @Param("status") RequestStatus status,
-        @Param("start") Instant start,
-        @Param("end") Instant end
-    );
+    // "Units Issued" used to be summed here, from units_requested on requests this
+    // bank had fulfilled. It now lives on BloodRequestContributionRepository, where
+    // the units a bank actually issued are recorded one act at a time: with several
+    // banks able to fill one request, a request's full size is no longer a bank's
+    // own contribution, and the contribution's timestamp is the real issue date.
 }

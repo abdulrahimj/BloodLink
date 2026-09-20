@@ -1,8 +1,11 @@
 package com.bloodlink.repository;
 
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.BloodRequestDecline;
 
@@ -35,4 +38,15 @@ public interface BloodRequestDeclineRepository extends JpaRepository<BloodReques
      * what happened, rather than as an opaque unique-constraint violation.
      */
     boolean existsByBloodRequestIdAndBloodBankId(UUID bloodRequestId, UUID bloodBankId);
+
+    /**
+     * Which banks have declined this request.
+     *
+     * Used when a contribution changes the outstanding figure (Business Rule 20):
+     * the banks told about it are the ones still watching the request, and a bank
+     * that has declined is no longer watching — the request is not in its queue and
+     * it has said it cannot help.
+     */
+    @Query("select d.bloodBank.id from BloodRequestDecline d where d.bloodRequest.id = :requestId")
+    List<UUID> findBloodBankIdsByRequestId(@Param("requestId") UUID requestId);
 }

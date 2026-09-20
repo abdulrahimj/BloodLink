@@ -90,13 +90,14 @@ import tools.jackson.databind.ObjectMapper;
  *      these by hand in a real deployment, which is exactly what this test does.
  *   3. The bank adds stock (Business Rule 7's accumulation, exercised for real).
  *   4. The hospital submits a request (Figure 3.5's hospital side).
- *   5. The bank approves it, then fulfils it (Business Rule 5's lifecycle, and
- *      the stock deduction Business Rule 5 also requires).
+ *   5. The bank contributes the full amount in one step — Business Rule 20's
+ *      simple case, with the stock deduction it requires. (Partial fulfilment by
+ *      two banks has its own test class, PartialFulfilmentIT.)
  *   6. The chain closes on the fact that started this project's Phase 7: a
  *      REQUEST_STATUS_CHANGE Notification row exists for the hospital staff who
- *      raised the request — for both the approval and the fulfilment — proving
- *      the request module and the notification module actually agree with each
- *      other rather than merely each having their own passing tests.
+ *      raised the request, proving the request module and the notification module
+ *      actually agree with each other rather than merely each having their own
+ *      passing tests.
  *
  * <h2>Running this test</h2>
  * Excluded from the ordinary {@code mvn test} / {@code .\mvnw.cmd test} run by
@@ -229,23 +230,25 @@ class BloodRequestLifecycleIT {
             .andReturn();
         BloodRequestResponse created = readBody(createResult, BloodRequestResponse.class);
 
-        // ---------- 5. The bank approves, then fulfils ----------
+        // ---------- 5. The bank contributes the whole amount in one step ----------
+        // Business Rule 20's simple case: one bank holds enough, so a single
+        // contribution covers the request and closes it — no approval step, because
+        // there is no promise to make any more, only units to issue.
         mockMvc.perform(patch("/api/requests/{id}", created.id())
                 .header("Authorization", bearer(bankToken))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(new RequestActionPayload(RequestAction.APPROVE, null))))
+                .content(objectMapper.writeValueAsString(new RequestActionPayload(RequestAction.CONTRIBUTE, null, 3))))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.status").value("APPROVED"))
-            .andExpect(jsonPath("$.fulfilledByBloodBankId").value(bank.getId().toString()));
+            .andExpect(jsonPath("$.status").value("FULFILLED"))
+            .andExpect(jsonPath("$.unitsContributed").value(3))
+            .andExpect(jsonPath("$.unitsOutstanding").value(0))
+            .andExpect(jsonPath("$.lastContributedByBloodBankId").value(bank.getId().toString()))
+            // The contribution itself is on the request, named and counted.
+            .andExpect(jsonPath("$.contributions.length()").value(1))
+            .andExpect(jsonPath("$.contributions[0].bloodBankName").value(bank.getName()))
+            .andExpect(jsonPath("$.contributions[0].unitsContributed").value(3));
 
-        mockMvc.perform(patch("/api/requests/{id}", created.id())
-                .header("Authorization", bearer(bankToken))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(new RequestActionPayload(RequestAction.FULFIL, null))))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.status").value("FULFILLED"));
-
-        // The stock deduction Business Rule 5 requires actually happened:
+        // The stock deduction Business Rule 20 requires actually happened:
         // 20 units added, 3 issued, so 17 more than whatever the bank started with.
         assertThat(readOPlusUnits(bank.getId(), bankToken)).isEqualTo(startingOPlusUnits + 17);
 
@@ -268,11 +271,13 @@ class BloodRequestLifecycleIT {
         assertThat(hospitalNotifications)
             .extracting(Notification::getType)
             .containsOnly(NotificationType.REQUEST_STATUS_CHANGE);
-        assertThat(hospitalNotifications).hasSize(2); // one for approval, one for fulfilment
+        // One notification, not two: a single contribution covered the whole request
+        // (Business Rule 20), so there is one event to tell the hospital about, where
+        // the old approve-then-fulfil pair produced two.
+        assertThat(hospitalNotifications).hasSize(1);
         assertThat(hospitalNotifications)
             .extracting(Notification::getMessage)
-            .anySatisfy(message -> assertThat(message).contains("approved"))
-            .anySatisfy(message -> assertThat(message).contains("fulfilled"));
+            .anySatisfy(message -> assertThat(message).contains("fulfilled in full"));
     }
 
     /**
@@ -346,11 +351,11 @@ class BloodRequestLifecycleIT {
                     .header("Authorization", bearer(bankTokens.get(i)))
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(
-                        new RequestActionPayload(RequestAction.REJECT, null))))
+                        new RequestActionPayload(RequestAction.REJECT, null, null))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(expectedStatus))
                 // A decline supplies nothing, so it never claims the request.
-                .andExpect(jsonPath("$.fulfilledByBloodBankId").doesNotExist());
+                .andExpect(jsonPath("$.lastContributedByBloodBankId").doesNotExist());
 
             // The declining bank has lost sight of it, for good.
             assertThat(requestIdsVisibleTo(bankTokens.get(i))).doesNotContain(requestId);
@@ -368,7 +373,7 @@ class BloodRequestLifecycleIT {
                     .header("Authorization", bearer(bankTokens.get(i)))
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsString(
-                        new RequestActionPayload(RequestAction.REJECT, null))))
+                        new RequestActionPayload(RequestAction.REJECT, null, null))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(containsString(
                     isLastBank ? "this one is rejected" : "already declined"

@@ -26,17 +26,22 @@ import { useNotifications } from "../realtime/useNotifications.js";
    same idiom as the Donor Portal (tokens already in this file, nothing new).
 
    The panel is the blood bank half of Figure 3.5, and its buttons are real:
-   Approve and Reject on a pending request, Fulfil on one this bank has
-   approved. Fulfilling moves units out of this bank's stock, so the whole
-   screen is reloaded afterwards — the inventory table and the "Available
-   Units" card both change with it.
+   Contribute and Decline on any request that still needs units. Contributing
+   moves units out of this bank's stock immediately, so the whole screen is
+   reloaded afterwards — the inventory table and the "Available Units" card
+   both change with it.
 
-   Reject goes through a confirmation step first. It is the one action here
-   whose blast radius is wider than the bank taking it: status is a single
-   field with one REJECTED state, so rejecting closes the request for every
-   blood bank in Makeni, not only this one, and the hospital has to start
-   again. That consequence is invisible from the button, so it is spelled out
-   before the click is submitted rather than explained after the fact.
+   Since Business Rule 20 the panel is cooperative rather than competitive: a
+   request stays here while any units are outstanding, however many other
+   banks have already given some, and this bank can contribute again. Each row
+   shows how far along the request is ("2 of 4 units received"), because the
+   only number that decides what to do next is how many are still missing.
+
+   Decline goes through a confirmation step first. It is the one action here
+   the operator cannot take back: the request leaves this bank's queue for
+   good (Business Rule 11), and a bank that has declined cannot later
+   contribute to the same request. That consequence is invisible from the
+   button, so it is spelled out before the click is submitted.
 
    The screen is also live. A WebSocket session (see realtime/useNotifications)
    feeds the bell in the header, and two of the notification types it carries
@@ -122,7 +127,12 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   // click that caused it.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
-      if (notification.type === "NEW_REQUEST" || notification.type === "LOW_STOCK_ALERT") {
+      // REQUEST_PROGRESS is the Business Rule 20 one: another bank has contributed
+      // to a request this bank is also looking at, so the units outstanding on that
+      // row — and the cap on its own units box — have just changed. Reloading is
+      // what stops two banks each setting out to cover the same shrinking gap.
+      if (notification.type === "NEW_REQUEST" || notification.type === "LOW_STOCK_ALERT"
+          || notification.type === "REQUEST_PROGRESS") {
         refresh();
       }
     },
@@ -167,21 +177,22 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }, [confirmingReject]);
 
   /**
-   * Drives one step of Business Rule 5's lifecycle from the panel.
+   * Contributes units to a request, or declines it (Business Rule 20).
    *
    * bloodBankId is passed through for the ADMIN case, where the backend needs to
    * be told which bank is acting; for BLOOD_BANK_STAFF it is ignored server-side
    * in favour of their own assigned bank, so sending it is harmless.
    *
-   * A 409 here is an ordinary outcome, not a bug — the request was already taken
-   * by the other bank, or the stock moved since approval — so the message is
-   * shown against the row and the screen is reloaded to show the real state.
+   * A 409 here is an ordinary outcome, not a bug — another bank completed the
+   * request a moment ago, or the stock moved since the panel was drawn — so the
+   * message is shown against the row and the screen is reloaded to show the real
+   * state.
    */
-  async function handleAction(requestId, action) {
+  async function handleAction(requestId, action, units = null) {
     setActingOn(requestId);
     setActionError(null);
     try {
-      await actOnRequest(requestId, action, bloodBankId);
+      await actOnRequest(requestId, action, bloodBankId, units);
       const { inventory, dashboardData, requestList } = await load();
       setStock(inventory);
       setDashboard(dashboardData);
@@ -347,11 +358,10 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-b-low { background: var(--amber); }
         .bb-b-critical { background: var(--red); }
         .bb-b-pending { background: var(--amber); }
-        .bb-b-approved { background: var(--green); }
+        /* Part way there: green, the "something good has happened" tone, but the
+           row keeps its Contribute button — this is progress, not completion. */
+        .bb-b-partially-fulfilled { background: var(--green); }
         .bb-b-fulfilled { background: var(--navy); }
-        /* Additive: REJECTED has no BloodRequest write path yet (a later phase), but
-           the badge needs somewhere to go the day one exists — grouped with the
-           other "stopped" state, Critical, rather than left undefined. */
         .bb-b-rejected { background: var(--red); }
 
         /* request list */
@@ -381,10 +391,28 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-act--ghost { background: transparent; color: var(--ink-muted); border: 1.5px solid var(--line); }
         .bb-act--ghost:hover { background: #F6F7F8; color: var(--ink); border-color: #C9CDD3; }
         .bb-act--ghost:disabled { background: transparent; color: #C9CDD3; }
-        /* Fulfil is the step that actually moves units, so it carries the navy
+        /* Contribute is the step that actually moves units, so it carries the navy
            "settled" colour the Fulfilled badge already uses on this screen. */
         .bb-act--go { background: var(--navy); }
         .bb-act--go:hover { background: var(--navy-soft); }
+
+        /* How many units this bank is giving. Narrow on purpose: the number is
+           never more than two digits, and the row already has three controls. */
+        .bb-units { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+        .bb-units-label { font-size: clamp(7.5px, 1.05vh, 9.5px); font-weight: 700; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .05em; }
+        .bb-units input {
+          width: clamp(44px, 4vw, 58px); font-family: inherit;
+          font-size: clamp(10px, 1.45vh, 13px); font-weight: 700; text-align: center;
+          padding: clamp(4px, .7vh, 7px) 4px;
+          border: 1.5px solid var(--line); border-radius: 6px; background: #FFF; color: var(--ink);
+        }
+        .bb-units input:focus { outline: none; border-color: var(--navy); }
+        .bb-units input:disabled { background: #F6F7F8; color: var(--ink-muted); cursor: not-allowed; }
+
+        /* Progress line under a request that has received some units. Green, the
+           same "units have arrived" tone as the Partially fulfilled badge. */
+        .bb-item-progress { font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600; color: var(--green); margin-top: 2px; }
+        .bb-item-ours { color: var(--ink-muted); font-weight: 500; }
 
         /* Wiring states — additive, same tokens, for real async data. */
         .bb-loading, .bb-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
@@ -521,7 +549,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
             <div className="bb-stats">
               <Stat tone="red" icon={<DropletIcon />} figure={dashboard.totalUnits} label="Available Units" note="Across all groups" />
               <Stat tone="green" icon={<GiftIcon />} figure={dashboard.donationsThisMonth} label="Donations" note="This month" />
-              <Stat tone="amber" icon={<HourglassIcon />} figure={dashboard.pendingRequestsCount} label="Pending Requests" note="Needs approval" />
+              <Stat tone="amber" icon={<HourglassIcon />} figure={dashboard.openRequestsCount} label="Open Requests" note="Units still needed" />
               <Stat tone="navy" icon={<UsersFillIcon />} figure={dashboard.registeredDonorsCount} label="Registered Donors" note="Linked to this bank" />
             </div>
 
@@ -566,53 +594,18 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                   {requests.length === 0 && (
                     <div className="bb-empty">No requests yet.</div>
                   )}
-                  {requests.map((r) => {
-                    const busy = actingOn === r.id;
-                    // Only the bank that approved a request may fulfil it, so the
-                    // button is not offered to anyone else — the backend refuses it
-                    // regardless, but a button that always fails is worse than none.
-                    const canFulfil = r.status === "APPROVED" && r.fulfilledByBloodBankId === bloodBankId;
-
-                    return (
-                      <div className="bb-item" key={r.id}>
-                        <div className="bb-item-grp">{r.bloodType}</div>
-                        <div className="bb-item-body">
-                          <div className="bb-item-main">{r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""} of {r.bloodType} · {titleCase(r.urgencyLevel)}</div>
-                          <div className="bb-item-sub">
-                            {r.hospitalName} · {formatRelativeTime(r.createdAt)}
-                            {r.patientReference ? ` · ${r.patientReference}` : ""}
-                          </div>
-                          {actionError?.requestId === r.id && (
-                            <div className="bb-item-error">{actionError.message}</div>
-                          )}
-                        </div>
-                        <span className={`bb-badge bb-b-${r.status.toLowerCase()}`}>{titleCase(r.status)}</span>
-
-                        {r.status === "PENDING" && (
-                          <>
-                            <button type="button" className="bb-act" disabled={busy}
-                                    onClick={() => handleAction(r.id, "APPROVE")}>
-                              {busy ? "…" : "Approve"}
-                            </button>
-                            {/* Confirmed first — declining drops the request out of
-                                this bank's queue for good, which the button alone
-                                cannot convey. */}
-                            <button type="button" className="bb-act bb-act--ghost" disabled={busy}
-                                    onClick={() => setConfirmingReject(r)}>
-                              Reject
-                            </button>
-                          </>
-                        )}
-
-                        {canFulfil && (
-                          <button type="button" className="bb-act bb-act--go" disabled={busy}
-                                  onClick={() => handleAction(r.id, "FULFIL")}>
-                            {busy ? "…" : "Fulfil"}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {requests.map((r) => (
+                    <IncomingRequest
+                      key={r.id}
+                      request={r}
+                      bloodBankId={bloodBankId}
+                      stock={stock}
+                      busy={actingOn === r.id}
+                      error={actionError?.requestId === r.id ? actionError.message : null}
+                      onContribute={(units) => handleAction(r.id, "CONTRIBUTE", units)}
+                      onDecline={() => setConfirmingReject(r)}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
@@ -634,7 +627,105 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 }
 
 /**
- * Asks before a Reject is submitted — confirmed rather than submitted straight
+ * One row of "Incoming Hospital Requests", with everything this bank can do about
+ * it — Business Rule 20.
+ *
+ * The row shows progress rather than a yes/no state, because a request can now be
+ * part way there: "2 of 4 units received" with the contributing banks named. A bank
+ * that has already given some units still sees the request while any remain
+ * outstanding, and can give again — which is why the Contribute control stays put
+ * after a contribution instead of turning into a "done" state.
+ *
+ * The units box is capped at whichever is smaller, what the request still needs or
+ * what this bank actually holds of that group, and starts at that number: the
+ * common case is "give what I can", and the operator lowers it if they want to keep
+ * some back. The cap is a courtesy — the server caps against the outstanding figure
+ * itself, and refuses more units than the bank holds — but a box that lets someone
+ * type 40 when 2 are wanted invites a refusal it could have prevented.
+ *
+ * Stock is read from the same `stock` rows the table on the left of this screen is
+ * drawn from, never a second lookup, so the number the box allows and the number
+ * the operator can see are always the same number.
+ */
+function IncomingRequest({ request: r, bloodBankId, stock, busy, error, onContribute, onDecline }) {
+  const outstanding = r.unitsOutstanding;
+  const inStock = stock.find((s) => s.bloodType === r.bloodType)?.unitsAvailable ?? 0;
+  const mostWeCanGive = Math.min(outstanding, inStock);
+  const open = r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED";
+
+  const [units, setUnits] = useState(mostWeCanGive);
+
+  // Both figures move under the operator: another bank contributing shrinks
+  // `outstanding`, and this bank's own contribution shrinks its stock. Whenever the
+  // ceiling changes, the box follows it rather than keeping a number that is no
+  // longer allowed.
+  useEffect(() => { setUnits(mostWeCanGive); }, [mostWeCanGive]);
+
+  const ourUnits = r.contributions
+    .filter((c) => c.bloodBankId === bloodBankId)
+    .reduce((total, c) => total + c.unitsContributed, 0);
+
+  return (
+    <div className="bb-item">
+      <div className="bb-item-grp">{r.bloodType}</div>
+      <div className="bb-item-body">
+        <div className="bb-item-main">
+          {r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""} of {r.bloodType} · {titleCase(r.urgencyLevel)}
+        </div>
+        <div className="bb-item-sub">
+          {r.hospitalName} · {formatRelativeTime(r.createdAt)}
+          {r.patientReference ? ` · ${r.patientReference}` : ""}
+        </div>
+        {/* Progress, shown as soon as anything has been given — and only then, so
+            an untouched request is not cluttered with "0 of 4". */}
+        {r.unitsContributed > 0 && (
+          <div className="bb-item-progress">
+            {r.unitsContributed} of {r.unitsRequested} units received
+            {outstanding > 0 ? ` · ${outstanding} still needed` : " · complete"}
+            {` · from ${[...new Set(r.contributions.map((c) => c.bloodBankName))].join(", ")}`}
+            {ourUnits > 0 && <span className="bb-item-ours"> · {ourUnits} from us</span>}
+          </div>
+        )}
+        {open && inStock === 0 && (
+          <div className="bb-item-sub">No {r.bloodType} in stock here — this request needs another bank.</div>
+        )}
+        {error && <div className="bb-item-error">{error}</div>}
+      </div>
+
+      <span className={`bb-badge bb-b-${r.status.toLowerCase().replace(/_/g, "-")}`}>
+        {titleCase(r.status).replace(/_/g, " ")}
+      </span>
+
+      {open && (
+        <>
+          <label className="bb-units">
+            <span className="bb-units-label">Units</span>
+            <input
+              type="number" min={1} max={mostWeCanGive} value={units}
+              disabled={busy || mostWeCanGive === 0}
+              onChange={(e) => setUnits(e.target.value === "" ? "" : Number(e.target.value))}
+            />
+          </label>
+          <button
+            type="button" className="bb-act bb-act--go"
+            disabled={busy || mostWeCanGive === 0 || !units || units < 1}
+            onClick={() => onContribute(Math.min(Number(units), mostWeCanGive))}
+          >
+            {busy ? "…" : "Contribute"}
+          </button>
+          {/* Confirmed first — declining drops the request out of this bank's
+              queue for good, which the button alone cannot convey. */}
+          <button type="button" className="bb-act bb-act--ghost" disabled={busy} onClick={onDecline}>
+            Decline
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Asks before a Decline is submitted — confirmed rather than submitted straight
  * from the button because the operator cannot undo their own decline, and the
  * request vanishing from their queue is a surprising thing to trigger with a
  * stray click (Business Rule 11: a decline is per bank, so what actually
@@ -667,9 +758,13 @@ function RejectConfirmation({ request, stock, cancelRef, onCancel, onConfirm }) 
   const units = `${request.unitsRequested} unit${request.unitsRequested > 1 ? "s" : ""}`;
 
   // The same row the Inventory table and this dashboard's own stock table read
-  // unitsAvailable from — never recomputed, just looked up.
+  // unitsAvailable from — never recomputed, just looked up. Judged against the
+  // units still outstanding rather than the whole request (Business Rule 20):
+  // what this bank is declining is the remainder, which another bank may already
+  // have shrunk, and a bank that can cover what is left is turning down a request
+  // it could finish.
   const matchingStock = stock.find((s) => s.bloodType === request.bloodType);
-  const bankCanCoverIt = (matchingStock?.unitsAvailable ?? 0) >= request.unitsRequested;
+  const bankCanCoverIt = (matchingStock?.unitsAvailable ?? 0) >= request.unitsOutstanding;
   const isUnhelpedEmergency = request.urgencyLevel === "EMERGENCY" && bankCanCoverIt;
 
   return (
@@ -686,24 +781,29 @@ function RejectConfirmation({ request, stock, cancelRef, onCancel, onConfirm }) 
       >
         <div className="bb-dialog-head">
           <div className="bb-dialog-icon"><AlertIcon /></div>
-          <div className="bb-dialog-title" id="bb-reject-title">Reject this request?</div>
+          <div className="bb-dialog-title" id="bb-reject-title">Decline this request?</div>
         </div>
 
         <div className="bb-dialog-body" id="bb-reject-body">
           {request.hospitalName} asked for <strong>{units} of {request.bloodType}</strong>
           {request.patientReference ? <> for {request.patientReference}</> : null}
           {" "}({titleCase(request.urgencyLevel).toLowerCase()}).
+          {request.unitsContributed > 0 && (
+            <> {request.unitsContributed} of those units have already been received from other banks,
+              leaving <strong>{request.unitsOutstanding}</strong> outstanding.</>
+          )}
         </div>
 
         {isUnhelpedEmergency ? (
           <div className="bb-dialog-warn bb-dialog-warn--critical">
             This is an <strong>Emergency</strong> request, and your bank currently has enough
-            units of <strong>{request.bloodType}</strong> to fulfil it. Declining could delay
-            life-saving treatment for the patient. Are you sure you want to decline?
+            units of <strong>{request.bloodType}</strong> to cover what is still outstanding.
+            Declining could delay life-saving treatment for the patient. Are you sure?
           </div>
         ) : (
           <div className="bb-dialog-warn">
-            Are you sure you want to decline this request? This action cannot be undone.
+            Are you sure? This request leaves your queue for good, and your bank will not be able
+            to contribute to it afterwards.
           </div>
         )}
 
@@ -712,7 +812,7 @@ function RejectConfirmation({ request, stock, cancelRef, onCancel, onConfirm }) 
             Keep request
           </button>
           <button type="button" className="bb-dialog-confirm" onClick={onConfirm}>
-            Reject request
+            Decline request
           </button>
         </div>
       </div>

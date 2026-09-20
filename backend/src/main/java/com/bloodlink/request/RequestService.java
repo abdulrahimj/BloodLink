@@ -1,7 +1,9 @@
 package com.bloodlink.request;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -11,6 +13,7 @@ import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
+import com.bloodlink.domain.BloodRequestContribution;
 import com.bloodlink.domain.BloodRequestDecline;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
@@ -20,6 +23,7 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
@@ -28,22 +32,30 @@ import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
  * The hospital-request-to-blood-bank sequence (Figure 3.5): a hospital raises a
- * request, a blood bank approves or rejects it, and fulfilling it moves real units
- * out of that bank's stock.
+ * request, and any blood bank with stock contributes units towards it until it is
+ * covered — or declines it.
  *
- * Four rules from CLAUDE.md shape almost everything here:
- *   • Business Rule 5 — PENDING -> APPROVED -> FULFILLED, or PENDING -> REJECTED,
- *     and fulfilment must decrement the fulfilling bank's inventory.
- *   • Business Rule 6 — any blood bank may fulfil any hospital's request; there is
- *     no fixed hospital-to-bank ownership.
+ * Five rules from CLAUDE.md shape almost everything here:
+ *   • Business Rule 20 — a request is filled cooperatively. Each contribution
+ *     deducts that bank's stock immediately and is recorded as its own row; the
+ *     status follows the arithmetic (PARTIALLY_FULFILLED while units remain,
+ *     FULFILLED when none do). See {@link #contribute}.
+ *   • Business Rule 6 — any blood bank may contribute to any hospital's request;
+ *     there is no fixed hospital-to-bank ownership, and since Business Rule 20 no
+ *     bank claims a request exclusively either.
  *   • Business Rule 11 — a rejection is per bank. One bank declining removes the
- *     request from that bank's own queue and nothing more; the request stays
- *     PENDING and actionable everywhere else, and only becomes REJECTED once every
- *     blood bank has declined it. See {@link #reject}.
+ *     request from that bank's own queue and nothing more; the request stays open
+ *     and actionable everywhere else, and only becomes REJECTED once every blood
+ *     bank has declined a request nothing has been contributed to. See
+ *     {@link #reject}.
+ *   • Business Rule 5's lifecycle, as Business Rule 20 restates it: PENDING ->
+ *     PARTIALLY_FULFILLED -> FULFILLED (or straight to FULFILLED), or PENDING ->
+ *     REJECTED.
  *   • "Never trust the frontend alone for access control" — which hospital raised a
  *     request, and which bank is acting on it, are both read from the caller's own
  *     User row, never from the request body.
@@ -54,6 +66,7 @@ public class RequestService {
     private final BloodRequestRepository bloodRequestRepository;
     private final BloodInventoryRepository bloodInventoryRepository;
     private final BloodRequestDeclineRepository declineRepository;
+    private final BloodRequestContributionRepository contributionRepository;
     private final BloodBankRepository bloodBankRepository;
     private final UserRepository userRepository;
     private final ActingBankResolver actingBankResolver;
@@ -63,6 +76,7 @@ public class RequestService {
         BloodRequestRepository bloodRequestRepository,
         BloodInventoryRepository bloodInventoryRepository,
         BloodRequestDeclineRepository declineRepository,
+        BloodRequestContributionRepository contributionRepository,
         BloodBankRepository bloodBankRepository,
         UserRepository userRepository,
         ActingBankResolver actingBankResolver,
@@ -71,6 +85,7 @@ public class RequestService {
         this.bloodRequestRepository = bloodRequestRepository;
         this.bloodInventoryRepository = bloodInventoryRepository;
         this.declineRepository = declineRepository;
+        this.contributionRepository = contributionRepository;
         // Used for one question only: how many blood banks exist, which is what
         // "every bank has declined this" is measured against (see reject).
         this.bloodBankRepository = bloodBankRepository;
@@ -168,19 +183,40 @@ public class RequestService {
             case DONOR -> List.of();
         };
 
-        return requests.stream().map(BloodRequestResponse::from).toList();
+        return withContributions(requests);
     }
 
     /**
-     * Approve, reject or fulfil one request — a single step along Business Rule 5's
-     * lifecycle, performed by a blood bank.
+     * Attaches each request's contributions to it for the wire.
      *
-     * The row is loaded under a write lock before its status is read, because the
-     * check ("is this still PENDING?") and the write ("make it APPROVED") are
-     * separate statements. Both blood banks see every unclaimed request, so two of
-     * them opening the same one and clicking Approve together is an ordinary event,
-     * not a rare race: without the lock both would read PENDING, both would pass the
-     * check, and the second write would quietly overwrite the first.
+     * One grouped query for the whole page rather than one per request: every row
+     * on both portals now shows its progress ("2 of 4 units received"), so the
+     * naive version would be a query per row on the two screens people keep open
+     * all day.
+     */
+    private List<BloodRequestResponse> withContributions(List<BloodRequest> requests) {
+        if (requests.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, List<BloodRequestContribution>> byRequest = contributionRepository
+            .findForRequests(requests.stream().map(BloodRequest::getId).toList()).stream()
+            .collect(Collectors.groupingBy(contribution -> contribution.getBloodRequest().getId()));
+
+        return requests.stream()
+            .map(request -> BloodRequestResponse.from(request, byRequest.getOrDefault(request.getId(), List.of())))
+            .toList();
+    }
+
+    /**
+     * Contribute units to a request, or decline it — the two things a blood bank can
+     * do with one (Business Rule 20).
+     *
+     * The row is loaded under a write lock before anything is read from it, and that
+     * lock is the concurrency guarantee for the whole feature. Every bank sees every
+     * open request now, so two banks acting on the same one at the same moment is
+     * ordinary rather than rare; the lock makes them take turns, so the second one
+     * reads a total that already includes the first one's units. See
+     * {@link #contribute} for what it would otherwise cost.
      */
     @Transactional
     public BloodRequestResponse act(UUID requestId, RequestActionPayload payload, AuthenticatedUser principal) {
@@ -190,49 +226,140 @@ public class RequestService {
             .orElseThrow(() -> new NotFoundException("No blood request found for this id."));
 
         switch (payload.action()) {
-            case APPROVE -> approve(request, actingBank);
-            // Still called REJECT on the wire — the action the operator takes is
-            // unchanged, only what it now means for the other banks. Renaming the
-            // enum would break every existing client for no behavioural gain.
+            case CONTRIBUTE -> contribute(request, actingBank, payload.units());
             case REJECT -> reject(request, actingBank);
-            case FULFIL -> fulfil(request, actingBank);
         }
 
         BloodRequest saved = bloodRequestRepository.save(request);
 
-        // Told to the hospital that raised it, and only after the transition above
-        // has succeeded — an illegal transition or a stock shortfall throws before
-        // reaching here, so a hospital is never told a request was approved when the
-        // approval was refused. The push itself waits for the commit as well; see
-        // NotificationPublisher.
+        // Told to the hospital that raised it, and only after the action above has
+        // succeeded — an illegal transition or a stock shortfall throws before
+        // reaching here, so a hospital is never told units arrived that did not. The
+        // push itself waits for the commit as well; see NotificationPublisher.
         //
-        // A decline that was not the last one outstanding leaves the request PENDING,
-        // and notifyRequestStatusChange deliberately sends nothing for PENDING. That
-        // is the behaviour this feature wants: the hospital's request is still live
-        // with the other banks, so telling them "a bank declined" would read as bad
-        // news about a request that has not actually lost anything yet. They are told
-        // only if the last bank declines and the request really does close.
+        // A decline that was not the last one outstanding leaves the request open,
+        // and notifyRequestStatusChange deliberately sends nothing while it is
+        // PENDING: the request is still live with the other banks, so "a bank
+        // declined" would read as bad news about something that has lost nothing.
+        // They are told only if the last bank declines and the request really closes.
         notificationService.notifyRequestStatusChange(saved);
 
-        return BloodRequestResponse.from(saved);
+        return BloodRequestResponse.from(saved, contributionRepository.findForRequests(List.of(saved.getId())));
     }
 
     /**
-     * PENDING -> APPROVED, claiming the request for the acting bank.
+     * One bank issues units towards a request — the act at the centre of Business
+     * Rule 20, and the only place stock moves out of a bank.
      *
-     * Stock is checked here as well as at fulfilment, even though nothing is deducted
-     * yet. Approving is a promise to the hospital — and under Business Rule 6 it also
-     * takes the request out of every other bank's feed — so letting a bank approve a
-     * request it visibly cannot cover would strand the hospital behind a bank that
-     * was never able to help. The deduction still happens only at fulfilment, and is
-     * re-checked there against the stock at that moment.
+     * Replaces the old approve-then-fulfil pair. Approving claimed a request
+     * exclusively and promised the whole amount, which is precisely what stopped two
+     * banks holding 2 units each from filling one request for 4. A contribution
+     * promises nothing and claims nothing: it issues what this bank can spare now,
+     * and leaves whatever remains open to everyone, this bank included.
+     *
+     * What happens, in order, and why in that order:
+     *   1. The request must still be open. A FULFILLED or REJECTED one takes no more
+     *      units, and saying so is more useful than silently recording a no-op.
+     *   2. This bank must not have declined it. A decline is this bank's final
+     *      answer on this request (see {@link #reject}), and the request is not in
+     *      its queue any more — so a contribution could only arrive by a stale
+     *      screen or a hand-made call.
+     *   3. The units are capped at what is genuinely still outstanding, read *after*
+     *      the lock above was granted. This is the race the lock exists for: without
+     *      it two banks would both read "4 needed", both contribute 4, and a
+     *      hospital that asked for 4 units would be sent 8 real units of blood while
+     *      two banks' shelves emptied. Capping rather than refusing is deliberate —
+     *      between the operator reading the screen and pressing the button, another
+     *      bank may have taken part of it, and that is not their mistake to be
+     *      punished for. The response says what was actually recorded.
+     *   4. Stock is re-read under its own write lock and must cover the capped
+     *      amount. Asking for more than this bank holds *is* refused (rather than
+     *      capped again): that is a mistake about its own shelf, and quietly issuing
+     *      fewer units than the operator typed would leave them believing they had
+     *      sent more than they did.
+     *   5. The deduction, the contribution row and the new status are written
+     *      together. There is no ordering of these that can half-happen — one
+     *      transaction covers all three — so units can never leave stock without
+     *      being recorded, nor be recorded without leaving stock.
      */
-    private void approve(BloodRequest request, BloodBank actingBank) {
-        requireStatus(request, RequestStatus.PENDING, "approved");
-        requireSufficientStock(actingBank, request);
+    private void contribute(BloodRequest request, BloodBank actingBank, Integer requestedUnits) {
+        if (requestedUnits == null || requestedUnits <= 0) {
+            // Bean Validation catches a zero or negative number; this catches the
+            // field being absent entirely, which no annotation on a nullable field
+            // can (it is nullable precisely because REJECT does not use it).
+            throw new InvalidFieldException("units", "Enter how many units this blood bank is contributing.");
+        }
+        if (!request.getStatus().isOpen()) {
+            throw new ConflictException(
+                "This request is already %s — it cannot take more units."
+                    .formatted(request.getStatus().name().toLowerCase().replace('_', ' '))
+            );
+        }
+        if (declineRepository.existsByBloodRequestIdAndBloodBankId(request.getId(), actingBank.getId())) {
+            throw new ConflictException(
+                "This blood bank has already declined this request, so it cannot contribute to it."
+            );
+        }
 
-        request.setStatus(RequestStatus.APPROVED);
-        request.setFulfilledByBloodBank(actingBank);
+        int alreadyContributed = contributionRepository.sumUnitsForRequest(request.getId());
+        int outstanding = request.getUnitsRequested() - alreadyContributed;
+        if (outstanding <= 0) {
+            // Reachable only if a concurrent contribution completed the request
+            // between this caller reading the screen and the lock being granted —
+            // the status check above passed on a row that was still open when it
+            // was read. The lock is what makes this the worst case rather than an
+            // over-contribution.
+            throw new ConflictException("This request has already been covered in full.");
+        }
+        int units = Math.min(requestedUnits, outstanding);
+
+        BloodInventory stock = bloodInventoryRepository
+            .findByBloodBankIdAndBloodTypeForUpdate(actingBank.getId(), request.getBloodType())
+            .orElseThrow(() -> insufficientStock(request, 0, units));
+
+        if (stock.getUnitsAvailable() < units) {
+            throw insufficientStock(request, stock.getUnitsAvailable(), units);
+        }
+
+        int unitsBefore = stock.getUnitsAvailable();
+        stock.setUnitsAvailable(unitsBefore - units);
+        // touch() on the entity's @PreUpdate refreshes lastUpdated.
+        bloodInventoryRepository.save(stock);
+
+        BloodRequestContribution contribution = new BloodRequestContribution();
+        contribution.setBloodRequest(request);
+        contribution.setBloodBank(actingBank);
+        contribution.setUnitsContributed(units);
+        // contributedAt is set by the entity's @PrePersist.
+        contributionRepository.save(contribution);
+
+        int contributedNow = alreadyContributed + units;
+        // Status is derived, never declared: whatever the arithmetic says is what
+        // the request is. That is why there is no "mark fulfilled" action anywhere.
+        request.setStatus(contributedNow >= request.getUnitsRequested()
+            ? RequestStatus.FULFILLED
+            : RequestStatus.PARTIALLY_FULFILLED);
+        request.setLastContributedByBloodBank(actingBank);
+
+        // Issuing units is the ordinary way a group falls into Low or Critical, so
+        // this is the low-stock alert's main trigger. Raised here rather than inside
+        // the inventory save so the alert reflects the deduction that actually
+        // happened, after every check above has passed.
+        notificationService.notifyStockCrossing(
+            actingBank, request.getBloodType(), unitsBefore, stock.getUnitsAvailable()
+        );
+
+        // The hospital hears about units that arrived without completing the
+        // request; a contribution that does complete it is announced as a
+        // fulfilment instead, by notifyRequestStatusChange in act() above.
+        if (request.getStatus() == RequestStatus.PARTIALLY_FULFILLED) {
+            notificationService.notifyRequestPartlyFilled(request, actingBank, units, contributedNow);
+        }
+
+        // And the other banks still watching this request are told what is left, so
+        // two of them cannot each set out to cover the same shrinking gap. The
+        // contributing bank is not told — it has the answer in its own response.
+        notificationService.notifyRequestProgress(request, actingBank, units, contributedNow);
     }
 
     /**
@@ -253,12 +380,40 @@ public class RequestService {
      * inactive flag is ever added, this comparison is the one place that has to learn
      * about it.
      *
-     * fulfilled_by_blood_bank stays null throughout, including on the final
-     * rejection: that column means "the bank that is supplying this", and a decline
-     * supplies nothing.
+     * last_contributed_by_blood_bank is never touched here: it names a bank that
+     * gave units, and a decline gives none.
+     *
+     * Business Rule 20 adds two things to this, and changes nothing else.
+     *
+     * First, a bank that has contributed to a request may not then decline it. It
+     * has already given what it could; a decline on top would be a second, opposite
+     * answer to the same question, and — because declines are counted towards
+     * closing a request — one that could help close a request this very bank had
+     * just helped fill.
+     *
+     * Second, a request that has received units never closes by decline, however
+     * many banks decline the rest of it. Real progress exists on it, the hospital
+     * has blood it can use, and stock that could complete it may arrive tomorrow;
+     * closing it would throw that away and force the ward to start again. A request
+     * nothing has been contributed to still closes exactly as before — it has
+     * nothing to preserve, and leaving it open would be a queue entry every bank has
+     * already said no to. (The status guard below is belt and braces: since a
+     * contributor cannot decline, a request with contributions can never reach a
+     * full set of declines in the first place.)
      */
     private void reject(BloodRequest request, BloodBank actingBank) {
-        requireStatus(request, RequestStatus.PENDING, "rejected");
+        if (!request.getStatus().isOpen()) {
+            throw new ConflictException(
+                "A request can only be declined while it is still open — this one is %s."
+                    .formatted(request.getStatus().name().toLowerCase().replace('_', ' '))
+            );
+        }
+
+        if (contributionRepository.existsByBloodRequestIdAndBloodBankId(request.getId(), actingBank.getId())) {
+            throw new ConflictException(
+                "This blood bank has already contributed to this request, so it cannot decline it."
+            );
+        }
 
         if (declineRepository.existsByBloodRequestIdAndBloodBankId(request.getId(), actingBank.getId())) {
             // Checked rather than left to the unique constraint so a double-click
@@ -282,90 +437,26 @@ public class RequestService {
         // >= rather than ==: if a bank were ever removed after declining, the
         // decline count could exceed the bank count, and a request no remaining
         // bank can see must still be closable rather than stuck PENDING forever.
-        if (declines >= banks) {
+        //
+        // PENDING only, never PARTIALLY_FULFILLED — see this method's comment: a
+        // request that has already received units stays open indefinitely.
+        if (declines >= banks && request.getStatus() == RequestStatus.PENDING) {
             request.setStatus(RequestStatus.REJECTED);
         }
     }
 
-    /**
-     * APPROVED -> FULFILLED, and the only place stock actually moves: the requested
-     * units come off the fulfilling bank's (bank, blood group) inventory row.
-     *
-     * Stock is re-read under a write lock and re-checked here rather than trusted
-     * from the approval, because time passes in between and the same units may have
-     * been issued to someone else meanwhile. If they no longer cover the request the
-     * whole transaction is refused — the status is not advanced and nothing is
-     * deducted — so a bank can never report a request fulfilled out of units it does
-     * not have.
-     */
-    private void fulfil(BloodRequest request, BloodBank actingBank) {
-        requireStatus(request, RequestStatus.APPROVED, "fulfilled");
-
-        BloodBank approvedBy = request.getFulfilledByBloodBank();
-        if (approvedBy == null || !approvedBy.getId().equals(actingBank.getId())) {
-            // Approval is what claims a request; another bank fulfilling it would
-            // deduct from stock the hospital was never promised.
-            throw new AccessDeniedException("This request was approved by another blood bank.");
-        }
-
-        BloodInventory stock = bloodInventoryRepository
-            .findByBloodBankIdAndBloodTypeForUpdate(actingBank.getId(), request.getBloodType())
-            .orElseThrow(() -> insufficientStock(request, 0));
-
-        if (stock.getUnitsAvailable() < request.getUnitsRequested()) {
-            throw insufficientStock(request, stock.getUnitsAvailable());
-        }
-
-        int unitsBefore = stock.getUnitsAvailable();
-        stock.setUnitsAvailable(unitsBefore - request.getUnitsRequested());
-        // touch() on the entity's @PreUpdate refreshes lastUpdated.
-        bloodInventoryRepository.save(stock);
-
-        request.setStatus(RequestStatus.FULFILLED);
-
-        // Issuing units is the ordinary way a group falls into Low or Critical, so
-        // this is the low-stock alert's main trigger. Raised here rather than inside
-        // the inventory save so the alert reflects the deduction that actually
-        // happened, after every check above has passed.
-        notificationService.notifyStockCrossing(
-            actingBank, request.getBloodType(), unitsBefore, stock.getUnitsAvailable()
-        );
-    }
-
-    /** Guards one lifecycle edge, naming both the current and required state so the
-     *  panel can show the operator why their click was refused. Phrased without an
-     *  article so it reads correctly for both "approved" and "pending". */
-    private void requireStatus(BloodRequest request, RequestStatus required, String verbPastTense) {
-        if (request.getStatus() != required) {
-            throw new ConflictException(
-                "A request can only be %s while it is %s — this one is %s."
-                    .formatted(verbPastTense, required.name().toLowerCase(), request.getStatus().name().toLowerCase())
-            );
-        }
-    }
-
-    /** Approval-time availability check; the authoritative one is in {@link #fulfil}. */
-    private void requireSufficientStock(BloodBank actingBank, BloodRequest request) {
-        int available = bloodInventoryRepository
-            .findByBloodBankIdAndBloodType(actingBank.getId(), request.getBloodType())
-            .map(BloodInventory::getUnitsAvailable)
-            .orElse(0);
-
-        if (available < request.getUnitsRequested()) {
-            throw insufficientStock(request, available);
-        }
-    }
-
     /** 409 with the actual figures, so the operator can see how short they are
-     *  rather than being told only that it failed. */
-    private ConflictException insufficientStock(BloodRequest request, int available) {
+     *  rather than being told only that it failed. Names the units this bank was
+     *  trying to contribute — which may be fewer than the request asked for, since
+     *  another bank may already have covered part of it. */
+    private ConflictException insufficientStock(BloodRequest request, int available, int attempted) {
         return new ConflictException(
-            "Not enough %s in stock — %d unit%s available, %d requested."
+            "Not enough %s in stock — %d unit%s available, %d being contributed."
                 .formatted(
                     request.getBloodType().getLabel(),
                     available,
                     available == 1 ? "" : "s",
-                    request.getUnitsRequested()
+                    attempted
                 )
         );
     }

@@ -74,11 +74,18 @@ public class RequestController {
     }
 
     /**
-     * Approve, reject or fulfil — one step along Business Rule 5's lifecycle.
+     * Contribute units towards a request, or decline it (Business Rule 20).
      *
-     * PATCH rather than PUT because this changes one aspect of the request (its
-     * state) and never replaces it: the hospital's blood group, units and urgency
-     * are not editable once submitted.
+     * PATCH rather than PUT because this changes one aspect of the request (how much
+     * of it is covered) and never replaces it: the hospital's blood group, units and
+     * urgency are not editable once submitted.
+     *
+     * A contribution is deliberately not a POST to a /contributions sub-resource,
+     * even though it does create one. The two actions a bank can take are two
+     * answers to the same question — "can you help with this?" — taken from the same
+     * row of the same panel, and splitting them across two endpoints would mean the
+     * dashboard's single handler had to know which shape each one needed. What comes
+     * back is the request, in the shape the panel renders, either way.
      */
     @PatchMapping("/{requestId}")
     public BloodRequestResponse act(
