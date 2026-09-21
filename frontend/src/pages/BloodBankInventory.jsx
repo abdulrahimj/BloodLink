@@ -3,6 +3,7 @@ import { getInventory, getInventorySummary, addInventoryBatch } from "../api/inv
 import { getAppealReach, sendDonationAppeal } from "../api/appeals.js";
 import { lookupDonorByPhone, recordDonation } from "../api/donations.js";
 import { formatDateTime, formatFullDate, formatHeaderDate } from "../lib/dates.js";
+import { describeAppealReach, donorCount } from "../lib/appealReach.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
@@ -60,12 +61,6 @@ const STATUS_COLOR = { SUFFICIENT: "#1E7F45", LOW: "#D98A1F", CRITICAL: "#C8102E
 
 function titleCase(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
-}
-
-/** "1 donor" / "12 donors" — the count and its noun, so the sentences built from
- *  it below don't each have to remember the singular case. */
-function donorCount(n) {
-  return `${n} donor${n === 1 ? "" : "s"}`;
 }
 
 /** Which statuses justify asking donors to come in. Sufficient does not: an
@@ -838,8 +833,10 @@ function AppealConfirmation({ appeal, onCancel, onConfirm }) {
 
   // Nothing to send to. Blocked rather than allowed as a no-op: the request would
   // succeed, report zero, and leave the operator believing an appeal went out.
-  const noOneToReach = reach !== null && reach.eligibleDonors === 0;
-  const canSend = reach !== null && !noOneToReach && !sending;
+  const description = reach === null
+    ? null
+    : describeAppealReach(bloodType, reach.eligibleDonors, reach.donorsInRecovery);
+  const canSend = description !== null && !description.nobodyToReach && !sending;
 
   return (
     <div
@@ -859,23 +856,15 @@ function AppealConfirmation({ appeal, onCancel, onConfirm }) {
             <div className="bi-confirm-note">Checking how many donors can be contacted…</div>
           )}
 
-          {reach !== null && (
+          {description !== null && (
             <>
-              <div className="bi-confirm-count">
-                {noOneToReach
-                  ? `No eligible ${bloodType} donors`
-                  : `${donorCount(reach.eligibleDonors)} will be notified`}
-              </div>
-              <div className="bi-confirm-note">
-                {/* Says what the filter did, rather than quietly shrinking the
-                    audience. A small number reads very differently once you know
-                    it is nine people recovering rather than nine people missing. */}
-                {reach.donorsInRecovery > 0
-                  ? `${donorCount(reach.donorsInRecovery)} of this group ${reach.donorsInRecovery === 1 ? "is" : "are"} `
-                    + "within the 90-day recovery window and will not be contacted."
-                  : `Every ${bloodType} donor on the register is currently eligible.`}
-                {noOneToReach && " There is nobody to appeal to right now."}
-              </div>
+              <div className="bi-confirm-count">{description.heading}</div>
+              {/* Says what the filter did, rather than quietly shrinking the
+                  audience. A small number reads very differently once you know
+                  it is nine people recovering rather than nine people missing —
+                  and "nobody registered" reads differently again. See
+                  describeAppealReach for the four cases. */}
+              <div className="bi-confirm-note">{description.note}</div>
             </>
           )}
         </div>

@@ -325,6 +325,27 @@ class NotificationServiceTest {
         assertThat(reach.inRecovery()).isZero();
     }
 
+    /**
+     * The preview for a blood group nobody has registered as reports zero eligible
+     * AND zero in recovery. That pair is what tells the confirmation dialog "no
+     * donors registered" apart from "all donors recovering" (see
+     * frontend/src/lib/appealReach.js) — so it is asserted here rather than
+     * assumed: if the preview ever folded the two cases into one figure, the dialog
+     * would go back to saying everyone is eligible while offering nobody to appeal to.
+     */
+    @Test
+    void aPreviewForAGroupWithNoRegisteredDonorsReportsZeroEligibleAndZeroInRecovery() {
+        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE)).thenReturn(List.of());
+
+        AppealReach preview = service.previewAppealReach(BloodType.AB_NEGATIVE);
+
+        assertThat(preview.eligible()).isZero();
+        assertThat(preview.inRecovery()).isZero();
+        // A preview writes nothing and pushes nothing.
+        verify(notificationRepository, never()).saveAll(any());
+        verifyNoInteractions(publisher);
+    }
+
     // ---------- NEW_REQUEST ----------
 
     @Test

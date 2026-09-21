@@ -246,6 +246,12 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
    donation appeal, and a donation cannot be recorded for one (`POST /api/donations` returns 409 with
    nothing written, and the Record Donation form locks). Both read `Donor.isEligibleToDonate()` and
    `Donor.eligibleFrom()` — the same calculation the donor's own dashboard shows — so they cannot drift.
+   - **The Send Appeal dialog tells "nobody registered" apart from "everyone recovering".** The reach
+     preview returns both `eligibleDonors` and `donorsInRecovery`; zero of each means no donor of that
+     group is registered ("No donors of this blood type are registered yet"), while zero eligible with
+     some recovering names how many are inside the 90-day window. The wording lives in
+     `frontend/src/lib/appealReach.js` (`describeAppealReach`) and must never say everyone is eligible
+     when there is nobody to appeal to.
 3. **Stock status thresholds** (per blood group, per blood bank): below 15 units = Critical,
    below 40 units = Low, otherwise Sufficient. Confirm with project owner before changing these numbers.
 4. **`Donation.blood_type` is independently recorded, not copied from `Donor.blood_type`.** Blood type
@@ -672,6 +678,10 @@ listed so nothing is forgotten when the chapters are next revised.
 
 ## Conventions
 
+- **Frontend logic worth testing goes in a plain `.js` file under `frontend/src/lib/` with a
+  `*.test.js` beside it, run by `npm test`** (Node's built-in test runner — no test dependency added,
+  keeping the fixed tech stack). Component wording or rules that only exist inside a `.jsx` file cannot
+  be tested this way, so extract the function first (as `appealReach.js` was).
 - **At the end of every task, after listing files changed, commit and push as the closing step — not optional.** Run `git add`, then `git commit` with a clear, specific message describing what changed, then `git push`. A task is not finished until it is committed and pushed to `origin/main`. State in the summary that this was done, including the resulting commit hash.
 - **`bloodlink_dev` holds real data. Testing must never delete or overwrite a row it did not itself create.**
   This is not a style preference — it was violated in Phase 6 and destroyed the project owner's manually
