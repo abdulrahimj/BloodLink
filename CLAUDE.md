@@ -393,6 +393,14 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       so a row inserted by hand in any other spelling cannot be signed into. `POST /api/admin/users`
       (Business Rule 14) normalises for itself, and is the reason hand-inserting one is now the
       exception rather than the only way.
+    - **The demo seed follows this too.** V11 runs before any demo row exists, so it never saw the
+      accounts `db/demo-seed` creates; `V906__demo_normalize_phone_numbers.sql` converts them (staff
+      `+232 76 900 00x` lose their spaces; the generated donors are padded to 8 digits). Demo sign-in
+      by phone, typed either way, was silently failing until it existed. **Any future migration that
+      changes a table the demo seed writes to must be checked against a fresh demo database** — V15
+      broke `V904` this way, because a fresh database runs every migration in version order and the
+      seed files run last. Demo seed files are disposable, so editing one is acceptable (as V904 was),
+      but it changes the checksum: existing demo databases must be dropped and recreated.
 14. **An administrator creates staff and administrator accounts through `POST /api/admin/users`;
     the system generates the password and shows it exactly once.** This is the "created by an
     administrator" path Business Rules 8 and 9 always referred to. Before it, those rows were
