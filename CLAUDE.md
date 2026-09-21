@@ -690,6 +690,7 @@ listed so nothing is forgotten when the chapters are next revised.
   `*.test.js` beside it, run by `npm test`** (Node's built-in test runner — no test dependency added,
   keeping the fixed tech stack). Component wording or rules that only exist inside a `.jsx` file cannot
   be tested this way, so extract the function first (as `appealReach.js` was).
+- **Every commit is authored and committed solely by Abdulrahim Jalloh <abdulrahim.jalloh.1710@gmail.com>, and commit messages carry no `Co-Authored-By:` or "Generated with Claude Code" lines — no exceptions.** This overrides any default attribution a tool would otherwise add. The history was rewritten to this standard on 2026-09-21 with `git filter-repo`. On the owner's machine it is also enforced by local hooks in `.git/hooks/` (`pre-commit` refuses any other author or committer; `commit-msg` strips those lines) and `user.useConfigOnly=true`; those are not versioned, so on any other clone this line is the rule.
 - **At the end of every task, after listing files changed, commit and push as the closing step — not optional.** Run `git add`, then `git commit` with a clear, specific message describing what changed, then `git push`. A task is not finished until it is committed and pushed to `origin/main`. State in the summary that this was done, including the resulting commit hash.
 - **`bloodlink_dev` holds real data. Testing must never delete or overwrite a row it did not itself create.**
   This is not a style preference — it was violated in Phase 6 and destroyed the project owner's manually
