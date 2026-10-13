@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -35,6 +36,9 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
+import com.bloodlink.audit.AuditLogService;
+import com.bloodlink.audit.dto.AuditLogEntryResponse;
+import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.common.PhoneNumber;
@@ -94,6 +98,7 @@ class AdminEditAndAuditLogIT {
     @Autowired private HospitalRepository hospitalRepository;
     @Autowired private BloodBankRepository bloodBankRepository;
     @Autowired private AuditLogRepository auditLogRepository;
+    @Autowired private AuditLogService auditLogService;
     @Autowired private EntityManager entityManager;
     @Autowired @Qualifier("requestMappingHandlerMapping") private RequestMappingHandlerMapping handlerMapping;
 
@@ -240,13 +245,88 @@ class AdminEditAndAuditLogIT {
         assertThat(entries.get(1).getDetails())
             .isEqualTo("Blood bank changed from " + bank(0).getName() + " to " + bank(1).getName() + ".");
 
-        // And the Audit Log page's endpoint shows them, newest first, with names.
+        // And the Audit Log page's endpoint shows them, newest first, with names,
+        // inside the paged envelope (Business Rule 17's pagination).
         mockMvc.perform(get("/api/admin/audit-log").header("Authorization", "Bearer " + token))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].action").value("ACCOUNT_REACTIVATED"))
-            .andExpect(jsonPath("$[0].actorName").value("Isatu Bangura"))
-            .andExpect(jsonPath("$[0].targetName").value("Mohamed Kamara"))
-            .andExpect(jsonPath("$[3].action").value("ACCOUNT_CREATED"));
+            .andExpect(jsonPath("$.content[0].action").value("ACCOUNT_REACTIVATED"))
+            .andExpect(jsonPath("$.content[0].actorName").value("Isatu Bangura"))
+            .andExpect(jsonPath("$.content[0].targetName").value("Mohamed Kamara"))
+            .andExpect(jsonPath("$.content[3].action").value("ACCOUNT_CREATED"));
+    }
+
+    // ---------- pagination (Business Rule 17) ----------
+
+    /**
+     * More entries than one page holds, created directly through the
+     * {@code AuditLogService} bean rather than 25 real HTTP round trips — faster,
+     * and the HTTP path for writing one entry is already proven above. Checks the
+     * three positions that matter: the first page, the last (partial) page, and a
+     * page past the end, plus the totals every page carries.
+     */
+    @Test
+    void pagingSplitsMoreEntriesThanOnePageHoldsAcrossFirstLastAndPastTheEnd() throws Exception {
+        User admin = seed("System Administrator", Role.ADMIN);
+        User target = seed("Someone With Many Entries", Role.ADMIN);
+        String token = signIn(admin);
+
+        for (int i = 0; i < 25; i++) {
+            auditLogService.record(admin.getId(), AuditAction.ACCOUNT_EDITED, target, "Edit number " + i + ".");
+        }
+        entityManager.flush();
+
+        // First page: exactly `size` entries, size 10 of a total of 25 -> 3 pages.
+        mockMvc.perform(get("/api/admin/audit-log").param("size", "10").header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content.length()").value(10))
+            .andExpect(jsonPath("$.page").value(0))
+            .andExpect(jsonPath("$.size").value(10))
+            .andExpect(jsonPath("$.totalElements").value(25))
+            .andExpect(jsonPath("$.totalPages").value(3));
+
+        // Last page: the remainder, 25 - 20 = 5.
+        MvcResult lastPageResult = mockMvc.perform(get("/api/admin/audit-log")
+                .param("page", "2").param("size", "10")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content.length()").value(5))
+            .andExpect(jsonPath("$.page").value(2))
+            .andExpect(jsonPath("$.totalElements").value(25))
+            .andExpect(jsonPath("$.totalPages").value(3))
+            .andReturn();
+
+        // A page past the end: empty content, not an error, same totals.
+        mockMvc.perform(get("/api/admin/audit-log")
+                .param("page", "9").param("size", "10")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content.length()").value(0))
+            .andExpect(jsonPath("$.totalElements").value(25))
+            .andExpect(jsonPath("$.totalPages").value(3));
+
+        // The three pages together cover every entry exactly once — proof that
+        // LIMIT/OFFSET paging and the newest-first tie-breaker never duplicate or
+        // drop a row between pages.
+        AuditLogPageResponse firstPage = objectMapper.readValue(
+            mockMvc.perform(get("/api/admin/audit-log").param("size", "10")
+                    .header("Authorization", "Bearer " + token))
+                .andReturn().getResponse().getContentAsString(),
+            AuditLogPageResponse.class);
+        AuditLogPageResponse secondPage = objectMapper.readValue(
+            mockMvc.perform(get("/api/admin/audit-log").param("page", "1").param("size", "10")
+                    .header("Authorization", "Bearer " + token))
+                .andReturn().getResponse().getContentAsString(),
+            AuditLogPageResponse.class);
+        AuditLogPageResponse thirdPage = objectMapper.readValue(
+            lastPageResult.getResponse().getContentAsString(), AuditLogPageResponse.class);
+
+        Set<UUID> allIds = new HashSet<>();
+        for (AuditLogPageResponse page : List.of(firstPage, secondPage, thirdPage)) {
+            for (AuditLogEntryResponse entry : page.content()) {
+                allIds.add(entry.id());
+            }
+        }
+        assertThat(allIds).hasSize(25);
     }
 
     // ---------- nothing can modify or delete an entry ----------

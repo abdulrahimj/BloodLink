@@ -9,6 +9,7 @@ import java.util.List;
 
 import org.hibernate.annotations.Immutable;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.CrudRepository;
 
 import com.bloodlink.domain.AuditLog;
@@ -44,6 +45,23 @@ class AuditLogAppendOnlyTest {
             || name.startsWith("update") || name.startsWith("modify"));
         // What it does have: a way to add, and ways to read.
         assertThat(names).contains("save", "findAllNewestFirst");
+    }
+
+    /**
+     * The newest-first page query (Business Rule 17's pagination) must keep its
+     * {@code createdAt desc, id desc} tie-breaker. Two entries can share a
+     * timestamp; without the secondary key on id, their relative order would be
+     * free to flip between one page request and the next — a row could then show
+     * up on neither page, or on both. Checking the annotation's text, the same
+     * spirit as the tests above, catches that the moment someone "simplifies" the
+     * ordering rather than only once a flaky page-boundary test happens to notice.
+     */
+    @Test
+    void theNewestFirstPageQueryKeepsTheIdTieBreaker() throws NoSuchMethodException {
+        Method method = AuditLogRepository.class.getMethod("findAllNewestFirst", org.springframework.data.domain.Pageable.class);
+        String jpql = method.getAnnotation(Query.class).value();
+
+        assertThat(jpql).as("findAllNewestFirst's JPQL").contains("order by a.createdAt desc, a.id desc");
     }
 
     @Test

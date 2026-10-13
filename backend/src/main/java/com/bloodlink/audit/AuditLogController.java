@@ -1,12 +1,14 @@
 package com.bloodlink.audit;
 
-import java.util.List;
-
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.bloodlink.audit.dto.AuditLogEntryResponse;
+import com.bloodlink.audit.dto.AuditLogPageResponse;
+
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 
 /**
  * The Audit Log page's data — Business Rule 17.
@@ -30,9 +32,32 @@ public class AuditLogController {
         this.auditLogService = auditLogService;
     }
 
-    /** Every recorded administrator action, newest first. */
+    /**
+     * One page of recorded administrator actions, newest first.
+     *
+     * {@code page} is 0-based and defaults to 0; {@code size} defaults to 20 and
+     * is capped at 100, so a caller cannot ask for the whole, ever-growing log in
+     * one response the way the original version of this endpoint did. Both are
+     * validated directly on the {@code @RequestParam}s rather than refused inside
+     * the service — a bad value (negative page, size out of range, a non-number)
+     * is never silently corrected, only refused with a 400 naming the field.
+     *
+     * Deliberately no {@code @Validated} on this class: Spring MVC has validated
+     * constraint-annotated {@code @RequestParam}s natively since 6.1, and that is
+     * what {@code GlobalExceptionHandler.handleParameterValidation} expects —
+     * see {@code AppealController.reach}'s comment for why {@code @Validated}
+     * would route the same constraints through the wrong exception type.
+     */
     @GetMapping
-    public List<AuditLogEntryResponse> list() {
-        return auditLogService.listAll();
+    public AuditLogPageResponse list(
+        @RequestParam(defaultValue = "0")
+        @Min(value = 0, message = "page cannot be negative")
+        int page,
+        @RequestParam(defaultValue = "20")
+        @Min(value = 1, message = "size must be at least 1")
+        @Max(value = 100, message = "size cannot exceed 100")
+        int size
+    ) {
+        return auditLogService.list(page, size);
     }
 }

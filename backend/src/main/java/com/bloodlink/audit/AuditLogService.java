@@ -1,13 +1,15 @@
 package com.bloodlink.audit;
 
-import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.audit.dto.AuditLogEntryResponse;
+import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
@@ -73,18 +75,28 @@ public class AuditLogService {
     }
 
     /**
-     * Every entry, newest first, for the Audit Log page.
+     * One page of entries, newest first, for the Audit Log page.
      *
-     * The whole log in one response. Fine at this deployment's scale — a handful
-     * of administrators creating, editing and suspending staff accounts produces
-     * a few entries a week, not thousands — and it is what the page asks for. If
-     * that ever changes, paging belongs here and in the query, as a decision for
-     * the project owner.
+     * {@code page} and {@code size} have already been validated by
+     * {@link AuditLogController} (page &gt;= 0, 1 &lt;= size &lt;= 100) by the time
+     * this runs. The {@link PageRequest} is built with no {@link
+     * org.springframework.data.domain.Sort} of its own — the newest-first order,
+     * including the id tie-breaker, is fixed in {@code findAllNewestFirst}'s own
+     * JPQL, so there is exactly one place that decides it, not two that could
+     * disagree.
      */
     @Transactional(readOnly = true)
-    public List<AuditLogEntryResponse> listAll() {
-        return auditLogRepository.findAllNewestFirst().stream()
-            .map(AuditLogEntryResponse::from)
-            .toList();
+    public AuditLogPageResponse list(int page, int size) {
+        Page<AuditLogEntryResponse> result = auditLogRepository
+            .findAllNewestFirst(PageRequest.of(page, size))
+            .map(AuditLogEntryResponse::from);
+
+        return new AuditLogPageResponse(
+            result.getContent(),
+            result.getNumber(),
+            result.getSize(),
+            result.getTotalElements(),
+            result.getTotalPages()
+        );
     }
 }

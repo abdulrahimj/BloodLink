@@ -7,6 +7,10 @@ import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import {
+  AUDIT_LOG_PAGE_SIZES, canGoToPreviousPage, canGoToNextPage,
+  clampPageToAvailable, isAuditLogEmpty, describeAuditLogPage,
+} from "../lib/auditLogPaging.js";
 
 /* ================================================================
    BloodLink — Admin Console (System Administrator)
@@ -478,6 +482,23 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-au-edited      { background: var(--amber); }
         .ad-au-suspended   { background: var(--red); }
         .ad-au-reactivated { background: var(--green); }
+
+        /* paging footer, below the table */
+        .ad-log-pager {
+          flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+          flex-wrap: wrap; gap: clamp(8px, 1.2vw, 16px);
+          margin-top: clamp(8px, 1.2vh, 14px); padding-top: clamp(7px, 1.1vh, 12px);
+          border-top: 1px solid var(--line);
+        }
+        .ad-log-size { display: flex; align-items: center; gap: 7px; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; color: var(--ink-muted); }
+        .ad-log-size select {
+          font-family: inherit; font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 700; color: var(--ink);
+          border: 1.5px solid var(--line); border-radius: 6px; background: #FFF;
+          padding: 3px clamp(5px, .5vw, 8px); cursor: pointer;
+        }
+        .ad-log-size select:focus { outline: none; border-color: var(--navy); }
+        .ad-log-nav { display: flex; align-items: center; gap: clamp(7px, .9vw, 12px); }
+        .ad-log-page-label { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 700; color: #3A3A3A; white-space: nowrap; }
 
         /* Wiring states — additive, same tokens, for real async data. */
         .ad-loading, .ad-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
@@ -1439,41 +1460,64 @@ function CreateFacilityForm({ kind, onCancel, onCreated }) {
 }
 
 /**
- * Audit Log — every administrator action, newest first (Business Rule 17).
+ * Audit Log — every administrator action, newest first (Business Rule 17), one
+ * page at a time.
  *
  * Read-only by construction, not just by omission of buttons: the backend has no
  * endpoint that changes or removes an entry, and the database refuses it too. So
  * this table has no row actions at all.
  *
- * Fetched fresh each time the page is opened rather than kept with the console's
- * other data: entries are added by actions taken on other pages (User Accounts),
- * and a log that needed a reload to show what was just done would read as one
- * that missed it.
+ * Fetched fresh on every page or page-size change rather than kept with the
+ * console's other data: entries are added by actions taken on other pages (User
+ * Accounts), and a log that needed a reload to show what was just done would read
+ * as one that missed it.
+ *
+ * All of the paging arithmetic — disabling Previous/Next at the ends, clamping a
+ * stale page number once the server reports the real total, the empty-log check —
+ * lives in frontend/src/lib/auditLogPaging.js. This component only calls it.
  */
 function AuditLogView() {
-  const [entries, setEntries] = useState(null);
+  const [page, setPage] = useState(0);
+  const [size, setSize] = useState(AUDIT_LOG_PAGE_SIZES[0]);
+  const [pageData, setPageData] = useState(null); // { content, page, size, totalElements, totalPages }
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    getAuditLog()
-      .then((data) => { if (!cancelled) setEntries(data); })
+    setError(null);
+    getAuditLog(page, size)
+      .then((data) => { if (!cancelled) setPageData(data); })
       .catch((err) => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
-  }, []);
+  }, [page, size]);
+
+  // Once the server has reported how many pages actually exist, pull a stale
+  // page number — left over from switching the page size, most likely — back
+  // down to the real last page instead of leaving the view stuck on one that no
+  // longer exists.
+  useEffect(() => {
+    if (!pageData) return;
+    const clamped = clampPageToAvailable(page, pageData.totalPages);
+    if (clamped !== page) setPage(clamped);
+  }, [pageData, page]);
 
   if (error) {
+    // A failed load here is never a dead session (apiRequest only clears one on
+    // a session-level 401, which this is not), so the Admin Console stays open
+    // and the administrator can simply try again.
     return <div className="ad-error"><div className="ad-error-msg">{error}</div></div>;
   }
-  if (!entries) {
+  if (!pageData) {
     return <div className="ad-loading"><div className="ad-sub">Loading audit log…</div></div>;
   }
+
+  const { content: entries, totalElements, totalPages } = pageData;
 
   return (
     <div className="ad-panel ad-table-panel">
       <div className="ad-panel-head">
         <div className="ad-panel-title">Recorded actions</div>
-        <div className="ad-panel-link">{entries.length} total</div>
+        <div className="ad-panel-link">{totalElements} total</div>
       </div>
       <div className="ad-table-scroll">
         <table className="ad-table ad-table--log">
@@ -1489,7 +1533,7 @@ function AuditLogView() {
             </tr>
           </thead>
           <tbody>
-            {entries.length === 0 && (
+            {isAuditLogEmpty(totalElements) && (
               <tr><td colSpan={5} className="ad-empty">No administrator actions have been recorded yet.</td></tr>
             )}
             {entries.map((entry) => {
@@ -1512,6 +1556,36 @@ function AuditLogView() {
             })}
           </tbody>
         </table>
+      </div>
+      <div className="ad-log-pager">
+        <label className="ad-log-size">
+          Rows per page
+          <select
+            value={size}
+            onChange={(e) => setSize(Number(e.target.value))}
+          >
+            {AUDIT_LOG_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <div className="ad-log-nav">
+          <button
+            type="button"
+            className="ad-act ad-act--edit"
+            disabled={!canGoToPreviousPage(page)}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            Previous
+          </button>
+          <span className="ad-log-page-label">{describeAuditLogPage(page, totalPages)}</span>
+          <button
+            type="button"
+            className="ad-act ad-act--edit"
+            disabled={!canGoToNextPage(page, totalPages)}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </button>
+        </div>
       </div>
     </div>
   );

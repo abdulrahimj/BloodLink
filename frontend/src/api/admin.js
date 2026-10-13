@@ -82,11 +82,14 @@ export function createHospital(payload) {
 }
 
 /**
- * GET /api/admin/audit-log — every recorded administrator action, newest first.
- * Read-only: the log has no endpoint that changes or removes an entry.
+ * GET /api/admin/audit-log — one page of recorded administrator actions, newest
+ * first. Read-only: the log has no endpoint that changes or removes an entry.
+ *
+ * `page` is 0-based (default 0); `size` defaults to 20 and the server refuses
+ * anything above 100. Resolves to { content, page, size, totalElements, totalPages }.
  */
-export function getAuditLog() {
-  return apiRequest('/api/admin/audit-log');
+export function getAuditLog(page = 0, size = 20) {
+  return apiRequest(`/api/admin/audit-log?page=${page}&size=${size}`);
 }
 
 /** GET /api/admin/reports/donations — six months of citywide donation counts,

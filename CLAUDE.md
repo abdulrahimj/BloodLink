@@ -526,13 +526,25 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       to run without the caller's transaction, so an action and its entry commit or roll back together —
       the log can never show a change that did not happen, or miss one that did.
     - **Append-only, at four levels** — see the AuditLog schema section. Read with
-      `GET /api/admin/audit-log` (every entry, newest first); the Admin Console's Audit Log page shows it
-      with no row actions. Any other method on that path is a 405 and a single entry has no route (404).
-    - **Known limits:** the whole log is returned in one response (fine at a few entries a week; paging
-      would be the owner's call later). A database superuser could still drop the triggers deliberately —
-      nothing inside PostgreSQL can stop its own owner; the triggers stop every accidental or
-      application-level change. A moved staff member's server-side access follows the new facility on
-      their next request, but their browser shows the old facility until they sign in again.
+      `GET /api/admin/audit-log` (one page of entries, newest first); the Admin Console's Audit Log page
+      shows it with no row actions. Any other method on that path is a 405 and a single entry has no
+      route (404).
+    - **Paged, not returned whole.** The log only grows, so the original "return the whole thing" design
+      was always going to need this eventually. `GET /api/admin/audit-log` takes two optional query
+      parameters: `page` (0-based, default 0) and `size` (default 20, maximum 100). `page` cannot be
+      negative and `size` must be between 1 and 100 — either violation, or a non-numeric value, is a 400
+      naming the field; nothing is silently corrected. The response is
+      `{ "content": [...entries...], "page": n, "size": n, "totalElements": n, "totalPages": n }`, not
+      Spring Data's own `Page` shape. Newest-first ordering is unchanged, with a tie-breaker added
+      (`created_at desc, id desc`) so two entries sharing a timestamp can never swap places between one
+      page request and the next — without it, a row could be skipped or duplicated across a page
+      boundary. `AuditLogRepository` stays a bare `Repository` with a single `Pageable`-taking finder;
+      no delete or save-update method was added, and the V12 triggers and the `@Immutable` entity are
+      untouched. No migration was needed — this is a read-path change only.
+    - **Known limits:** a database superuser could still drop the triggers deliberately — nothing inside
+      PostgreSQL can stop its own owner; the triggers stop every accidental or application-level change.
+      A moved staff member's server-side access follows the new facility on their next request, but their
+      browser shows the old facility until they sign in again.
 18. **Email is optional for donors, format-checked when given, and unique when present. Staff and
     administrator accounts still require one, exactly as before.** Many donors have a phone but no email,
     and phone is the login (Business Rule 13), so requiring an email turned some away for no reason.

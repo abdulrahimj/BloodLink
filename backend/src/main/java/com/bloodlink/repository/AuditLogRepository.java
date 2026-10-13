@@ -3,6 +3,8 @@ package com.bloodlink.repository;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -29,19 +31,38 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
     AuditLog save(AuditLog entry);
 
     /**
-     * Every entry, newest first, with both people loaded — the Audit Log page.
-     * Fetch-joined because the page shows both names on every row, and open-in-view
-     * is off, so the lazy associations would otherwise fail once mapped outside the
-     * transaction (or cost one query per row inside it).
+     * One page of entries, newest first, with both people loaded — the Audit Log
+     * page. Fetch-joined because the page shows both names on every row, and
+     * open-in-view is off, so the lazy associations would otherwise fail once
+     * mapped outside the transaction (or cost one query per row inside it). The
+     * fetch joins are all to-one (actor, target, targetBloodBank, targetHospital),
+     * so pagination's LIMIT/OFFSET is still applied to whole rows, not fragments
+     * of a to-many collection.
      *
      * The three subjects are LEFT joins because each entry has exactly one of them
      * (V14): an inner join on the account would silently drop every facility
      * creation from the page, and an inner join on a facility every account action.
+     *
+     * {@code order by a.createdAt desc, a.id desc} — the tie-breaker. Two entries
+     * can share a timestamp (they are often written back-to-back in the same
+     * transaction); ordering by id as well means their relative order can never
+     * flip between one page request and the next. The caller's {@link Pageable}
+     * is expected to carry no {@link org.springframework.data.domain.Sort} of its
+     * own — this fixed order is the only one the page ever shows — so only the
+     * paging (page number, size) part of it is used.
+     *
+     * {@code countQuery} is given explicitly rather than left for Spring Data to
+     * derive from the query above: a derived count query would have to strip the
+     * {@code fetch} keyword and the {@code order by} itself, which is one more
+     * thing to trust than simply saying what the total is.
      */
-    @Query("select a from AuditLog a join fetch a.actor left join fetch a.target"
-        + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
-        + " order by a.createdAt desc, a.id desc")
-    List<AuditLog> findAllNewestFirst();
+    @Query(
+        value = "select a from AuditLog a join fetch a.actor left join fetch a.target"
+            + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
+            + " order by a.createdAt desc, a.id desc",
+        countQuery = "select count(a) from AuditLog a"
+    )
+    Page<AuditLog> findAllNewestFirst(Pageable pageable);
 
     /** Entries about one account, oldest first — used by tests to check exactly
      *  what an action recorded. */

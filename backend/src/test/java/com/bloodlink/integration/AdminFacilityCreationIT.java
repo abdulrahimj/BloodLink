@@ -108,14 +108,15 @@ class AdminFacilityCreationIT {
         assertThat(entries.get(0).getTarget()).isNull();
         assertThat(entries.get(0).getDetails()).contains(name, "Kabala Road, Makeni", "076 111 222");
 
-        // And the Audit Log page shows it, labelled as a blood bank rather than an account.
+        // And the Audit Log page shows it, labelled as a blood bank rather than an
+        // account, inside the paged envelope (Business Rule 17's pagination).
         mockMvc.perform(get("/api/admin/audit-log").header("Authorization", "Bearer " + token))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].action").value("BLOOD_BANK_CREATED"))
-            .andExpect(jsonPath("$[0].targetType").value("BLOOD_BANK"))
-            .andExpect(jsonPath("$[0].targetId").value(bankId.toString()))
-            .andExpect(jsonPath("$[0].targetName").value(name))
-            .andExpect(jsonPath("$[0].actorName").value("Isatu Bangura"));
+            .andExpect(jsonPath("$.content[0].action").value("BLOOD_BANK_CREATED"))
+            .andExpect(jsonPath("$.content[0].targetType").value("BLOOD_BANK"))
+            .andExpect(jsonPath("$.content[0].targetId").value(bankId.toString()))
+            .andExpect(jsonPath("$.content[0].targetName").value(name))
+            .andExpect(jsonPath("$.content[0].actorName").value("Isatu Bangura"));
     }
 
     @Test
@@ -141,9 +142,9 @@ class AdminFacilityCreationIT {
         assertThat(entries.get(0).getActor().getId()).isEqualTo(admin.getId());
 
         mockMvc.perform(get("/api/admin/audit-log").header("Authorization", "Bearer " + token))
-            .andExpect(jsonPath("$[0].action").value("HOSPITAL_CREATED"))
-            .andExpect(jsonPath("$[0].targetType").value("HOSPITAL"))
-            .andExpect(jsonPath("$[0].targetName").value(name));
+            .andExpect(jsonPath("$.content[0].action").value("HOSPITAL_CREATED"))
+            .andExpect(jsonPath("$.content[0].targetType").value("HOSPITAL"))
+            .andExpect(jsonPath("$.content[0].targetName").value(name));
     }
 
     @Test
