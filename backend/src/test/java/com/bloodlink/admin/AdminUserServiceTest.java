@@ -21,8 +21,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import com.bloodlink.admin.dto.AdminUserPageResponse;
 import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
@@ -378,14 +383,155 @@ class AdminUserServiceTest {
         assertThat(created.temporaryPassword()).isNotBlank();
     }
 
-    // ---------- listing ----------
+    // ---------- searching, filtering, sorting, paging ----------
+
+    /** Captures exactly what searchUsers hands the repository. */
+    private record SearchCall(String q, String textPattern, String phonePattern, Role role,
+                              AccountStatus status, Pageable pageable) {}
+
+    private SearchCall search(String q, String role, String status, String sort, String direction) {
+        when(userRepository.searchAccounts(any(), any(), any(), any(), any(), any(Pageable.class)))
+            .thenReturn(Page.empty());
+        service.searchUsers(0, 13, q, role, status, sort, direction);
+
+        ArgumentCaptor<String> qArg = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> phone = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Role> roleArg = ArgumentCaptor.forClass(Role.class);
+        ArgumentCaptor<AccountStatus> statusArg = ArgumentCaptor.forClass(AccountStatus.class);
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(userRepository).searchAccounts(qArg.capture(), text.capture(), phone.capture(),
+            roleArg.capture(), statusArg.capture(), pageable.capture());
+        return new SearchCall(qArg.getValue(), text.getValue(), phone.getValue(),
+            roleArg.getValue(), statusArg.getValue(), pageable.getValue());
+    }
 
     @Test
-    void listingMapsEachRolesFacilityLinkOrLeavesItHonestlyAbsent() {
-        when(userRepository.findAllWithFacilitiesOrderByFullNameAsc())
-            .thenReturn(List.of(donor(), bankStaff(), hospitalStaff()));
+    void theDefaultOrderIsNameAscendingWithIdAsTheTieBreaker() {
+        Sort sort = search(null, null, null, "name", "asc").pageable().getSort();
 
-        List<AdminUserResponse> users = service.listUsers();
+        assertThat(sort.toList()).containsExactly(Sort.Order.asc("fullName"), Sort.Order.asc("id"));
+    }
+
+    @Test
+    void eachWhitelistedSortMapsToItsPropertyInEitherDirectionAndIdAlwaysComesLast() {
+        assertThat(search(null, null, null, "role", "desc").pageable().getSort().toList())
+            .containsExactly(Sort.Order.desc("role"), Sort.Order.asc("id"));
+    }
+
+    @Test
+    void theWhitelistIsExactlyTheFourSortChoicesTheTableOffers() {
+        assertThat(AdminUserService.SORT_PROPERTIES).containsOnly(
+            java.util.Map.entry("name", "fullName"), java.util.Map.entry("role", "role"),
+            java.util.Map.entry("createdAt", "createdAt"), java.util.Map.entry("status", "status"));
+        assertThat(search(null, null, null, "createdAt", "desc").pageable().getSort().toList())
+            .containsExactly(Sort.Order.desc("createdAt"), Sort.Order.asc("id"));
+    }
+
+    @Test
+    void aSortOutsideTheWhitelistIsRefusedBeforeTheDatabaseIsAsked() {
+        assertThatThrownBy(() -> service.searchUsers(0, 13, null, null, null, "password_hash", "asc"))
+            .isInstanceOfSatisfying(InvalidFieldException.class, ex -> assertThat(ex.getField()).isEqualTo("sort"));
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void aDirectionOtherThanAscOrDescIsRefused() {
+        assertThatThrownBy(() -> service.searchUsers(0, 13, null, null, null, "name", "sideways"))
+            .isInstanceOfSatisfying(InvalidFieldException.class, ex -> assertThat(ex.getField()).isEqualTo("direction"));
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void nameAndEmailSearchIsLowerCasedAndContainsAnywhere() {
+        SearchCall call = search("  KamaRA ", null, null, "name", "asc");
+
+        assertThat(call.q()).isEqualTo("KamaRA");
+        assertThat(call.textPattern()).isEqualTo("%kamara%");
+    }
+
+    @Test
+    void anEmailFragmentIsMatchedThroughTheSameLowerCasedPattern() {
+        assertThat(search("TestDonor.015@Seed", null, null, "name", "asc").textPattern())
+            .isEqualTo("%testdonor.015@seed%");
+    }
+
+    @Test
+    void aPhoneTypedInLocalFormBecomesTheStoredInternationalForm() {
+        assertThat(search("076900015", null, null, "name", "asc").phonePattern()).isEqualTo("%+23276900015%");
+    }
+
+    @Test
+    void aPhoneTypedInInternationalFormWithSpacesMatchesTheSameWay() {
+        assertThat(search("+232 769 000", null, null, "name", "asc").phonePattern()).isEqualTo("%+232769000%");
+    }
+
+    @Test
+    void aPartialPhoneIsMatchedAsTypedAnywhereInTheNumber() {
+        assertThat(search("900", null, null, "name", "asc").phonePattern()).isEqualTo("%900%");
+    }
+
+    @Test
+    void percentAndUnderscoreAreEscapedSoTheyMatchOnlyThemselves() {
+        SearchCall call = search("50%_x", null, null, "name", "asc");
+
+        assertThat(call.textPattern()).isEqualTo("%50\\%\\_x%");
+        assertThat(call.phonePattern()).isEqualTo("%50\\%\\_x%");
+    }
+
+    @Test
+    void blankSearchMeansNoSearchAtAll() {
+        SearchCall call = search("   ", null, null, "name", "asc");
+
+        assertThat(call.q()).isNull();
+        assertThat(call.textPattern()).isNull();
+        assertThat(call.phonePattern()).isNull();
+    }
+
+    @Test
+    void roleAndStatusFiltersArePassedAsTheirEnums() {
+        SearchCall call = search(null, "DONOR", "SUSPENDED", "name", "asc");
+
+        assertThat(call.role()).isEqualTo(Role.DONOR);
+        assertThat(call.status()).isEqualTo(AccountStatus.SUSPENDED);
+    }
+
+    @Test
+    void noFiltersArePassedAsNull() {
+        SearchCall call = search(null, null, null, "name", "asc");
+
+        assertThat(call.role()).isNull();
+        assertThat(call.status()).isNull();
+    }
+
+    @Test
+    void thePageMathsComeFromTheDatabasesCountNotFromTheRowsOnThisPage() {
+        when(userRepository.searchAccounts(any(), any(), any(), any(), any(), any(Pageable.class)))
+            .thenAnswer(call -> new PageImpl<>(List.of(donor(), bankStaff()), call.getArgument(5), 28));
+
+        AdminUserPageResponse page = service.searchUsers(2, 13, null, null, null, "name", "asc");
+
+        assertThat(page.page()).isEqualTo(2);
+        assertThat(page.size()).isEqualTo(13);
+        assertThat(page.totalElements()).isEqualTo(28);
+        assertThat(page.totalPages()).isEqualTo(3);
+        assertThat(page.content()).hasSize(2);
+    }
+
+    @Test
+    void theResponseRowHasNoFieldThatCouldCarryAPasswordHash() {
+        List<String> fields = java.util.Arrays.stream(AdminUserResponse.class.getRecordComponents())
+            .map(java.lang.reflect.RecordComponent::getName).toList();
+
+        assertThat(fields).noneMatch(name -> name.toLowerCase().contains("password") || name.toLowerCase().contains("hash"));
+    }
+
+    @Test
+    void searchMapsEachRolesFacilityLinkOrLeavesItHonestlyAbsent() {
+        when(userRepository.searchAccounts(any(), any(), any(), any(), any(), any(Pageable.class)))
+            .thenReturn(new PageImpl<>(List.of(donor(), bankStaff(), hospitalStaff())));
+
+        List<AdminUserResponse> users = service.searchUsers(0, 13, null, null, null, "name", "asc").content();
 
         assertThat(users).hasSize(3);
 

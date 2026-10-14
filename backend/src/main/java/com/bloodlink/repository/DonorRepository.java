@@ -36,7 +36,10 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
      * is bound to the trimmed search text or null; {@code :namePattern} and
      * {@code :phonePattern} are its two derived LIKE patterns (DonorRosterService
      * builds both, since "matches name OR phone" needs two different shapes
-     * from the one typed value). {@code :wantEligible} is null for "either",
+     * from the one typed value). Both are built by {@code LikePattern}, which
+     * escapes {@code %} and {@code _} with a backslash — hence {@code escape '\'}
+     * — so a typed "%" is a literal character, not "match everything".
+     * {@code :wantEligible} is null for "either",
      * true for Business Rule 2's ELIGIBLE, false for IN_RECOVERY; both cases
      * compare {@code d.lastDonationDate} against {@code :eligibilityCutoff},
      * which the service computes from {@code Donor.ELIGIBILITY_WINDOW_DAYS} —
@@ -47,7 +50,8 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
      */
     String ROSTER_FILTER = """
         exists (select 1 from Donation don where don.donor = d and don.bloodBank.id = :bloodBankId)
-          and (:q is null or lower(u.fullName) like :namePattern or u.phone like :phonePattern)
+          and (:q is null or lower(u.fullName) like :namePattern escape '\\'
+                          or u.phone like :phonePattern escape '\\')
           and (:bloodType is null or d.bloodType = :bloodType)
           and (:wantEligible is null
                or (:wantEligible = true and (d.lastDonationDate is null or d.lastDonationDate < :eligibilityCutoff))

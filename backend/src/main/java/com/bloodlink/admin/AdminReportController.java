@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.bloodlink.admin.dto.MonthlyDonationTotal;
 import com.bloodlink.admin.dto.RequestOutcomeResponse;
+import com.bloodlink.admin.dto.UserCountsResponse;
 
 /**
  * "View Reports & Analytics" — the administrator use case from CLAUDE.md.
@@ -37,5 +38,12 @@ public class AdminReportController {
     @GetMapping("/requests")
     public RequestOutcomeResponse requestOutcomes() {
         return adminReportService.requestOutcomes();
+    }
+
+    /** Account counts, total and per role — the "Total Users" and "Registered
+     *  Donors" cards and the User Accounts role buttons. */
+    @GetMapping("/users")
+    public UserCountsResponse userCounts() {
+        return adminReportService.userCounts();
     }
 }

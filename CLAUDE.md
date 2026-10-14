@@ -698,9 +698,44 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       and an ADMIN must name one (`bloodBankId`); a donor, hospital staff or unauthenticated
       caller is refused (403/403/401), the same pattern every other bank-scoped endpoint uses.
     - **Search does not go through `PhoneNumber.normalize`.** That function validates a complete
-      number and would reject a deliberate partial search ("900", "076900"); instead a leading
-      "0" is rewritten to "+232" (Business Rule 13's local-form mapping) and the rest is matched
-      as a substring against the stored number.
+      number and would reject a deliberate partial search ("900", "076900"); instead
+      `PhoneNumber.searchFragment` strips spaces and hyphens, rewrites a leading "0" to "+232"
+      (Business Rule 13's local-form mapping), and the rest is matched as a substring against the
+      stored number. **`%` and `_` in the search are literal**, not LIKE wildcards: every search
+      pattern is built by `LikePattern.contains` (backslash-escaped, queried with `escape '\'`).
+      Shared with Business Rule 22.
+22. **The Admin Console's User Accounts table is searched, filtered, sorted and paged by the server,
+    one page at a time — and no screen downloads every account.**
+    - **`GET /api/admin/users`** returns `{ content, page, size, totalElements, totalPages }` (the
+      same envelope as the Audit Log and the Donors roster). Optional parameters, every one checked
+      against a fixed list, a bad value being a 400 naming the field and never corrected:
+      `page` (0-based, default 0); `size` (default 13, max 100); `q` (name or email,
+      case-insensitive, or phone in any format via `PhoneNumber.searchFragment`; `%`/`_` literal
+      via `LikePattern`); `role` (`DONOR`, `HOSPITAL_STAFF`, `BLOOD_BANK_STAFF`, `ADMIN`); `status`
+      (`ACTIVE`, `SUSPENDED` — "Suspended" is the console's word for a disabled account); `sort`
+      (`name`, `role`, `createdAt`, `status`) and `direction` (`asc`, `desc`).
+    - **Search, both filters and paging run as one query** (`UserRepository.searchAccounts`), and its
+      count query shares the same conditions, so `totalElements`/`totalPages` count only what
+      matched. **The ORDER BY comes only from `AdminUserService.SORT_PROPERTIES`**, a whitelist of
+      four entity properties, with `id` always added last as a tie-breaker so equal values never
+      swap places between pages. A page past the end returns empty content, not an error.
+    - **`GET /api/admin/reports/users`** returns `{ total, donors, hospitalStaff, bloodBankStaff,
+      admins }`, counted by the database (zero-filled). It feeds the Dashboard's "Total Users" and
+      "Registered Donors" cards and the counts on the role buttons — these used to be counted over
+      a download of every account, and that full-list response no longer exists.
+    - **Frontend:** a new page is fetched only when Previous/Next, a filter, the sort, the page size
+      or the search changes — the search waits 350ms after typing stops, like the Donors page;
+      nothing is prefetched. Changing any of those returns to page 0 and keeps the others;
+      "Clear filters" (shown only when search or a filter is active) keeps the sort and page size.
+      Page sizes offered are only 10 and 13, the ones that fit a 768px-tall screen without
+      scrolling (checked in headless Chrome at 1366×768, 720 and 680). After Create / Edit /
+      Suspend / Activate the current page is fetched again and pulled back if it is now past the
+      end. All of this logic is in `frontend/src/lib/userAccounts.js` and `lib/pagination.js`.
+    - **Unchanged:** ADMIN only (`/api/admin/**`); no password hash in any response
+      (`AdminUserResponse` has no such field); create / edit / suspend / reactivate and their audit
+      entries (Business Rules 14 and 17) behave exactly as before. No migration and no index were
+      added: a "contains" search (`%text%`) cannot use an ordinary index anyway, and the table is
+      small. Revisit (e.g. a trigram index) only if the account list grows into the tens of thousands.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -725,7 +760,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions

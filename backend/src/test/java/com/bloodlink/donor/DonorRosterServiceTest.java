@@ -203,6 +203,21 @@ class DonorRosterServiceTest {
     }
 
     @Test
+    void percentAndUnderscoreInTheSearchAreEscapedSoTheyMatchOnlyThemselves() {
+        stubEmptyRosterByLastDonation();
+
+        // Before the shared LikePattern helper, "%" here matched every donor.
+        service.listRoster(0, 20, "%_", null, null, "lastDonation", null, staffPrincipal);
+
+        ArgumentCaptor<String> namePattern = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> phonePattern = ArgumentCaptor.forClass(String.class);
+        verify(donorRepository).findRosterAtBankByLastDonation(
+            any(), any(), namePattern.capture(), phonePattern.capture(), any(), any(), any(), any(Pageable.class));
+        assertThat(namePattern.getValue()).isEqualTo("%\\%\\_%");
+        assertThat(phonePattern.getValue()).isEqualTo("%\\%\\_%");
+    }
+
+    @Test
     void blankSearchIsTreatedAsNoSearchAtAll() {
         stubEmptyRosterByLastDonation();
 

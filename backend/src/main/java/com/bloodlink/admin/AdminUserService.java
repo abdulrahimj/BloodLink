@@ -7,15 +7,20 @@ import java.util.Objects;
 import java.util.TreeSet;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.admin.dto.AdminUserPageResponse;
 import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.admin.dto.EditAccountPayload;
 import com.bloodlink.audit.AuditLogService;
+import com.bloodlink.common.LikePattern;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
@@ -32,8 +37,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Account management for the Admin Console: listing every user across all four
- * roles, creating staff and administrator accounts, editing another account's phone
+ * Account management for the Admin Console: searching, filtering and paging the
+ * accounts of all four roles, creating staff and administrator accounts, editing another account's phone
  * and facility, and activating or suspending one.
  *
  * Every one of those changes is recorded in the audit log (Business Rule 17), inside
@@ -77,13 +82,66 @@ public class AdminUserService {
         this.auditLogService = auditLogService;
     }
 
-    /** Every account, newest-facility-first ordering aside — see the repository
-     *  query for why it is sorted by name rather than role or creation date. */
+    /**
+     * The sort choices the User Accounts table offers, mapped to the entity property
+     * each one orders by. This map is the whole whitelist: a value not in it is refused
+     * (400 naming "sort"), so no text from a request ever reaches the ORDER BY.
+     * Role and status sort by their stored names (ADMIN before DONOR; ACTIVE before
+     * SUSPENDED).
+     */
+    static final Map<String, String> SORT_PROPERTIES = Map.of(
+        "name", "fullName",
+        "role", "role",
+        "createdAt", "createdAt",
+        "status", "status"
+    );
+
+    /**
+     * One page of accounts for the User Accounts table, searched, filtered and sorted
+     * in the database (see UserRepository.searchAccounts).
+     *
+     * The controller has already checked every value against its fixed list; the
+     * checks here repeat that for the two that decide the ORDER BY, so this method is
+     * safe even if called from somewhere else. {@code id} is always the last sort key,
+     * so two accounts with the same name (or role, date, status) keep the same order
+     * from one page request to the next and never appear on two pages or none.
+     *
+     * The search text becomes two patterns: name/email (lower-cased) and phone (with
+     * a local "0…" turned into "+232…", Business Rule 13). Both escape % and _ so they
+     * are matched literally. Blank text means no search.
+     */
     @Transactional(readOnly = true)
-    public List<AdminUserResponse> listUsers() {
-        return userRepository.findAllWithFacilitiesOrderByFullNameAsc().stream()
-            .map(AdminUserResponse::from)
-            .toList();
+    public AdminUserPageResponse searchUsers(
+        int page, int size, String q, String role, String status, String sort, String direction
+    ) {
+        String property = SORT_PROPERTIES.get(sort);
+        if (property == null) {
+            throw new InvalidFieldException("sort", "sort must be one of: name, role, createdAt, status.");
+        }
+        Sort.Direction order = switch (direction) {
+            case "asc" -> Sort.Direction.ASC;
+            case "desc" -> Sort.Direction.DESC;
+            default -> throw new InvalidFieldException("direction", "direction must be asc or desc.");
+        };
+
+        String text = q == null || q.isBlank() ? null : q.trim();
+        String textPattern = text == null ? null : LikePattern.contains(text.toLowerCase());
+        String phonePattern = text == null ? null : LikePattern.contains(PhoneNumber.searchFragment(text));
+
+        PageRequest pageable = PageRequest.of(page, size,
+            Sort.by(new Sort.Order(order, property), Sort.Order.asc("id")));
+
+        Page<User> result = userRepository.searchAccounts(
+            text, textPattern, phonePattern,
+            role == null ? null : Role.valueOf(role),
+            status == null ? null : AccountStatus.valueOf(status),
+            pageable
+        );
+
+        return new AdminUserPageResponse(
+            result.getContent().stream().map(AdminUserResponse::from).toList(),
+            result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages()
+        );
     }
 
     /**

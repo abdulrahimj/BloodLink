@@ -145,4 +145,24 @@ class PhoneNumberTest {
             .hasMessageContaining("076900005")
             .hasMessageContaining("+232 76 900 005");
     }
+
+    // ---------- search fragments (never refused, unlike normalize) ----------
+
+    @ParameterizedTest(name = "\"{0}\" searches for \"{1}\"")
+    @CsvSource({
+        "076900015,       +23276900015",   // full local form -> stored form
+        "0769,            +232769",        // partial local form keeps the +232 mapping
+        "'+232 769 000',  +232769000",     // international with spaces
+        "076-900-015,     +23276900015",   // hyphens are noise too
+        "900,             900",            // a bare fragment is matched as typed
+        "23276900015,     23276900015"     // no +, still a substring of the stored form
+    })
+    void searchFragmentsMapOnlyTheLocalPrefixAndDropSpacesAndHyphens(String typed, String expected) {
+        assertThat(PhoneNumber.searchFragment(typed)).isEqualTo(expected);
+    }
+
+    @Test
+    void aSearchFragmentNeverThrowsForTextThatIsNotAPhone() {
+        assertThat(PhoneNumber.searchFragment("Aminata")).isEqualTo("Aminata");
+    }
 }

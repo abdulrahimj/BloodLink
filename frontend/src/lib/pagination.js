@@ -46,3 +46,18 @@ export function isPageEmpty(totalElements) {
 export function describePage(page, totalPages) {
   return `Page ${page + 1} of ${Math.max(totalPages, 1)}`;
 }
+
+/**
+ * "Showing 14-26 of 58" — which rows of the whole result this page holds.
+ *
+ * Worked out from the page number and size the server reported, not from how many
+ * rows happen to be on screen, except for the last page, which is clamped to the
+ * total so it never claims rows that do not exist ("Showing 53-58", not "53-65").
+ * An empty result, or a page past the end, reads "Showing 0 of N".
+ */
+export function describeShowingRange(page, size, totalElements) {
+  const first = page * size + 1;
+  if (totalElements === 0 || first > totalElements) return `Showing 0 of ${totalElements}`;
+  const last = Math.min((page + 1) * size, totalElements);
+  return `Showing ${first}-${last} of ${totalElements}`;
+}

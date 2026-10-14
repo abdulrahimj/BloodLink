@@ -172,6 +172,18 @@ class DonorRosterIT {
         assertThat(matches).containsExactly(fx.aminataSesayId);
     }
 
+    @Test
+    void aPercentSignIsSearchedLiterallyNotAsAWildcardThatMatchesEveryone() throws Exception {
+        Fixture fx = new Fixture();
+        assertThat(rosterIds(fx.bankAToken, null)).hasSizeGreaterThanOrEqualTo(3);
+
+        // No donor's name or phone contains "%", so a literal search finds nobody.
+        // Before the shared LikePattern escaping, this returned the whole roster.
+        mockMvc.perform(get("/api/donors/roster").param("q", "%").header("Authorization", bearer(fx.bankAToken)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.totalElements").value(0));
+    }
+
     // ---------- pagination: first, last, and past the end ----------
 
     @Test

@@ -125,4 +125,24 @@ public final class PhoneNumber {
 
         return normalized;
     }
+
+    /**
+     * Turns search-box text into a fragment to look for inside stored phone numbers.
+     *
+     * Deliberately not {@link #normalize}: that validates a complete number and would
+     * refuse a deliberate partial search such as "900" or "0769". This applies only
+     * the parts of the rule that still make sense for a fragment: spaces and hyphens
+     * are removed, and a fragment starting with the local trunk prefix "0" has it
+     * replaced by {@code +232}, the start of every stored number. So "076 900" and
+     * "+232 76 900" both become "+23276900", and "900" stays "900". Never throws:
+     * text that is not a phone number just matches no phone.
+     *
+     * Kept here, beside {@link #normalize}, so the two halves of Business Rule 13's
+     * local-to-international mapping live in one class. Used by the Donors roster and
+     * the Admin Console's User Accounts search.
+     */
+    public static String searchFragment(String typed) {
+        String compact = typed.replaceAll("[\\s-]", "");
+        return compact.startsWith("0") ? COUNTRY_CODE + compact.substring(1) : compact;
+    }
 }

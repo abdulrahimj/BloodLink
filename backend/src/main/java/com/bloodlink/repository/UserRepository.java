@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -61,16 +63,63 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findByRole(Role role);
 
     /**
-     * Every account, across all four roles, with its facility eagerly loaded —
-     * the Admin Console's "User Accounts" table.
+     * The search and filter conditions shared by {@link #searchAccounts} and its count
+     * query, so a page's rows and its totals can never disagree about what matched.
      *
-     * bloodBank and hospital are both lazy associations, and open-in-view is off
-     * (application.properties), so without the fetch join, mapping each row to
-     * its response DTO outside this method's own transaction would either throw
-     * (LazyInitializationException) or, inside it, issue one extra query per row.
-     * A left join keeps a donor or administrator — who has neither — in the
-     * result with both columns null, rather than dropping them from an inner join.
+     * {@code :q} is null when nothing was typed (no search); otherwise the account
+     * matches if the text is in its name or email (case-insensitive, via
+     * {@code :textPattern}) or in its phone ({@code :phonePattern}, which has already
+     * had a local "0…" turned into "+232…"). Both patterns come from LikePattern, which
+     * escapes {@code %} and {@code _} with a backslash — hence {@code escape '\'}.
+     * A donor with no email (Business Rule 18) simply never matches on email.
+     * {@code :role} and {@code :status} are null for "any".
      */
-    @Query("select u from User u left join fetch u.bloodBank left join fetch u.hospital order by u.fullName asc")
-    List<User> findAllWithFacilitiesOrderByFullNameAsc();
+    String ACCOUNT_FILTER = """
+        (:q is null
+              or lower(u.fullName) like :textPattern escape '\\'
+              or lower(u.email) like :textPattern escape '\\'
+              or u.phone like :phonePattern escape '\\')
+          and (:role is null or u.role = :role)
+          and (:status is null or u.status = :status)
+        """;
+
+    /**
+     * One page of the Admin Console's "User Accounts" table: search, role filter,
+     * status filter and paging in a single query, so the database returns only the
+     * rows on screen and the count query counts only what matched.
+     *
+     * The order comes from the {@link Pageable}'s Sort, which AdminUserService builds
+     * from a fixed list of four properties plus {@code id} as a tie-breaker — never
+     * from text in the request. That is also why this query has no ORDER BY of its own.
+     *
+     * The facilities are fetch-joined because every row shows one and open-in-view is
+     * off; both are to-one associations, so paging still applies to whole rows. Left
+     * joins keep donors and administrators, who have neither.
+     */
+    @Query(
+        value = "select u from User u left join fetch u.bloodBank left join fetch u.hospital where " + ACCOUNT_FILTER,
+        countQuery = "select count(u) from User u where " + ACCOUNT_FILTER
+    )
+    Page<User> searchAccounts(
+        @Param("q") String q,
+        @Param("textPattern") String textPattern,
+        @Param("phonePattern") String phonePattern,
+        @Param("role") Role role,
+        @Param("status") AccountStatus status,
+        Pageable pageable
+    );
+
+    /**
+     * How many accounts hold each role, in one grouped query — the Admin Console's
+     * "Total Users" and "Registered Donors" cards and the counts on its role filter
+     * buttons. Replaces downloading every account just to count them.
+     */
+    @Query("select u.role as role, count(u) as total from User u group by u.role")
+    List<RoleCount> countGroupedByRole();
+
+    /** One role's account count, from {@link #countGroupedByRole}. */
+    interface RoleCount {
+        Role getRole();
+        long getTotal();
+    }
 }

@@ -9,9 +9,27 @@
 
 import { apiRequest } from './client.js';
 
-/** GET /api/admin/users — every account across all four roles. */
-export function getAdminUsers() {
-  return apiRequest('/api/admin/users');
+/**
+ * GET /api/admin/users — one page of accounts, searched, filtered and sorted by the
+ * server. `params` is what lib/userAccounts.js's buildUserAccountsParams produced:
+ * page, size, sort, direction, and q / role / status only when set. Resolves to
+ * { content, page, size, totalElements, totalPages }; the totals count only the
+ * accounts that match. A bad value is a 400 naming the field.
+ */
+export function getAdminUsers(params) {
+  const query = new URLSearchParams(
+    Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)]))
+  );
+  return apiRequest(`/api/admin/users?${query.toString()}`);
+}
+
+/**
+ * GET /api/admin/reports/users — { total, donors, hospitalStaff, bloodBankStaff,
+ * admins }, counted by the database. Feeds the Dashboard's "Total Users" and
+ * "Registered Donors" cards and the counts on the User Accounts role buttons.
+ */
+export function getUserCounts() {
+  return apiRequest('/api/admin/reports/users');
 }
 
 /**

@@ -13,10 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.admin.dto.MonthlyDonationTotal;
 import com.bloodlink.admin.dto.RequestOutcomeResponse;
+import com.bloodlink.admin.dto.UserCountsResponse;
 import com.bloodlink.domain.enums.RequestStatus;
+import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonationRepository.MonthlyDonationCount;
+import com.bloodlink.repository.UserRepository;
 
 /**
  * The two aggregate reports behind the Admin Console's charts: donation volume
@@ -36,10 +39,16 @@ public class AdminReportService {
 
     private final DonationRepository donationRepository;
     private final BloodRequestRepository bloodRequestRepository;
+    private final UserRepository userRepository;
 
-    AdminReportService(DonationRepository donationRepository, BloodRequestRepository bloodRequestRepository) {
+    AdminReportService(
+        DonationRepository donationRepository,
+        BloodRequestRepository bloodRequestRepository,
+        UserRepository userRepository
+    ) {
         this.donationRepository = donationRepository;
         this.bloodRequestRepository = bloodRequestRepository;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -102,5 +111,26 @@ public class AdminReportService {
 
         return new RequestOutcomeResponse(pending, partiallyFulfilled, fulfilled, rejected,
             pending + partiallyFulfilled + fulfilled + rejected);
+    }
+
+    /**
+     * How many accounts exist, in total and per role, counted in one grouped query.
+     *
+     * Zero-filled like the two reports above: a role with no accounts is reported as
+     * zero rather than left out, so the console's cards and role buttons always have a
+     * number to show.
+     */
+    @Transactional(readOnly = true)
+    public UserCountsResponse userCounts() {
+        Map<Role, Long> counts = userRepository.countGroupedByRole().stream()
+            .collect(Collectors.toMap(UserRepository.RoleCount::getRole, UserRepository.RoleCount::getTotal));
+
+        long donors = counts.getOrDefault(Role.DONOR, 0L);
+        long hospitalStaff = counts.getOrDefault(Role.HOSPITAL_STAFF, 0L);
+        long bloodBankStaff = counts.getOrDefault(Role.BLOOD_BANK_STAFF, 0L);
+        long admins = counts.getOrDefault(Role.ADMIN, 0L);
+
+        return new UserCountsResponse(
+            donors + hospitalStaff + bloodBankStaff + admins, donors, hospitalStaff, bloodBankStaff, admins);
     }
 }

@@ -18,11 +18,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.bloodlink.admin.dto.MonthlyDonationTotal;
 import com.bloodlink.admin.dto.RequestOutcomeResponse;
+import com.bloodlink.admin.dto.UserCountsResponse;
 import com.bloodlink.domain.enums.RequestStatus;
+import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.BloodRequestRepository.StatusCount;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonationRepository.MonthlyDonationCount;
+import com.bloodlink.repository.UserRepository;
 
 /**
  * Both reports share one rule this class exists to pin down: a month or a status
@@ -36,12 +39,34 @@ class AdminReportServiceTest {
 
     @Mock private DonationRepository donationRepository;
     @Mock private BloodRequestRepository bloodRequestRepository;
+    @Mock private UserRepository userRepository;
 
     private AdminReportService service;
 
     @BeforeEach
     void setUp() {
-        service = new AdminReportService(donationRepository, bloodRequestRepository);
+        service = new AdminReportService(donationRepository, bloodRequestRepository, userRepository);
+    }
+
+    private record FakeRoleCount(Role role, long total) implements UserRepository.RoleCount {
+        @Override public Role getRole() { return role; }
+        @Override public long getTotal() { return total; }
+    }
+
+    @Test
+    void userCountsAddUpPerRoleAndZeroFillARoleWithNoAccounts() {
+        // No hospital staff at all: reported as 0, not missing.
+        when(userRepository.countGroupedByRole()).thenReturn(List.of(
+            new FakeRoleCount(Role.DONOR, 58), new FakeRoleCount(Role.BLOOD_BANK_STAFF, 4),
+            new FakeRoleCount(Role.ADMIN, 1)));
+
+        UserCountsResponse counts = service.userCounts();
+
+        assertThat(counts.donors()).isEqualTo(58);
+        assertThat(counts.bloodBankStaff()).isEqualTo(4);
+        assertThat(counts.admins()).isEqualTo(1);
+        assertThat(counts.hospitalStaff()).isZero();
+        assertThat(counts.total()).isEqualTo(63);
     }
 
     /** A plain implementation rather than a Mockito mock: both projections are

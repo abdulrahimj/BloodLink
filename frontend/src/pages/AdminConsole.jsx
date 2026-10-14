@@ -1,8 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  getAdminUsers, createStaffAccount, updateUserStatus, editAccountDetails, getAuditLog,
+  getAdminUsers, getUserCounts, createStaffAccount, updateUserStatus, editAccountDetails, getAuditLog,
   getDonationTrends, getRequestOutcomes, createBloodBank, createHospital,
 } from "../api/admin.js";
+import {
+  USER_ACCOUNT_PAGE_SIZES, USER_ACCOUNT_SORTS, USER_ACCOUNT_STATUSES,
+  initialUserAccountsState, applyUserAccountsChange, goToUserAccountsPage, toggleUserAccountsDirection,
+  buildUserAccountsParams, hasActiveUserAccountFilters, clearUserAccountFilters,
+  describeUserAccountsEmptyState, stateAfterAccountCreated, roleCount,
+} from "../lib/userAccounts.js";
+import { describeShowingRange } from "../lib/pagination.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -19,8 +26,9 @@ import {
      • Manage User Accounts  (all four roles, activate / suspend)
      • View Reports & Analytics  (donation trends, request outcomes)
 
-   Wired to GET /api/admin/users, POST + PATCH /api/admin/users, and
-   GET /api/admin/reports/donations + /requests. Layout, styling and the two
+   Wired to GET /api/admin/users (one page at a time, searched, filtered and
+   sorted by the server), POST + PATCH /api/admin/users, and
+   GET /api/admin/reports/donations + /requests + /users. Layout, styling and the two
    inline SVG charts are the mockup's, unchanged; the TRENDS/OUTCOMES/USERS
    fixtures are replaced with fetched data, and a loading/error pair was
    added using the same idiom as the other wired portals.
@@ -165,17 +173,17 @@ const ROLE_FILTERS = ["ALL", "DONOR", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADM
 /**
  * The console shell: sidebar, header, data loading, and which view is showing.
  *
- * Data is loaded once, here, and shared by both views rather than fetched by each
- * view as it opens. The two genuinely overlap — the dashboard's "Total Users" and
- * "Registered Donors" cards are counts over the very list the User Accounts page
- * shows — so keeping one copy means an account created or suspended on the User
- * Accounts page is already reflected in those cards when the administrator
- * switches back, with no refetch and no chance of the two pages disagreeing.
+ * The account counts (GET /api/admin/reports/users) are loaded here and shared: the
+ * Dashboard's "Total Users" and "Registered Donors" cards and the User Accounts role
+ * buttons all read them, and the User Accounts page reloads them after it creates or
+ * suspends an account, so the cards are right when the administrator switches back.
+ * The account list itself is not loaded here at all any more — the User Accounts page
+ * fetches one page at a time — so no screen ever downloads every account.
  */
 export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [view, setView] = useState(VIEW.DASHBOARD);
 
-  const [users, setUsers] = useState([]);
+  const [userCounts, setUserCounts] = useState(null);
   const [trends, setTrends] = useState([]);
   const [outcomes, setOutcomes] = useState(null);
   // The facility reference lists, kept rather than counted away: the stat card
@@ -190,14 +198,25 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [today] = useState(() => new Date());
 
   async function load() {
-    const [usersData, trendsData, outcomesData, banks, hospitals] = await Promise.all([
-      getAdminUsers(),
+    const [countsData, trendsData, outcomesData, banks, hospitals] = await Promise.all([
+      getUserCounts(),
       getDonationTrends(),
       getRequestOutcomes(),
       getBloodBanks(),
       getHospitals(),
     ]);
-    return { usersData, trendsData, outcomesData, banks, hospitals };
+    return { countsData, trendsData, outcomesData, banks, hospitals };
+  }
+
+  /** Re-reads the account counts after the User Accounts page changes an account.
+   *  A failure leaves the old numbers on screen: a stat card a moment out of date is
+   *  a smaller harm than an error banner over a change that did succeed. */
+  async function reloadUserCounts() {
+    try {
+      setUserCounts(await getUserCounts());
+    } catch {
+      // Left as it was; the next change or visit will try again.
+    }
   }
 
   useEffect(() => {
@@ -206,9 +225,9 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
     setError(null);
 
     load()
-      .then(({ usersData, trendsData, outcomesData, banks: bankRows, hospitals: hospitalRows }) => {
+      .then(({ countsData, trendsData, outcomesData, banks: bankRows, hospitals: hospitalRows }) => {
         if (cancelled) return;
-        setUsers(usersData);
+        setUserCounts(countsData);
         setTrends(trendsData);
         setOutcomes(outcomesData);
         setBanks(bankRows);
@@ -223,17 +242,11 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 
   /**
    * After the administrator saves their own name or email in Profile Settings:
-   * passes it up to App (header avatar, stored session) and also patches their own
-   * row in the account list this console already holds — otherwise the User
-   * Accounts table would keep showing the old name for them until a reload.
+   * passes it up to App (header avatar, stored session). The User Accounts table
+   * needs nothing patched — it fetches its page fresh every time it is opened.
    */
   function handleUserUpdated(changes) {
     onUserUpdated?.(changes);
-    setUsers((current) =>
-      current
-        .map((u) => (u.id === user.id ? { ...u, ...changes } : u))
-        .sort((a, b) => a.fullName.localeCompare(b.fullName))
-    );
   }
 
   return (
@@ -572,6 +585,36 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-filter:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
         .ad-filter-count { font-weight: 600; opacity: .7; }
 
+        /* ===== SEARCH, STATUS, SORT — User Accounts page ===== */
+        .ad-users-controls {
+          flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap;
+          gap: clamp(6px, .6vw, 10px); margin-bottom: clamp(6px, 1vh, 10px);
+        }
+        .ad-users-search, .ad-users-select, .ad-users-dir, .ad-users-clear {
+          font-family: inherit; font-size: clamp(9.5px, 1.35vh, 12px); color: var(--ink);
+          border: 1.5px solid var(--line); border-radius: 7px; background: #FFF;
+          padding: clamp(4px, .7vh, 7px) clamp(8px, .7vw, 11px);
+        }
+        .ad-users-search { flex: 1 1 200px; min-width: 150px; }
+        .ad-users-select, .ad-users-dir { font-weight: 600; cursor: pointer; }
+        .ad-users-search:focus, .ad-users-select:focus { outline: none; border-color: var(--navy); }
+        .ad-users-dir:hover, .ad-users-clear:hover { background: #F6F7F8; border-color: #C9CDD3; }
+        .ad-users-dir:focus-visible, .ad-users-clear:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        /* Text-like, red: it undoes something, and it only appears when there is
+           something to undo. */
+        .ad-users-clear { color: var(--red); font-weight: 700; cursor: pointer; border-color: transparent; background: transparent; }
+        .ad-users-busy { font-size: clamp(9px, 1.25vh, 11px); }
+        .ad-users-error { color: var(--red); font-weight: 600; }
+
+        /* Compact rows, so a 13-row page fits a 768px-tall laptop screen with no
+           scrolling inside the table. Only this table; the others keep their size. */
+        .ad-table--compact td { padding: clamp(3px, .5vh, 6px) 8px; }
+        .ad-table--compact .ad-user-av {
+          width: clamp(20px, 2.6vh, 26px); height: clamp(20px, 2.6vh, 26px);
+          font-size: clamp(8px, 1.1vh, 10px);
+        }
+        .ad-table--compact .ad-act { padding: clamp(3px, .5vh, 5px) clamp(7px, .7vw, 11px); }
+
         /* A wider dialog than the suspend confirmation: this one holds a form,
            not a sentence. Scrolls internally rather than growing past the viewport
            on a short screen. */
@@ -726,8 +769,8 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           view === VIEW.USERS ? (
             <UserAccountsView
               user={user}
-              users={users}
-              setUsers={setUsers}
+              counts={userCounts}
+              onAccountsChanged={reloadUserCounts}
               banks={banks}
               hospitals={hospitals}
             />
@@ -742,7 +785,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
             />
           ) : (
             <DashboardView
-              users={users}
+              counts={userCounts}
               trends={trends}
               outcomes={outcomes}
               facilityCount={banks.length + hospitals.length}
@@ -761,12 +804,12 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
  * management used to share this screen as a table underneath the charts; it now
  * lives on its own page (UserAccountsView), so this one answers only "how is the
  * system doing?" and never "what do I need to do?". The cards and charts are
- * exactly as they were, including the two user counts, which still read from the
- * same shared user list the User Accounts page acts on.
+ * exactly as they were. The two user counts come from GET /api/admin/reports/users,
+ * counted by the database, rather than from downloading every account.
  */
-function DashboardView({ users, trends, outcomes, facilityCount }) {
-  const totalUsers = users.length;
-  const registeredDonors = users.filter((u) => u.role === "DONOR").length;
+function DashboardView({ counts, trends, outcomes, facilityCount }) {
+  const totalUsers = roleCount(counts, "");
+  const registeredDonors = roleCount(counts, "DONOR");
   const pendingRequests = outcomes.pending ?? 0;
 
   return (
@@ -817,24 +860,77 @@ function DashboardView({ users, trends, outcomes, facilityCount }) {
  * User Accounts — every account in the system, and everything an administrator
  * can do to one: create it, suspend it, reactivate it.
  *
- * Moved here from underneath the Dashboard's charts, unchanged in behaviour: the
- * same columns, the same Suspend/Activate buttons and confirmation, the same
- * Create Account dialog and one-time credentials screen (Business Rule 14). What
- * is new is the role filter above the table.
+ * The same columns, Edit / Suspend / Activate buttons and confirmation, Create
+ * Account dialog and one-time credentials screen (Business Rule 14) as before.
  *
- * <h3>Filtering happens in the browser</h3>
- * GET /api/admin/users already returns every account, and this page already holds
- * that list, so choosing a role narrows what is on screen rather than asking the
- * server again. That keeps the filter instant and needs no new endpoint. It is the
- * right trade while the list is in the hundreds; see the note on `visibleUsers`
- * for where that stops being true.
+ * <h3>One page at a time, from the server</h3>
+ * Search, the role buttons, the status filter, the sort and the page all go to
+ * GET /api/admin/users as one request, and the database returns only the rows on
+ * screen. Nothing else is fetched in the background: a new page is requested only
+ * when Previous/Next, a filter, the sort, the page size or the (debounced) search
+ * changes. All of that logic lives in lib/userAccounts.js and lib/pagination.js;
+ * this component only calls it.
  *
- * The list itself belongs to the console shell, not to this view — `setUsers`
- * writes straight back to it — so the Dashboard's user counts move the moment an
- * account is created here.
+ * After an action changes an account, the page on screen is fetched again rather
+ * than patched by hand, because the change may have moved the account out of the
+ * current filter or sort position; if that leaves the page past the end, it is
+ * pulled back to the last page, as on the Donors page. The role-button counts come
+ * from the console shell's count endpoint and are reloaded after a create.
  */
-function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
-  const [roleFilter, setRoleFilter] = useState("ALL");
+function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals }) {
+  const [query, setQuery] = useState(initialUserAccountsState);
+  // What is in the search box right now. It reaches `query` (and the server) only
+  // after typing pauses — see the debounce effect below.
+  const [searchText, setSearchText] = useState("");
+  const [pageData, setPageData] = useState(null);
+  const [loadingPage, setLoadingPage] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  // Bumped to fetch the same query again after an action changes an account.
+  const [reloadToken, setReloadToken] = useState(0);
+  const reloadPage = () => setReloadToken((token) => token + 1);
+
+  // Waits until typing pauses before searching, the same 350ms the Donors page uses,
+  // so the database is not asked once per letter. Returning the same state object
+  // when the text has not really changed means no extra request (or page reset).
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setQuery((current) => (current.q.trim() === searchText.trim()
+        ? current
+        : applyUserAccountsChange(current, { q: searchText })));
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [searchText]);
+
+  // Fetches exactly one page whenever the query (or the reload token) changes — and
+  // at no other time. A response for a query the administrator has already moved on
+  // from is dropped rather than shown.
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingPage(true);
+    setLoadError(null);
+    getAdminUsers(buildUserAccountsParams(query))
+      .then((data) => { if (!cancelled) setPageData(data); })
+      .catch((err) => { if (!cancelled) setLoadError(err.message); })
+      .finally(() => { if (!cancelled) setLoadingPage(false); });
+    return () => { cancelled = true; };
+  }, [query, reloadToken]);
+
+  // A page past the end (after a suspend under the Active filter emptied the last
+  // page, say) is pulled back to the real last page — the Donors page's rule.
+  useEffect(() => {
+    if (!pageData) return;
+    const clamped = clampPageToAvailable(query.page, pageData.totalPages);
+    if (clamped !== query.page) setQuery((current) => goToUserAccountsPage(current, clamped));
+  }, [pageData, query.page]);
+
+  function changeQuery(changes) {
+    setQuery((current) => applyUserAccountsChange(current, changes));
+  }
+
+  function clearFilters() {
+    setSearchText("");
+    setQuery((current) => clearUserAccountFilters(current));
+  }
 
   // The Create Account form, and the credentials screen that replaces it on
   // success. Separate pieces of state because the second outlives the first:
@@ -880,18 +976,17 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
   }, [confirmingSuspend]);
 
   /**
-   * Writes one status change and reconciles the table from the response,
-   * rather than trusting the click to know what the new row should look like —
-   * the same reasoning BloodBankDashboard's handleAction gives for reloading
-   * after an approve/reject/fulfil instead of patching local state by hand.
+   * Writes one status change, then fetches the page again rather than patching the
+   * row by hand — under the Active or Suspended filter the account may no longer
+   * belong on this page at all, and only the server's answer says so.
    */
   async function applyStatus(targetUserId, status) {
     setUpdatingUserId(targetUserId);
     setActionError(null);
     try {
-      const updated = await updateUserStatus(targetUserId, status);
+      await updateUserStatus(targetUserId, status);
       if (!mountedRef.current) return;
-      setUsers((current) => current.map((u) => (u.id === targetUserId ? updated : u)));
+      reloadPage();
     } catch (err) {
       if (!mountedRef.current) return;
       setActionError({ userId: targetUserId, message: err.message });
@@ -906,27 +1001,21 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
     applyStatus(targetUserId, "SUSPENDED");
   }
 
-  /** Replaces the edited row with the server's version of it — the same
-   *  reconcile-from-the-response approach applyStatus takes. */
-  function handleEdited(updated) {
-    setUsers((current) => current.map((u) => (u.id === updated.id ? updated : u)));
+  /** After a phone or facility edit, fetches the page again — the same approach as
+   *  applyStatus, since a phone search may no longer match the edited account. */
+  function handleEdited() {
     setEditing(null);
+    reloadPage();
   }
 
   /**
    * Called by the form once the account exists, with the server's 201 body.
    *
-   * The new row is spliced into the table from that response rather than by
-   * re-fetching every account: the created account comes back in exactly the
-   * shape this table renders, so a second round trip would ask the server to
-   * repeat what it just said. Inserted in name order, which is the order
-   * GET /api/admin/users returns, so the row sits where a reload would put it
-   * instead of jumping on the next visit.
-   *
-   * If a role filter is active that would hide the new account — Donor chosen,
-   * an Administrator just created — the filter switches to the new account's
-   * role. Otherwise the administrator's first sight of the account they just
-   * made would be its absence, which reads as a failure that did not happen.
+   * The table fetches its current page again (the new account may or may not belong
+   * on it, given the sort), and the role-button and Dashboard counts are reloaded.
+   * If a role or status filter would hide the new account, that filter switches to
+   * show it (stateAfterAccountCreated), as the console always did, so the
+   * administrator's first sight of the account they just made is not its absence.
    *
    * The password is held in state only for as long as the credentials screen is
    * open, and is never written to storage — it cannot be fetched again, so
@@ -934,35 +1023,18 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
    * avoid keeping.
    */
   function handleAccountCreated(result) {
-    setUsers((current) =>
-      [...current, result.account].sort((a, b) => a.fullName.localeCompare(b.fullName))
-    );
-    if (roleFilter !== "ALL" && roleFilter !== result.account.role) {
-      setRoleFilter(result.account.role);
-    }
+    const next = stateAfterAccountCreated(query, result.account);
+    if (next === query) reloadPage(); else setQuery(next);
+    onAccountsChanged?.();
     setCreatingAccount(false);
     setNewCredentials(result);
   }
 
-  // How many accounts hold each role — shown on the filter buttons, so an empty
-  // role is visible as "0" before anyone clicks it and finds an empty table.
-  const countsByRole = users.reduce(
-    (counts, u) => ({ ...counts, [u.role]: (counts[u.role] ?? 0) + 1 }),
-    {}
-  );
-
-  /*
-   * Filtered in the browser, over the list already held. Fine at the scale this
-   * deployment has today — two blood banks, two hospitals, their staff, and a
-   * donor register in the hundreds — where the whole list is a small response and
-   * renders instantly. Donors are the part that grows without limit; once the
-   * register reaches the low thousands, fetching and rendering every account on
-   * each visit becomes the slow part, and the fix is paging and role filtering on
-   * the server (GET /api/admin/users?role=...&page=...) rather than more cleverness
-   * here. Not built now: that is a backend change, and a decision for the project
-   * owner rather than something to add quietly.
-   */
-  const visibleUsers = roleFilter === "ALL" ? users : users.filter((u) => u.role === roleFilter);
+  const rows = pageData?.content ?? [];
+  const totalElements = pageData?.totalElements ?? 0;
+  const totalPages = pageData?.totalPages ?? 0;
+  const emptyMessage = pageData && !loadError ? describeUserAccountsEmptyState(totalElements, query) : null;
+  const filtersActive = hasActiveUserAccountFilters(query) || searchText.trim() !== "";
 
   return (
     <>
@@ -970,9 +1042,7 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
         <div className="ad-panel-head">
           <div className="ad-panel-title">All Accounts</div>
           <div className="ad-panel-head-right">
-            <div className="ad-panel-link">
-              {roleFilter === "ALL" ? `${users.length} total` : `${visibleUsers.length} of ${users.length}`}
-            </div>
+            {loadingPage && pageData && <div className="ad-muted ad-users-busy" role="status">Updating…</div>}
             {/* The only way to create a staff or administrator account
                 without writing SQL — see Business Rule 14. */}
             <button type="button" className="ad-new" onClick={() => setCreatingAccount(true)}>
@@ -981,27 +1051,61 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
           </div>
         </div>
 
-        {/* aria-pressed on each, so a screen reader announces which role is
-            currently narrowing the table rather than just listing five buttons. */}
+        {/* The role filter: the same buttons as before, now applied by the server.
+            Counts are totals per role from the database. aria-pressed tells a
+            screen reader which role is narrowing the table. */}
         <div className="ad-filters" role="group" aria-label="Filter accounts by role">
-          {ROLE_FILTERS.map((role) => (
-            <button
-              key={role}
-              type="button"
-              className={`ad-filter${roleFilter === role ? " is-on" : ""}`}
-              aria-pressed={roleFilter === role}
-              onClick={() => setRoleFilter(role)}
-            >
-              {role === "ALL" ? "All" : ROLE_LABEL[role]}
-              <span className="ad-filter-count">
-                {role === "ALL" ? users.length : (countsByRole[role] ?? 0)}
-              </span>
-            </button>
-          ))}
+          {ROLE_FILTERS.map((role) => {
+            const value = role === "ALL" ? "" : role;
+            return (
+              <button
+                key={role}
+                type="button"
+                className={`ad-filter${query.role === value ? " is-on" : ""}`}
+                aria-pressed={query.role === value}
+                onClick={() => changeQuery({ role: value })}
+              >
+                {role === "ALL" ? "All" : ROLE_LABEL[role]}
+                <span className="ad-filter-count">{roleCount(counts, value)}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Search, status filter and sort: one request with the role filter above. */}
+        <div className="ad-users-controls">
+          <input
+            className="ad-users-search" type="search" placeholder="Search name, phone or email…"
+            aria-label="Search accounts by name, phone or email"
+            value={searchText} onChange={(e) => setSearchText(e.target.value)}
+          />
+          <select
+            className="ad-users-select" aria-label="Filter by status"
+            value={query.status} onChange={(e) => changeQuery({ status: e.target.value })}
+          >
+            <option value="">All statuses</option>
+            {USER_ACCOUNT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <select
+            className="ad-users-select" aria-label="Sort by"
+            value={query.sort} onChange={(e) => changeQuery({ sort: e.target.value })}
+          >
+            {USER_ACCOUNT_SORTS.map((s) => <option key={s.value} value={s.value}>Sort: {s.label}</option>)}
+          </select>
+          <button
+            type="button" className="ad-users-dir"
+            aria-label={query.direction === "asc" ? "Sorted ascending — switch to descending" : "Sorted descending — switch to ascending"}
+            onClick={() => setQuery((current) => toggleUserAccountsDirection(current))}
+          >
+            {query.direction === "asc" ? "↑ Asc" : "↓ Desc"}
+          </button>
+          {filtersActive && (
+            <button type="button" className="ad-users-clear" onClick={clearFilters}>Clear filters</button>
+          )}
         </div>
 
         <div className="ad-table-scroll">
-          <table className="ad-table">
+          <table className="ad-table ad-table--compact">
             <thead>
               <tr>
                 <th style={{ width: "22%" }}>User</th>
@@ -1013,16 +1117,22 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
               </tr>
             </thead>
             <tbody>
-              {visibleUsers.length === 0 && (
+              {!pageData && loadingPage && !loadError && (
+                <tr><td colSpan={6} className="ad-empty">Loading accounts…</td></tr>
+              )}
+              {loadError && (
+                // Not a sign-out: apiRequest only clears the session on a session-level 401.
                 <tr>
                   <td colSpan={6} className="ad-empty">
-                    {roleFilter === "ALL"
-                      ? "No accounts on record."
-                      : `No ${ROLE_LABEL[roleFilter]} accounts on record.`}
+                    <span className="ad-users-error">Could not load accounts: {loadError}</span>{" "}
+                    <button type="button" className="ad-act ad-act--edit" onClick={reloadPage}>Try again</button>
                   </td>
                 </tr>
               )}
-              {visibleUsers.map((u) => {
+              {emptyMessage && (
+                <tr><td colSpan={6} className="ad-empty">{emptyMessage}</td></tr>
+              )}
+              {!loadError && rows.map((u) => {
                 const facility = u.bloodBankName ?? u.hospitalName;
                 const busy = updatingUserId === u.id;
                 // The backend refuses this too (409), but a button that
@@ -1089,6 +1199,34 @@ function UserAccountsView({ user, users, setUsers, banks, hospitals }) {
               })}
             </tbody>
           </table>
+        </div>
+
+        {/* "Showing 1-13 of N", Previous / Next (disabled at either end) and a page
+            size limited to what fits on screen without scrolling. */}
+        <div className="ad-log-pager">
+          <label className="ad-log-size">
+            Rows per page
+            <select value={query.size} onChange={(e) => changeQuery({ size: Number(e.target.value) })}>
+              {USER_ACCOUNT_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <div className="ad-log-nav">
+            <span className="ad-log-page-label">{describeShowingRange(query.page, query.size, totalElements)}</span>
+            <button
+              type="button" className="ad-act ad-act--edit"
+              disabled={!canGoToPreviousPage(query.page) || loadingPage}
+              onClick={() => setQuery((current) => goToUserAccountsPage(current, current.page - 1))}
+            >
+              Previous
+            </button>
+            <button
+              type="button" className="ad-act ad-act--edit"
+              disabled={!canGoToNextPage(query.page, totalPages) || loadingPage}
+              onClick={() => setQuery((current) => goToUserAccountsPage(current, current.page + 1))}
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 

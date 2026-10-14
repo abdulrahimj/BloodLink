@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.bloodbank.ActingBankResolver;
+import com.bloodlink.common.LikePattern;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Donor;
@@ -78,9 +79,12 @@ public class DonorRosterService {
         // same as every other blood-type-taking endpoint.
         BloodType bloodType = bloodTypeLabel == null ? null : BloodType.fromLabel(bloodTypeLabel);
 
+        // Both patterns escape % and _ (LikePattern), so a typed "%" matches only a
+        // literal "%" rather than every donor; the phone pattern also maps a local
+        // "0…" fragment to the stored "+232…" form (PhoneNumber.searchFragment).
         String trimmedQ = normalizeSearch(q);
-        String namePattern = trimmedQ == null ? null : "%" + trimmedQ.toLowerCase() + "%";
-        String phonePattern = trimmedQ == null ? null : "%" + phoneSearchFragment(trimmedQ) + "%";
+        String namePattern = trimmedQ == null ? null : LikePattern.contains(trimmedQ.toLowerCase());
+        String phonePattern = trimmedQ == null ? null : LikePattern.contains(PhoneNumber.searchFragment(trimmedQ));
 
         // null = either; true = Business Rule 2's ELIGIBLE; false = IN_RECOVERY.
         // DonorRosterController's @Pattern already refused anything else.
@@ -162,26 +166,4 @@ public class DonorRosterService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    /**
-     * Turns search text into a fragment to match against the stored
-     * {@code +232}-format phone — deliberately not {@link PhoneNumber#normalize},
-     * which exists to validate a *complete* number and would reject a
-     * deliberate partial search like "900" or "076900" as too short.
-     *
-     * The only transformation applied is the one part of Business Rule 13 that
-     * still makes sense for a fragment: spaces and hyphens are noise wherever
-     * they appear, and a fragment that starts with the local trunk prefix "0"
-     * is rewritten to the "+232" every stored number actually starts with, so
-     * typing the number the way a donor gave it still finds them. A fragment
-     * that does not start with "0" is matched exactly as typed — the stored
-     * "+232" prefix never appears anywhere but the very start of a real
-     * number, so leaving the rest alone cannot create a false match.
-     */
-    private static String phoneSearchFragment(String q) {
-        String compact = q.replaceAll("[\\s-]", "");
-        if (compact.startsWith("0")) {
-            return PhoneNumber.COUNTRY_CODE + compact.substring(1);
-        }
-        return compact;
-    }
 }
