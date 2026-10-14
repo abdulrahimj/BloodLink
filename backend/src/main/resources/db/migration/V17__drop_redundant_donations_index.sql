@@ -1,0 +1,16 @@
+-- Removes the index V16 added, which should never have been added.
+--
+-- V16 was written on a false premise: its comment says the donations table had no
+-- index on blood_bank_id or donor_id. It did — V1 has created idx_donations_donor
+-- (donor_id) and idx_donations_blood_bank (blood_bank_id) since the schema began
+-- (V1__init_schema.sql, lines 96-97). The Donors page's queries (Business Rule 21)
+-- were already served by those two, so idx_donations_bank_donor only added a third
+-- index for every donation insert to maintain.
+--
+-- Dropped here rather than by deleting or editing V16: V16 has already run on
+-- existing databases, and Flyway refuses to start an application whose applied
+-- migrations no longer match their files. Leaving V16 untouched and undoing it in a
+-- new migration ends every database in the same state, whether or not it ran V16.
+--
+-- IF EXISTS so a database that somehow never got V16's index still migrates cleanly.
+drop index if exists idx_donations_bank_donor;

@@ -701,9 +701,6 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       number and would reject a deliberate partial search ("900", "076900"); instead a leading
       "0" is rewritten to "+232" (Business Rule 13's local-form mapping) and the rest is matched
       as a substring against the stored number.
-    - **An index, `idx_donations_bank_donor` on `donations (blood_bank_id, donor_id)` (`V16`),
-      backs both of this feature's queries** — `donations` had no index on either foreign-key
-      column before this, which only mattered once a query started filtering by them.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
