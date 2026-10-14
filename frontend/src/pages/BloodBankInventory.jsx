@@ -598,7 +598,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           <button type="button" onClick={() => onNavigate("dashboard")}><GridIcon /> Dashboard</button>
           <button type="button" className="is-active"><DropletOutlineIcon /> Blood Inventory</button>
           <button type="button"><TruckIcon /> Blood Logistics</button>
-          <button type="button"><UsersIcon /> Donors</button>
+          <button type="button" onClick={() => onNavigate("donors")}><UsersIcon /> Donors</button>
           <button type="button"><ChartIcon /> Report</button>
           <button type="button" onClick={() => onNavigate("settings")}><GearIcon /> Settings</button>
         </nav>
@@ -927,9 +927,16 @@ function Stat({ tone, icon, figure, label, note }) {
  * one mistyped profile follow a donor into every donation and into the stock
  * issued from it. The profile group is shown beside it for recognition, and a
  * mismatch is called out rather than hidden.
+ *
+ * Exported so the Donors page (Business Rule 21) can open the same flow from
+ * a roster row's "Record donation" shortcut, rather than a second copy of
+ * this dialog. `initialPhone` is the one addition that reuse needed: a
+ * shortcut starting from a donor already on screen can hand their number
+ * straight to the lookup step instead of leaving it blank for every other
+ * way of opening this dialog.
  */
-function RecordDonationModal({ bloodBankId, onClose, onRecorded }) {
-  const [phone, setPhone] = useState("");
+export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialPhone = "" }) {
+  const [phone, setPhone] = useState(initialPhone);
   const [donor, setDonor] = useState(null);
   const [lookupError, setLookupError] = useState(null);
   const [lookingUp, setLookingUp] = useState(false);

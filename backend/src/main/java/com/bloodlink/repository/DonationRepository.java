@@ -15,6 +15,37 @@ public interface DonationRepository extends JpaRepository<Donation, UUID> {
     /** A donor's full history, most recent first — backs GET /api/donors/me/donations. */
     List<Donation> findByDonorIdOrderByDonationDateDesc(UUID donorId);
 
+    /**
+     * One donor's history at one bank only, most recent first, capped at 50 —
+     * backs GET /api/donors/roster/{donorId}/donations. Never another bank's
+     * rows: both ids are matched, so a donor who gave elsewhere too shows
+     * nothing of that here.
+     */
+    List<Donation> findTop50ByDonorIdAndBloodBankIdOrderByDonationDateDesc(UUID donorId, UUID bloodBankId);
+
+    /**
+     * How many of the given donors have donated at this bank, in one query
+     * rather than one per row — the "donationsHere" figure on the Donors page.
+     *
+     * Deliberately takes the exact donor ids already on the page (at most
+     * `size`, capped at 100) rather than every donor at the bank: this runs
+     * once per page load, not once per row, which is what keeps
+     * DonorRosterService free of N+1 queries without needing a single fused
+     * query that mixes a fetch join with GROUP BY (see DonorRepository's
+     * roster queries for why that combination was avoided).
+     */
+    @Query("select don.donor.id as donorId, count(don) as total from Donation don"
+        + " where don.bloodBank.id = :bloodBankId and don.donor.id in :donorIds"
+        + " group by don.donor.id")
+    List<DonorDonationCount> countByBloodBankIdAndDonorIdIn(
+        @Param("bloodBankId") UUID bloodBankId, @Param("donorIds") List<UUID> donorIds);
+
+    /** One donor's donation count at one bank, from {@link #countByBloodBankIdAndDonorIdIn}. */
+    interface DonorDonationCount {
+        UUID getDonorId();
+        long getTotal();
+    }
+
     /** "Donations" stat on the Blood Bank Dashboard — this bank, within a date range. */
     long countByBloodBankIdAndDonationDateBetween(UUID bloodBankId, LocalDate start, LocalDate end);
 

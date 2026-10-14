@@ -1,0 +1,20 @@
+-- An index to support the Blood Bank portal's Donors page (Business Rule 21).
+--
+-- The donations table's two foreign keys, blood_bank_id and donor_id, have
+-- never had an index of their own — only the primary key is indexed by
+-- default, since PostgreSQL does not automatically index foreign-key columns
+-- the way it does the primary key they reference.
+--
+-- The Donors page's two new queries both filter by blood_bank_id and then
+-- narrow by donor_id: "does this donor have at least one donation at this
+-- bank" (an EXISTS check, once per donor on the page) and "how many donations
+-- does each of these donors have at this bank" (one batched count per page
+-- load). Both are a sequential scan of the whole donations table without this
+-- index, a cost that only grows as the table does — and this table is
+-- effectively append-only in practice, so it only ever grows.
+--
+-- blood_bank_id leads the index because every query that uses it filters by
+-- blood_bank_id first and narrows by donor_id second, never the other way
+-- around; donor_id is included so the same index covers both the EXISTS
+-- check and the batched count without a second lookup.
+create index idx_donations_bank_donor on donations (blood_bank_id, donor_id);

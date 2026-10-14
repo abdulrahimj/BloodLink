@@ -140,6 +140,14 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/donors/lookup")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
 
+                // --- A blood bank's own donor roster (donors with a donation at
+                // that bank) and each one's donation history there ---
+                // Matched before the general /api/donors/** rule below for the same
+                // reason /lookup is: this is bank staff looking at donors, not a
+                // donor's own record.
+                .requestMatchers(HttpMethod.GET, "/api/donors/roster/**")
+                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+
                 // --- Donor's own profile, history and eligibility ---
                 .requestMatchers("/api/donors/**")
                     .hasAnyRole(Role.DONOR.name(), Role.ADMIN.name())

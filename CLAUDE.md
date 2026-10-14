@@ -669,6 +669,41 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       ("2 of 4 units received · 2 still needed · from …") instead of a binary badge. The dashboard's
       stat card becomes "Open Requests" (PENDING + PARTIALLY_FULFILLED), and the Admin Console's
       request-outcomes donut shows "Partly filled" where "Approved" used to be.
+21. **A blood bank's "donor roster" means donors with at least one donation recorded at that
+    bank — there is no other link between a donor and a bank in the schema, since donors
+    register on their own.** This is the same reading `DonationRepository.countDistinctDonorsByBloodBankId`
+    already gave the Dashboard's "Registered Donors" stat; the Donors page (previously a dead
+    sidebar link) is the full version of that same question.
+    - **`GET /api/donors/roster`** returns one page of that bank's donors — paginated exactly
+      like the Audit Log's pagination (`page` 0-based default 0, `size` default 20 max 100, bad
+      values refused with a 400 naming the field, never corrected), with optional `q` (matches
+      name or phone), `bloodType`, `eligibility` (`ELIGIBLE` or `IN_RECOVERY`) and `sort`
+      (`lastDonation`, the default, or `name`) — and a stable `donorId` tie-breaker so two donors
+      sharing a sort value never swap pages. **`GET /api/donors/roster/{donorId}/donations`**
+      returns that one donor's donation history at this bank only, newest first, capped at 50; a
+      donor with no donation at this bank is a 404 — the same 404 as an id that matches nobody
+      at all, so a bank can never learn that someone is a registered donor elsewhere.
+    - **Exposes exactly: donor id, full name, blood group, phone, last donation date (any bank,
+      labelled as such), eligibility, the date eligibility begins (null when already eligible),
+      and donationsHere (this bank's own count).** Deliberately excludes address, email and date
+      of birth — data minimisation: this is a bank employee looking at someone else's details,
+      the same principle the Record Donation lookup (`DonorLookupResponse`) already states, and
+      none of those three fields is needed to decide anything on this screen.
+    - **Eligibility is never recalculated for this feature.** Both the response field and the
+      `eligibility` filter are built from `Donor.getEligibilityStatus()`/`eligibleFrom()`
+      (Business Rule 2) — the filter borrows `Donor.ELIGIBILITY_WINDOW_DAYS` to compute a cutoff
+      *date* to compare against in the database (needed so pagination can filter before cutting
+      the page), but the 90-day rule itself is evaluated in exactly the one place it always was.
+    - **`BLOOD_BANK_STAFF` only, via `ActingBankResolver`** — bank staff act as their own bank
+      and an ADMIN must name one (`bloodBankId`); a donor, hospital staff or unauthenticated
+      caller is refused (403/403/401), the same pattern every other bank-scoped endpoint uses.
+    - **Search does not go through `PhoneNumber.normalize`.** That function validates a complete
+      number and would reject a deliberate partial search ("900", "076900"); instead a leading
+      "0" is rewritten to "+232" (Business Rule 13's local-form mapping) and the rest is matched
+      as a substring against the stored number.
+    - **An index, `idx_donations_bank_donor` on `donations (blood_bank_id, donor_id)` (`V16`),
+      backs both of this feature's queries** — `donations` had no index on either foreign-key
+      column before this, which only mattered once a query started filtering by them.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -691,7 +726,7 @@ listed so nothing is forgotten when the chapters are next revised.
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals
+- **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)

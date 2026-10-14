@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import BloodBankDashboard from "./BloodBankDashboard.jsx";
 import BloodBankInventory from "./BloodBankInventory.jsx";
+import BloodBankDonors from "./BloodBankDonors.jsx";
 import { getBloodBanks } from "../api/bloodBanks.js";
 
 /* ================================================================
@@ -52,15 +53,16 @@ export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
     );
   }
 
-  // Three views, two page components. "settings" (Business Rule 16) is shown by
-  // the Dashboard page, which swaps its main area for the shared Profile Settings
-  // screen and keeps its sidebar, header and live bell — rather than a third
-  // whole-page copy of that sidebar and its styles. Going from Dashboard to
-  // Settings and back keeps the same component mounted, so nothing reloads.
+  // Four views, three page components. "settings" (Business Rule 16) is shown
+  // by the Dashboard page, which swaps its main area for the shared Profile
+  // Settings screen and keeps its sidebar, header and live bell — rather than
+  // a fourth whole-page copy of that sidebar and its styles. Going from
+  // Dashboard to Settings and back keeps the same component mounted, so
+  // nothing reloads.
   const shared = { bloodBankId: bank.id, user, onSignOut, activeView: view, onNavigate: setView, onUserUpdated };
-  return view === "inventory"
-    ? <BloodBankInventory {...shared} />
-    : <BloodBankDashboard {...shared} />;
+  if (view === "inventory") return <BloodBankInventory {...shared} />;
+  if (view === "donors") return <BloodBankDonors {...shared} />;
+  return <BloodBankDashboard {...shared} />;
 }
 
 /**

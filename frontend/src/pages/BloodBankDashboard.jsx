@@ -502,7 +502,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           </button>
           <button type="button" onClick={() => onNavigate("inventory")}><DropletOutlineIcon /> Blood Inventory</button>
           <button type="button"><TruckIcon /> Blood Logistics</button>
-          <button type="button"><UsersIcon /> Donors</button>
+          <button type="button" onClick={() => onNavigate("donors")}><UsersIcon /> Donors</button>
           <button type="button"><ChartIcon /> Report</button>
           <button
             type="button" className={onSettings ? "is-active" : ""}
