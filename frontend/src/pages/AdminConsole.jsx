@@ -13,6 +13,7 @@ import { describeShowingRange } from "../lib/pagination.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
+import AdminReports from "./AdminReports.jsx";
 import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import {
   AUDIT_LOG_PAGE_SIZES, canGoToPreviousPage, canGoToNextPage,
@@ -49,7 +50,8 @@ import {
    on a summary screen. Audit Log and Settings were wired later, and Blood
    Banks and Hospitals after them (Business Rule 19): each lists that type's
    facilities and lets an administrator add one — create only, no edit or
-   delete. Reports is still the mockup's inert button.
+   delete. Reports came last (Business Rule 23, AdminReports.jsx): a read-only
+   citywide summary in four sections, each with a CSV download.
 
    The notification bell is deliberately left exactly as the mockup drew it —
    a static icon with an always-on dot, no live count. No Notification type
@@ -119,8 +121,12 @@ const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
  *  nothing inside a portal has ever needed its own address. */
 const VIEW = {
   DASHBOARD: "dashboard", USERS: "users", BANKS: "banks", HOSPITALS: "hospitals",
-  AUDIT: "audit", SETTINGS: "settings",
+  REPORTS: "reports", AUDIT: "audit", SETTINGS: "settings",
 };
+
+/** The views that load their own data and so are not held behind the console
+ *  overview's loading state or its errors. */
+const SELF_LOADING_VIEWS = [VIEW.SETTINGS, VIEW.AUDIT, VIEW.REPORTS];
 
 /** The header's title and subtitle for each view. */
 const HEADINGS = {
@@ -128,6 +134,7 @@ const HEADINGS = {
   [VIEW.USERS]: { title: "User Accounts", sub: "Create, edit, suspend and reactivate accounts across all four roles" },
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
+  [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
   [VIEW.AUDIT]: { title: "Audit Log", sub: "Every administrator action, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
@@ -711,14 +718,12 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
-        {/* Every entry is wired except Reports, which remains the mockup's own
-            inert button — nothing behind it exists yet. */}
         <nav className="ad-nav">
           <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
           <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
           <NavButton view={VIEW.BANKS} current={view} onSelect={setView}><BankIcon /> Blood Banks</NavButton>
           <NavButton view={VIEW.HOSPITALS} current={view} onSelect={setView}><HospitalIcon /> Hospitals</NavButton>
-          <button type="button"><ChartIcon /> Reports</button>
+          <NavButton view={VIEW.REPORTS} current={view} onSelect={setView}><ChartIcon /> Reports</NavButton>
           <NavButton view={VIEW.AUDIT} current={view} onSelect={setView}><LogIcon /> Audit Log</NavButton>
           <NavButton view={VIEW.SETTINGS} current={view} onSelect={setView}><GearIcon /> Settings</NavButton>
         </nav>
@@ -752,11 +757,14 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
             console overview's. */}
         {view === VIEW.AUDIT && <AuditLogView />}
 
-        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && loading && (
+        {/* Reports (Business Rule 23) loads each of its sections itself. */}
+        {view === VIEW.REPORTS && <AdminReports />}
+
+        {!SELF_LOADING_VIEWS.includes(view) && loading && (
           <div className="ad-loading"><div className="ad-sub">Loading system overview…</div></div>
         )}
 
-        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && !loading && error && (
+        {!SELF_LOADING_VIEWS.includes(view) && !loading && error && (
           <div className="ad-error">
             <div className="ad-error-msg">{error}</div>
             <button type="button" className="ad-retry" onClick={() => window.location.reload()}>
@@ -765,7 +773,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           </div>
         )}
 
-        {view !== VIEW.SETTINGS && view !== VIEW.AUDIT && !loading && !error && outcomes && (
+        {!SELF_LOADING_VIEWS.includes(view) && !loading && !error && outcomes && (
           view === VIEW.USERS ? (
             <UserAccountsView
               user={user}

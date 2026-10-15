@@ -61,6 +61,21 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
     /** Resolves the donor profile behind an authenticated user (User 1–1 Donor). */
     Optional<Donor> findByUserId(UUID userId);
 
+    // ---------- Admin Reports: donors (Business Rule 23) ----------
+
+    /**
+     * How many donors are eligible to donate today: never donated, or last donated
+     * before {@code cutoff}, which the caller gets from {@code Donor.eligibilityCutoff}
+     * — exactly the test {@code Donor.getEligibilityStatus()} applies, counted in the
+     * database instead of donor by donor. ReportsIT checks the two agree.
+     */
+    @Query("select count(d) from Donor d where d.lastDonationDate is null or d.lastDonationDate < :cutoff")
+    long countEligibleBefore(@Param("cutoff") LocalDate cutoff);
+
+    /** Donors per profile blood group; a null group is donors not yet typed. */
+    @Query("select d.bloodType as bloodType, count(d) as total from Donor d group by d.bloodType")
+    List<BloodTypeCount> countByBloodType();
+
     /**
      * Everyone a donation appeal for one blood group goes to.
      *

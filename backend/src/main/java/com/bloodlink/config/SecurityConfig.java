@@ -210,6 +210,11 @@ public class SecurityConfig {
         config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
+        // The browser hides every response header but a handful from a page on another
+        // origin unless it is listed here. Content-Disposition carries a Reports CSV's
+        // file name (Business Rule 23); without this the download falls back to a
+        // generic name. Exposing it lets the page read a file name, nothing more.
+        config.setExposedHeaders(List.of("Content-Disposition"));
         config.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

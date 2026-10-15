@@ -93,7 +93,7 @@ public class DonorRosterService {
         // ELIGIBILITY_WINDOW_DAYS) to produce a date to filter by; the
         // response's own eligibility fields never come from this comparison —
         // see DonorRepository.ROSTER_FILTER's note.
-        LocalDate eligibilityCutoff = LocalDate.now().minusDays(Donor.ELIGIBILITY_WINDOW_DAYS);
+        LocalDate eligibilityCutoff = Donor.eligibilityCutoff(LocalDate.now());
 
         PageRequest pageable = PageRequest.of(page, size);
         Page<Donor> donorPage = "name".equals(sort)

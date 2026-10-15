@@ -691,9 +691,9 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       none of those three fields is needed to decide anything on this screen.
     - **Eligibility is never recalculated for this feature.** Both the response field and the
       `eligibility` filter are built from `Donor.getEligibilityStatus()`/`eligibleFrom()`
-      (Business Rule 2) — the filter borrows `Donor.ELIGIBILITY_WINDOW_DAYS` to compute a cutoff
-      *date* to compare against in the database (needed so pagination can filter before cutting
-      the page), but the 90-day rule itself is evaluated in exactly the one place it always was.
+      (Business Rule 2) — the filter takes its cutoff *date* from `Donor.eligibilityCutoff(today)`
+      (the same method `getEligibilityStatus()` uses, shared with Business Rule 23's report) to
+      compare against in the database, needed so pagination can filter before cutting the page.
     - **`BLOOD_BANK_STAFF` only, via `ActingBankResolver`** — bank staff act as their own bank
       and an ADMIN must name one (`bloodBankId`); a donor, hospital staff or unauthenticated
       caller is refused (403/403/401), the same pattern every other bank-scoped endpoint uses.
@@ -736,6 +736,67 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       entries (Business Rules 14 and 17) behave exactly as before. No migration and no index were
       added: a "contains" search (`%text%`) cannot use an ordinary index anyway, and the table is
       small. Revisit (e.g. a trigram index) only if the account list grows into the tens of thousands.
+23. **The Admin Console's Reports page is a read-only, citywide summary for ADMIN only — aggregates
+    only, never a donor's personal details — and every figure on it is counted by the database.**
+    Distinct from the Audit Log (Business Rule 17), which records what administrators did; Reports
+    describes the state of the system. Four sections, each with its own "Download CSV".
+    - **Endpoints** (`AdminReportController`, `ReportSummaryService`, package `com.bloodlink.admin.report`),
+      all GET, all under SecurityConfig's `/api/admin/**` rule (any other role 403, no token 401):
+      `GET /api/admin/reports/summary/stock`, `/summary/requests?from&to`, `/summary/donations?from&to`,
+      `/summary/donors`, and each of the four with `/export` appended for its CSV. The three older
+      Dashboard routes (`/api/admin/reports/donations`, `/requests`, `/users`) are unchanged.
+    - **Counted by the database, never by loading rows** — every figure is a COUNT / SUM / GROUP BY
+      query; Java only fills in the zero rows an aggregate leaves out (a group, status, urgency, month
+      or bank with nothing in it) so every table always lists every row.
+    - **Existing rules reused, never copied.** Stock status is `StockStatus.fromUnits` and its
+      thresholds, now public constants (`CRITICAL_BELOW` 15, `LOW_BELOW` 40) passed into the per-bank
+      query (Business Rule 3). Expiring soon is `InventoryService.EXPIRING_SOON_WINDOW_DAYS` (28) with
+      the Inventory screen's own "on or before" test. Eligibility is `Donor.eligibilityCutoff(today)` —
+      now the one place the 90-day cutoff date is computed, used by `Donor.getEligibilityStatus()`, the
+      Donors roster (Business Rule 21) and this report alike (Business Rule 2); `ReportsIT` proves the
+      database's eligible count equals `isEligibleToDonate()` applied donor by donor.
+    - **Stock matches existing behaviour:** units past their expiry date are counted as stock, as the
+      Inventory screen's totals (`InventoryService.getSummary`) already count them, and are shown separately as "already
+      past expiry" inside the expiring-soon figure. A bank's Critical count includes the groups it
+      has no stock row for at all (zero units), exactly as its own Inventory screen shows them. The
+      status wording is the app's own — Critical / Low / Sufficient.
+    - **Requests:** counted by `created_at` within the range. Fulfilment rate = FULFILLED ÷ (FULFILLED +
+      REJECTED); PENDING and PARTIALLY_FULFILLED are still open and excluded. With nothing decided the
+      rate is null and the page and CSV say **"No data"** — never 0% or NaN. "Filled by more than one
+      bank" counts requests whose contribution rows (Business Rule 20's source of truth) name two or
+      more distinct banks, whatever their status now.
+    - **Donations:** counted by `donation_date` within the range — per calendar month (every month in
+      the range, zero-filled), per blood bank (every bank) and per tested blood group (Business Rule 4).
+    - **Donors:** total `Donor` rows, eligible now, in 90-day recovery (total − eligible), and per
+      profile blood group plus "Unknown" for donors not yet typed. Note the total counts donor
+      *profiles*, so it can differ from the number of DONOR *accounts* if an account has no profile.
+    - **Date range:** `from` / `to`, ISO dates, both inclusive, in UTC (Sierra Leone's own time).
+      Default: the 1st of the month five months back until today — the Dashboard chart's six months.
+      **A 400 naming the field, never corrected:** a malformed date (that field), `from` after `to`
+      (`from`), longer than five years (`to`). Stock and Donors are "as of today" and take no range.
+    - **No personal donor data, anywhere.** The response records (`ReportDtos`) have no field that
+      could hold a name, phone, email, address or date of birth — `ReportSummaryServiceTest` scans
+      them — and `ReportsIT` checks a seeded donor's details appear in no section and no CSV.
+    - **CSV, built on the server** from the same objects the page shows (`ReportCsv`): UTF-8 with a
+      byte-order mark (so Excel reads it as UTF-8), CRLF rows, every text cell quoted with inner quotes
+      doubled, numbers bare. **Formula injection defused:** a text cell starting with `=`, `+`, `-`,
+      `@`, tab or carriage return is prefixed with an apostrophe so a spreadsheet shows it as text —
+      facility names are typed by administrators. Named `bloodlink-report-<section>-<from>-to-<to>.csv`
+      (or `-<date>.csv` for Stock and Donors), served as an attachment. SecurityConfig's CORS now
+      exposes `Content-Disposition` so the page can read that file name from another origin.
+    - **Exports are not audit-logged.** Recording "administrator exported report X" would need a new
+      action in `audit_log_action_check` and a target-less case in `audit_log_target_matches_action`
+      (both V12/V14 constraints) — a migration, so it was skipped as out of scope. Revisit with the
+      owner if exports need to be traceable.
+    - **No migration and no index added.** The aggregates scan small tables; the donations index V1
+      already has (and V17 kept) is unchanged.
+    - **Frontend** (`frontend/src/pages/AdminReports.jsx`, logic in `lib/reports.js`): opened from the
+      Reports sidebar link (previously inert). Each section loads on its own with its own loading,
+      empty ("No data for this period") and error-with-Try-again state. The range is applied with an
+      Apply button and refetches only Requests and Donations; it is checked in the browser with the
+      server's own three rules first, which saves a request but is not the control. Plain CSS bars and
+      tables — no chart library or other dependency. The CSV is fetched with the token
+      (`api/client.js` `apiDownload`) and saved as a file.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -760,7 +821,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends, request outcomes)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -791,7 +852,8 @@ listed so nothing is forgotten when the chapters are next revised.
   - **`bloodlink_test` is a third, deliberate exception to "prefer a fresh throwaway database" above** —
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
-    `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`), every one of which is `@Transactional` and rolls back everything it writes,
+    `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
+    `AdminUserSearchIT`, `ReportsIT`), every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,

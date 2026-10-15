@@ -87,9 +87,24 @@ public class Donor {
         if (lastDonationDate == null) {
             return EligibilityStatus.ELIGIBLE;
         }
-        return lastDonationDate.isBefore(LocalDate.now().minusDays(ELIGIBILITY_WINDOW_DAYS))
+        return lastDonationDate.isBefore(eligibilityCutoff(LocalDate.now()))
             ? EligibilityStatus.ELIGIBLE
             : EligibilityStatus.INELIGIBLE;
+    }
+
+    /**
+     * The date a last donation must be strictly before for the donor to be eligible
+     * today: {@code today - 90 days}. The one place that date is worked out.
+     *
+     * {@link #getEligibilityStatus()} uses it, and so do the two database queries that
+     * have to count or filter by eligibility rather than load every donor (the Donors
+     * roster, Business Rule 21, and the Admin Reports page, Business Rule 23). Those
+     * queries compare {@code last_donation_date is null or last_donation_date < cutoff},
+     * which is this method's caller's own test written in SQL — and ReportsIT proves the
+     * database count equals counting {@link #isEligibleToDonate()} donor by donor.
+     */
+    public static LocalDate eligibilityCutoff(LocalDate today) {
+        return today.minusDays(ELIGIBILITY_WINDOW_DAYS);
     }
 
     /** Reads as a sentence at the call sites that gate on this, and keeps the

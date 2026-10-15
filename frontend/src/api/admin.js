@@ -7,7 +7,7 @@
    would need to — an administrator's view is never "my own facility").
    ================================================================ */
 
-import { apiRequest } from './client.js';
+import { apiDownload, apiRequest } from './client.js';
 
 /**
  * GET /api/admin/users — one page of accounts, searched, filtered and sorted by the
@@ -120,4 +120,46 @@ export function getDonationTrends() {
  *  their total, for the donut chart. */
 export function getRequestOutcomes() {
   return apiRequest('/api/admin/reports/requests');
+}
+
+/* ---------- the Reports page (Business Rule 23) ----------
+   Four read-only sections, each counted by the database and each with a CSV twin
+   at the same path plus /export. `range` is { from, to } as yyyy-MM-dd strings;
+   Stock and Donors are "as of today" and take none. A bad, backwards or over-five-
+   year range is a 400 naming the field. Nothing returned identifies a donor. */
+
+/** Builds "?from=…&to=…" for the two date-ranged sections. */
+function rangeQuery({ from, to }) {
+  return `?${new URLSearchParams({ from, to }).toString()}`;
+}
+
+/** GET /api/admin/reports/summary/stock — units per group and per bank, today. */
+export function getStockReport() {
+  return apiRequest('/api/admin/reports/summary/stock');
+}
+
+/** GET /api/admin/reports/summary/requests — requests raised within the range. */
+export function getRequestReport(range) {
+  return apiRequest(`/api/admin/reports/summary/requests${rangeQuery(range)}`);
+}
+
+/** GET /api/admin/reports/summary/donations — donations recorded within the range. */
+export function getDonationReport(range) {
+  return apiRequest(`/api/admin/reports/summary/donations${rangeQuery(range)}`);
+}
+
+/** GET /api/admin/reports/summary/donors — donor totals and eligibility, today. */
+export function getDonorReport() {
+  return apiRequest('/api/admin/reports/summary/donors');
+}
+
+/**
+ * GET /api/admin/reports/summary/{section}/export — that section's CSV, built on
+ * the server. `section` is "stock", "requests", "donations" or "donors"; `range`
+ * is needed by the two dated sections and ignored otherwise. Resolves to
+ * { blob, fileName }.
+ */
+export function downloadReportCsv(section, range) {
+  const query = section === 'requests' || section === 'donations' ? rangeQuery(range) : '';
+  return apiDownload(`/api/admin/reports/summary/${section}/export${query}`);
 }

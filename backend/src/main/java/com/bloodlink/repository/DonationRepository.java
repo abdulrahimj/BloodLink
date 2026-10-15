@@ -88,6 +88,45 @@ public interface DonationRepository extends JpaRepository<Donation, UUID> {
         """, nativeQuery = true)
     List<MonthlyDonationCount> countMonthlyFrom(@Param("start") LocalDate start);
 
+    // ---------- Admin Reports: donations in a date range (Business Rule 23) ----------
+    // donation_date is a plain DATE (no time, no zone), so a month is the same month
+    // everywhere — the UTC grouping the report asks for, with nothing to convert.
+
+    /** Donation count per calendar month between two dates, both inclusive. Months
+     *  with none are absent; the service fills them in as zero, as donationTrends does. */
+    @Query(value = """
+        select date_trunc('month', donation_date)::date as bucket, count(*) as total
+        from donations
+        where donation_date between :from and :to
+        group by bucket
+        order by bucket
+        """, nativeQuery = true)
+    List<MonthlyDonationCount> countMonthlyBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** Donation count per blood bank between two dates; every bank appears, at zero
+     *  if it recorded none (left join). Ordered by bank name. */
+    @Query("""
+        select b.name as label, count(d.id) as total
+        from BloodBank b left join Donation d on d.bloodBank = b and d.donationDate between :from and :to
+        group by b.id, b.name
+        order by b.name
+        """)
+    List<LabelCount> countPerBankBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** Donation count per tested blood group (Business Rule 4) between two dates. */
+    @Query("""
+        select d.bloodType as bloodType, count(d) as total from Donation d
+        where d.donationDate between :from and :to
+        group by d.bloodType
+        """)
+    List<BloodTypeCount> countPerBloodTypeBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** A named count — one bank's donations, from {@link #countPerBankBetween}. */
+    interface LabelCount {
+        String getLabel();
+        long getTotal();
+    }
+
     /** One calendar month's donation count, from {@link #countMonthlyFrom}. */
     interface MonthlyDonationCount {
         LocalDate getBucket();

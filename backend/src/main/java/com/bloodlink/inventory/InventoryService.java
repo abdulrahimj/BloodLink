@@ -45,8 +45,9 @@ import com.bloodlink.web.error.NotFoundException;
 @Service
 public class InventoryService {
 
-    /** Business Rule 3's "within 4 weeks" window for the Expiring Soon stat. */
-    private static final int EXPIRING_SOON_WINDOW_DAYS = 28;
+    /** Business Rule 3's "within 4 weeks" window for the Expiring Soon stat. Public so
+     *  the Admin Reports page (Business Rule 23) counts expiring stock the same way. */
+    public static final int EXPIRING_SOON_WINDOW_DAYS = 28;
 
     private final BloodBankRepository bloodBankRepository;
     private final BloodInventoryRepository bloodInventoryRepository;

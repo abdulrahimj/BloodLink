@@ -67,9 +67,51 @@ export async function apiRequest(path, { method = 'GET', body, auth = true } = {
   const text = await response.text();
   const payload = text ? safeParse(text) : null;
 
-  // Read after the body, because the body is what says which kind of 401 this is.
+  throwIfFailed(response, payload, Boolean(auth && token));
+  return payload;
+}
+
+/**
+ * Downloads a file the API builds — today, a Reports CSV (Business Rule 23) — and
+ * resolves to { blob, fileName }.
+ *
+ * A plain link cannot do this: the browser would follow it without the bearer
+ * token, and every /api/admin route refuses a request without one. So the file is
+ * fetched like any other call, with the token, and handed back as a Blob for the
+ * caller to save. The file name is the server's, from Content-Disposition, so it
+ * names the section and dates exactly as the server built them. A failure is the
+ * same ApiError, with the same 401 handling, as apiRequest.
+ */
+export async function apiDownload(path) {
+  const token = getToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers });
+  } catch {
+    throw new ApiError('Could not reach the BloodLink server. Check your connection and try again.', 0);
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throwIfFailed(response, text ? safeParse(text) : null, Boolean(token));
+  }
+
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const fileName = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'bloodlink-report.csv';
+  return { blob: await response.blob(), fileName };
+}
+
+/**
+ * The failure handling every call shares: a 401 discards the session (unless it
+ * names a typed field — see apiRequest), and any non-2xx becomes an ApiError
+ * carrying the server's message and field errors. Read after the body, because the
+ * body is what says which kind of 401 this is.
+ */
+function throwIfFailed(response, payload, sentToken) {
   const rejectsTypedField = payload?.fieldErrors && Object.keys(payload.fieldErrors).length > 0;
-  if (response.status === 401 && auth && token && !rejectsTypedField) {
+  if (response.status === 401 && sentToken && !rejectsTypedField) {
     clearSession();
   }
 
@@ -80,8 +122,6 @@ export async function apiRequest(path, { method = 'GET', body, auth = true } = {
       payload?.fieldErrors,
     );
   }
-
-  return payload;
 }
 
 /** Tolerates a non-JSON error body (e.g. a proxy's HTML 502) instead of throwing. */

@@ -10,8 +10,10 @@ public enum StockStatus {
     LOW(1),
     CRITICAL(2);
 
-    private static final int CRITICAL_BELOW = 15;
-    private static final int LOW_BELOW = 40;
+    /** Public so an aggregate query (the Admin Reports page, Business Rule 23) can
+     *  classify stock in the database with these same two numbers rather than a copy. */
+    public static final int CRITICAL_BELOW = 15;
+    public static final int LOW_BELOW = 40;
 
     /**
      * How bad this level is, low to high. Declared explicitly rather than relying on

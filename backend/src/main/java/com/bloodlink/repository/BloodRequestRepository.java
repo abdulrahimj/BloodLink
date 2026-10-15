@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.enums.RequestStatus;
+import com.bloodlink.domain.enums.UrgencyLevel;
 
 import jakarta.persistence.LockModeType;
 
@@ -123,6 +124,49 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from BloodRequest r where r.id = :id")
     Optional<BloodRequest> findByIdForUpdate(@Param("id") UUID id);
+
+    // ---------- Admin Reports: requests in a date range (Business Rule 23) ----------
+    // "In the range" means raised (created_at) in [from, to), both UTC instants.
+
+    @Query("""
+        select r.status as status, count(r) as total from BloodRequest r
+        where r.createdAt >= :from and r.createdAt < :to
+        group by r.status
+        """)
+    List<StatusCount> countByStatusCreatedBetween(@Param("from") Instant from, @Param("to") Instant to);
+
+    @Query("""
+        select r.bloodType as bloodType, count(r) as total from BloodRequest r
+        where r.createdAt >= :from and r.createdAt < :to
+        group by r.bloodType
+        """)
+    List<BloodTypeCount> countByBloodTypeCreatedBetween(@Param("from") Instant from, @Param("to") Instant to);
+
+    @Query("""
+        select r.urgencyLevel as urgency, count(r) as total from BloodRequest r
+        where r.createdAt >= :from and r.createdAt < :to
+        group by r.urgencyLevel
+        """)
+    List<UrgencyCount> countByUrgencyCreatedBetween(@Param("from") Instant from, @Param("to") Instant to);
+
+    /** One urgency level's count, from {@link #countByUrgencyCreatedBetween}. */
+    interface UrgencyCount {
+        UrgencyLevel getUrgency();
+        long getTotal();
+    }
+
+    /**
+     * Requests raised in the range that received units from two or more different
+     * blood banks — Business Rule 20's cooperative filling, read from the contribution
+     * rows (the source of truth for who gave what), whatever the request's status now.
+     */
+    @Query("""
+        select count(r) from BloodRequest r
+        where r.createdAt >= :from and r.createdAt < :to
+          and (select count(distinct c.bloodBank.id) from BloodRequestContribution c
+               where c.bloodRequest = r) >= 2
+        """)
+    long countFilledByMoreThanOneBankCreatedBetween(@Param("from") Instant from, @Param("to") Instant to);
 
     // "Units Issued" used to be summed here, from units_requested on requests this
     // bank had fulfilled. It now lives on BloodRequestContributionRepository, where
