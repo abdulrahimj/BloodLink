@@ -66,6 +66,8 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
+> **In progress — batch-level stock redesign, Stage 1 of 6 done:** V18 added `blood_inventory_batches`, `contribution_allocations`, `batch_write_offs` and `audit_log.target_batch_id` / `STOCK_WRITTEN_OFF`, but nothing reads or writes them yet; the BloodInventory section and Business Rules below still describe how the app behaves today until the Stage 5 rewrite.
+
 ### User
 | field | type |
 |---|---|
