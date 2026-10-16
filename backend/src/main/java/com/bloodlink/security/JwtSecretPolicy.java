@@ -1,5 +1,6 @@
 package com.bloodlink.security;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Set;
 
@@ -20,7 +21,11 @@ import java.util.Set;
  *
  * <h2>The rule</h2>
  * <ul>
- *   <li><b>A real secret</b> (anything other than the placeholder) is accepted
+ *   <li><b>A missing or short secret</b>, meaning empty or fewer than
+ *       {@link #MIN_SECRET_BYTES} bytes, is refused under every profile, local ones
+ *       included. HMAC-SHA256 (HS256) needs a key of at least 256 bits; a shorter
+ *       one is guessable, and no profile makes a guessable key acceptable.</li>
+ *   <li><b>A real secret</b> (long enough, and not the placeholder) is accepted
  *       under every profile, silently.</li>
  *   <li><b>The placeholder under a local-only profile</b> is accepted, with a loud
  *       warning — see {@link #LOCAL_ONLY_PROFILES}.</li>
@@ -45,6 +50,21 @@ final class JwtSecretPolicy {
      * and fails the build if they ever drift apart.
      */
     static final String PUBLIC_PLACEHOLDER = "local-dev-only-change-me-0123456789abcdef";
+
+    /**
+     * The shortest secret accepted: 32 bytes, the 256 bits HMAC-SHA256 requires of
+     * its key (RFC 7518, section 3.2). Measured in UTF-8 bytes, not characters,
+     * because bytes are what {@code JwtService}'s constructor turns into the key.
+     *
+     * The JWT library refuses a shorter key too, but only as a bare
+     * {@code WeakKeyException} inside a bean-creation stack trace. Checking here first
+     * turns the same refusal into Spring Boot's plain "APPLICATION FAILED TO START"
+     * report, naming the length found and the variable that fixes it.
+     *
+     * The placeholder is 41 bytes, so local development is unaffected. A secret made
+     * the way the README describes (48 random bytes in Base64) is 64.
+     */
+    static final int MIN_SECRET_BYTES = 32;
 
     /**
      * Profiles that never leave a developer's own machine, and so may run on the
@@ -79,20 +99,37 @@ final class JwtSecretPolicy {
     }
 
     /**
-     * Applies the rule above.
+     * Applies the rule above, in this order: missing, too short, then placeholder.
      *
      * Compared after stripping surrounding whitespace, so a stray space or newline
-     * picked up from an environment file cannot turn the known placeholder into a
-     * "different" secret that slips past this check.
+     * picked up from an environment file can neither turn the known placeholder into
+     * a "different" secret that slips past this check, nor pad a short secret past
+     * the length minimum.
+     *
+     * Nothing thrown here ever contains the secret itself, only its length, so a
+     * refused start cannot leak the value into a log.
      *
      * @param secret         the resolved value of bloodlink.jwt.secret
      * @param activeProfiles Spring's active profiles; empty means the default profile
      * @return whether to start silently or with a warning
-     * @throws InsecureJwtSecretException if the placeholder is in use under any
-     *         profile not listed in {@link #LOCAL_ONLY_PROFILES}
+     * @throws InsecureJwtSecretException if the secret is missing or shorter than
+     *         {@link #MIN_SECRET_BYTES} under any profile, or is the placeholder
+     *         under any profile not listed in {@link #LOCAL_ONLY_PROFILES}
      */
     static Verdict evaluate(String secret, String[] activeProfiles) {
-        if (secret == null || !PUBLIC_PLACEHOLDER.equals(secret.strip())) {
+        String stripped = secret == null ? "" : secret.strip();
+
+        // Checked under every profile, before the placeholder rule: a short key is
+        // weak wherever it runs, so a local profile does not excuse it.
+        if (stripped.isEmpty()) {
+            throw InsecureJwtSecretException.missing(activeProfiles);
+        }
+        int bytes = stripped.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes < MIN_SECRET_BYTES) {
+            throw InsecureJwtSecretException.tooShort(bytes, activeProfiles);
+        }
+
+        if (!PUBLIC_PLACEHOLDER.equals(stripped)) {
             return Verdict.ACCEPTED;
         }
 
@@ -100,7 +137,7 @@ final class JwtSecretPolicy {
         // is a production start that happens to carry a demo profile too.
         boolean allLocalOnly = Arrays.stream(activeProfiles).allMatch(LOCAL_ONLY_PROFILES::contains);
         if (!allLocalOnly) {
-            throw new InsecureJwtSecretException(activeProfiles);
+            throw InsecureJwtSecretException.publicPlaceholder(activeProfiles);
         }
         return Verdict.ACCEPTED_WITH_WARNING;
     }

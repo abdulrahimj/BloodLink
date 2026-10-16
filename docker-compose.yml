@@ -1,3 +1,13 @@
+# ===========================================================================
+#  DEMO ONLY. This file is not a production deployment.
+#  It always runs the "demo" Spring profile against a container-only database
+#  of fictional data, with the publicly known database password "root" below.
+#  A real deployment runs the backend jar with its own database, a non-demo
+#  profile and a real BLOODLINK_JWT_SECRET (see README, "Setting a real JWT
+#  secret"); under any profile but default/demo the backend refuses to start
+#  without one.
+# ===========================================================================
+#
 # One-command startup for the whole BloodLink system: PostgreSQL, the Spring
 # Boot backend, and the React frontend, wired together on one Docker network.
 #
@@ -50,6 +60,8 @@ services:
       db:
         condition: service_healthy
     environment:
+      # Demo only, deliberately fixed: the placeholder JWT secret is tolerated
+      # under this profile, and under no non-demo one.
       SPRING_PROFILES_ACTIVE: demo
       # Overrides application-demo.properties's localhost default to reach
       # Postgres by its Docker network hostname instead.
@@ -66,7 +78,9 @@ services:
       # of starting the backend with no secret (which would fail far less clearly).
       # If .env still holds the public placeholder from .env.example, the backend
       # starts, because this is the "demo" profile, but prints a large warning
-      # (Business Rule 15). Under any other profile that placeholder is refused.
+      # (Business Rule 15). Under any other profile that placeholder is refused,
+      # and a secret under 32 bytes is refused under every profile.
+      # A BLOODLINK_JWT_SECRET set in the shell outranks the one in .env.
       BLOODLINK_JWT_SECRET: "${BLOODLINK_JWT_SECRET:?BLOODLINK_JWT_SECRET is not set - copy .env.example to .env first, then see the notes inside it}"
     ports:
       - "8080:8080"

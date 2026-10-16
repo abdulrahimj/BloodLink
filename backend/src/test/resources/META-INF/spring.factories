@@ -1,0 +1,6 @@
+# Test classpath only: never packaged into the jar. Spring Boot merges this with the
+# main src/main/resources/META-INF/spring.factories rather than replacing it.
+# IntegrationDatabaseGuard refuses a "test" profile start pointed at any database but the
+# integration tests' own, so bloodlink_dev can never be reached by a test run.
+org.springframework.boot.EnvironmentPostProcessor=\
+com.bloodlink.integration.IntegrationDatabaseGuard

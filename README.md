@@ -62,9 +62,11 @@ cd backend
 cp src/main/resources/application.properties.example src/main/resources/application.properties
 ```
 
-Open the new `application.properties` and replace `DB_USERNAME` and `DB_PASSWORD` with your own local PostgreSQL credentials. This file is git-ignored, so your credentials stay on your machine.
+Open the new `application.properties` and replace `DB_USERNAME` and `DB_PASSWORD` with your own local PostgreSQL credentials. This file is git-ignored, so your credentials stay on your machine. (Alternatively, leave the file as copied and set `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD` in the terminal you start the backend from.)
 
-The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, set the `BLOODLINK_JWT_SECRET` environment variable. The backend deliberately refuses to start on the placeholder under any profile other than the default and `demo`, so a real deployment cannot run on it by accident.
+The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, which you should, see [Setting a real JWT secret](#setting-a-real-jwt-secret) below. The backend deliberately refuses to start on the placeholder under any profile other than the default and `demo`, and refuses a secret shorter than 32 bytes under every profile, so a real deployment cannot run on a weak secret by accident.
+
+Every environment variable the backend reads, with its default, is listed in [`backend/.env.example`](backend/.env.example); the frontend's are in [`frontend/.env.example`](frontend/.env.example). Spring Boot does not read a `.env` file itself: set the variables in your terminal.
 
 ### 4. Start the backend
 
@@ -103,7 +105,57 @@ cd ../frontend
 npm test                               # frontend tests
 ```
 
-The integration tests use their own `bloodlink_test` database and roll back everything they write, so they are safe to re-run. They never touch `bloodlink_dev`.
+The integration tests use their own `bloodlink_test` database and roll back everything they write, so they are safe to re-run. They never touch `bloodlink_dev`. Tests must only ever use `bloodlink_test`: if a `SPRING_DATASOURCE_URL` is set in your terminal it would override that, so the tests refuse to start until you remove it (`Remove-Item Env:SPRING_DATASOURCE_URL`). For the same reason, set `SPRING_DATASOURCE_*` per terminal, never permanently.
+
+## Setting a real JWT secret
+
+The backend signs every login token with a secret, read from the `BLOODLINK_JWT_SECRET` environment variable. Anyone who knows it can forge a login for any account, administrators included, so it must be long, random and private.
+
+> **Never commit the secret,** or paste it into any file in this repository, chat or issue. `.env` files are git-ignored for this reason; `.env.example` files hold placeholders only.
+>
+> **Changing the secret signs every user out.** Every token signed with the old secret stops working at once, so everyone has to sign in again. That is also how to cut off a secret you think has leaked: generate a new one and restart the backend.
+
+It must be at least 32 bytes (256 bits, what the HS256 signing algorithm requires); the backend refuses to start on anything shorter, under every profile. 48 random bytes in Base64 (64 characters) is recommended.
+
+### Windows (PowerShell)
+
+Generate a secret and set it for **this terminal only**. The value is never shown on screen:
+
+```powershell
+$bytes = New-Object byte[] 48
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:BLOODLINK_JWT_SECRET = [Convert]::ToBase64String($bytes)
+```
+
+To keep it **permanently** for your Windows user, run this straight after the lines above. It applies to terminals (and IntelliJ) opened afterwards, not to ones already open:
+
+```powershell
+[Environment]::SetEnvironmentVariable('BLOODLINK_JWT_SECRET', $env:BLOODLINK_JWT_SECRET, 'User')
+```
+
+Check that it is set, without printing it:
+
+```powershell
+"BLOODLINK_JWT_SECRET is $($env:BLOODLINK_JWT_SECRET.Length) characters long"   # expect 64
+```
+
+Then start the backend as usual (`.\mvnw.cmd spring-boot:run`); the "INSECURE JWT SECRET" warning no longer appears. To remove a permanent secret: `[Environment]::SetEnvironmentVariable('BLOODLINK_JWT_SECRET', $null, 'User')`.
+
+### macOS / Linux
+
+```bash
+export BLOODLINK_JWT_SECRET="$(openssl rand -base64 48)"
+```
+
+(add that line to your shell profile to keep it).
+
+### Docker demo
+
+Docker Compose takes the secret from `.env` (copied from `.env.example`) unless `BLOODLINK_JWT_SECRET` is already set in your environment, which wins. If you set one permanently as above, Compose uses it automatically; otherwise replace the placeholder in your `.env` copy with a value generated as above.
+
+### A real deployment
+
+Run the backend jar with a non-demo profile (for example `SPRING_PROFILES_ACTIVE=prod`), its own database through `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`, `BLOODLINK_ALLOWED_ORIGINS` set to the frontend's address, and its own `BLOODLINK_JWT_SECRET`. Generate a separate secret for each environment; do not reuse your development one. `docker-compose.yml` is for the demo only.
 
 ## Demo mode
 

@@ -4,8 +4,12 @@ spring.application.name=bloodlink
 server.port=${SERVER_PORT:8080}
 
 # --- Datasource (PostgreSQL) ---
-# Replace DB_USERNAME / DB_PASSWORD below with your real local PostgreSQL credentials.
+# Replace DB_USERNAME / DB_PASSWORD below with your real local PostgreSQL credentials
+# (this copy is gitignored; the .example template must keep the placeholders).
+# Alternatively leave them, and set SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD
+# (and SPRING_DATASOURCE_URL) in the terminal: environment variables outrank this file.
 # Create the database first:  CREATE DATABASE bloodlink_dev;
+# bloodlink_dev is for running the app. Tests use bloodlink_test only, never this database.
 spring.datasource.url=jdbc:postgresql://localhost:5432/bloodlink_dev
 spring.datasource.username=DB_USERNAME
 spring.datasource.password=DB_PASSWORD
@@ -23,7 +27,8 @@ spring.jpa.properties.hibernate.jdbc.time_zone=UTC
 
 # --- Authentication (stateless JWT) ---
 # The signing secret. HMAC-SHA256 needs at least 256 bits, so this must be 32+
-# characters or the application fails fast at startup.
+# bytes or the application refuses to start, under every profile (JwtSecretPolicy).
+# The README's "Setting a real JWT secret" section shows how to generate and set one.
 # The default below is a PUBLIC PLACEHOLDER for local development only — set
 # BLOODLINK_JWT_SECRET in the environment for any deployed instance and never commit
 # the real value. Business Rule 15: the application refuses to start on this

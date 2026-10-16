@@ -130,6 +130,52 @@ class JwtSecretStartupTest {
             .satisfies(failure -> assertThat(rootCause(failure)).isInstanceOf(InsecureJwtSecretException.class));
     }
 
+    // ---------- refused everywhere: a missing or short secret ----------
+
+    @Test
+    void aSecretShorterThan32BytesIsRefusedEvenUnderTheDefaultProfile(CapturedOutput output) {
+        // The length rule has no local exemption. Proven under the default profile,
+        // the one `mvnw spring-boot:run` uses, since that is where a short secret
+        // typed in by hand is most likely to turn up.
+        String shortSecret = "only-31-bytes-long-not-enough!!";
+
+        assertThatThrownBy(() -> start(shortSecret, null))
+            .satisfies(failure -> assertThat(rootCause(failure))
+                .isInstanceOf(InsecureJwtSecretException.class)
+                .hasMessageContaining("31 bytes long"));
+
+        String log = output.getOut() + output.getErr();
+        assertThat(log)
+            .contains("APPLICATION FAILED TO START")
+            .contains("is 31 bytes long")
+            .contains("needs at least 32 bytes (256 bits)")
+            .contains("Set the BLOODLINK_JWT_SECRET environment variable")
+            .contains("RandomNumberGenerator");
+        // The report names the length, never the value.
+        assertThat(log).doesNotContain(shortSecret);
+    }
+
+    @Test
+    void anEmptySecretIsRefusedUnderTheDemoProfile(CapturedOutput output) {
+        // BLOODLINK_JWT_SECRET= (set, but to nothing) overrides the placeholder default
+        // with "", so even a local profile has no key to sign with.
+        assertThatThrownBy(() -> start("", "demo"))
+            .satisfies(failure -> assertThat(rootCause(failure))
+                .isInstanceOf(InsecureJwtSecretException.class)
+                .hasMessageContaining("empty"));
+
+        assertThat(output.getOut() + output.getErr())
+            .contains("APPLICATION FAILED TO START")
+            .contains("is empty");
+    }
+
+    @Test
+    void exactly32BytesStartsUnderProd() {
+        try (ConfigurableApplicationContext context = start("k".repeat(32), "prod")) {
+            assertThat(context.getBean(JwtService.class)).isNotNull();
+        }
+    }
+
     // ---------- tolerated: the placeholder on a local-only profile, loudly ----------
 
     @Test

@@ -96,11 +96,17 @@ public class JwtService {
      * placeholder on a real deployment: if this constructor refuses, there is no
      * JwtService, so there is no application.
      *
-     * Two things can stop the start here, in this order:
-     *   1. The placeholder under a profile that is not local-only —
-     *      InsecureJwtSecretException, presented by InsecureJwtSecretFailureAnalyzer.
-     *   2. A secret shorter than HMAC-SHA256's 256-bit minimum — Keys.hmacShaKeyFor
-     *      throws rather than silently weakening every token we sign.
+     * JwtSecretPolicy stops the start, with InsecureJwtSecretException presented by
+     * InsecureJwtSecretFailureAnalyzer, when the secret is:
+     *   1. empty, or shorter than HMAC-SHA256's 256-bit (32-byte) minimum, under any
+     *      profile; or
+     *   2. the public placeholder under a profile that is not local-only.
+     * Keys.hmacShaKeyFor would also refuse a short key, but only with a stack trace;
+     * the policy checks first so the refusal reads as a plain explanation.
+     *
+     * The key is the secret's UTF-8 bytes, used as they are: a Base64 secret is not
+     * decoded first. Changing that would change the key for an unchanged secret and
+     * sign every user out, for no gain (64 Base64 characters are 64 key bytes).
      */
     JwtService(
         @Value("${bloodlink.jwt.secret}") String secret,

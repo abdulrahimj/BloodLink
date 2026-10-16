@@ -468,6 +468,25 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       committed `application.properties.example`, and `.dockerignore` keeps a developer's local
       `application.properties` out of the build — it holds their credentials, and a fresh clone does
       not have one, which previously made the image fail at startup on every machine but its author's.
+      docker-compose is **demo only** (its header says so): it always runs the `demo` profile, and a
+      `BLOODLINK_JWT_SECRET` already set in the shell outranks the one in `.env`.
+    - **A missing or short secret is refused under every profile, local ones included** — an empty
+      value, or fewer than `JwtSecretPolicy.MIN_SECRET_BYTES` (32) UTF-8 bytes after trimming, the 256
+      bits HS256 needs. Checked before the placeholder rule, with its own `InsecureJwtSecretException.Reason`
+      (`MISSING`, `TOO_SHORT`, `PUBLIC_PLACEHOLDER`) and its own failure-analyzer report naming the length
+      found — never the value. The JWT library already refused a short key, but only as a bare
+      `WeakKeyException` stack trace; this makes it a plain explanation. The placeholder (41 bytes) and
+      the test profile's secret pass, so local development is unchanged (`JwtSecretPolicyTest` checks
+      both). The key is still the secret's raw UTF-8 bytes — a Base64 secret is not decoded — because
+      changing the derivation would change every key and sign every user out.
+    - **Setting a real secret** is documented in the README ("Setting a real JWT secret"): 48 random
+      bytes in Base64, generated in PowerShell without being shown, set for the session
+      (`$env:BLOODLINK_JWT_SECRET`) or permanently (`[Environment]::SetEnvironmentVariable(..., 'User')`).
+      Never committed; changing it invalidates every issued token. Every variable the code reads is
+      listed, with its default, in `backend/.env.example` (the backend, which does not itself read a
+      `.env` file), `frontend/.env.example` (Vite) and the root `.env.example` (docker-compose: the
+      secret only). The root `.gitignore` covers `.env`, `.env.*`, `*.env`, every
+      `application-*.properties` except `application-demo.properties`, and key/keystore files.
 16. **Every signed-in user manages their own name, email and password from Profile Settings — and a
     password change requires the current password.** One shared screen
     (`frontend/src/components/ProfileSettings.jsx`) for all four roles, opened from each portal's
@@ -861,7 +880,12 @@ listed so nothing is forgotten when the chapters are next revised.
     convention exists for. A test that genuinely cannot roll back belongs on a database of its own:
     `PartialFulfilmentRaceIT` (Business Rule 20) needs two real committed transactions to race, so it
     creates `bloodlink_race_test` before its Spring context starts and drops it afterwards, touching
-    nothing shared. That is the pattern for any future test in the same position. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
+    nothing shared. That is the pattern for any future test in the same position.
+    **Enforced, not just stated:** an environment variable outranks `application-test.properties`, so a
+    `SPRING_DATASOURCE_URL` left set in a terminal would silently redirect the tests. `IntegrationDatabaseGuard`
+    (test classpath only, registered in `src/test/resources/META-INF/spring.factories`) refuses any start
+    under the `test` profile whose database is not `bloodlink_test` or `bloodlink_race_test`, before a
+    connection is opened. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
     widened deliberately when `AdminAccountCreationIT` was added, since the guarantee comes from the
     rollback, not from there being a single class.)
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.
