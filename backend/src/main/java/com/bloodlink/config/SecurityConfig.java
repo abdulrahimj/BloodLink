@@ -117,10 +117,19 @@ public class SecurityConfig {
                 // readable by any signed-in role. Neither self-registers: the only
                 // write path for either is under /api/admin/** above (Business Rule 19).
                 .requestMatchers(HttpMethod.GET, "/api/hospitals/**").authenticated()
-                // Reading inventory is open to all signed-in staff (hospitals need a live
-                // view across banks); only bank staff may change it. Which bank a given
-                // BLOOD_BANK_STAFF member may write to is enforced in InventoryService,
-                // not here — a URL rule can't see whose bank the path id belongs to.
+                // Batch-level detail (each batch's expiry, source and history) is for
+                // blood bank staff and administrators only: hospitals see per-group
+                // totals, never batches (Business Rule 24). Matched before the general
+                // inventory read rule below, since Spring evaluates these in order.
+                // Which bank a BLOOD_BANK_STAFF member may read is checked in
+                // InventoryService, as it is for writes.
+                .requestMatchers(HttpMethod.GET, "/api/inventory/*/batches", "/api/inventory/*/batches/**")
+                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+                // Reading inventory totals is open to all signed-in staff (hospitals need
+                // a live view across banks); only bank staff may change it. Which bank a
+                // given BLOOD_BANK_STAFF member may write to is enforced in
+                // InventoryService, not here — a URL rule can't see whose bank the path
+                // id belongs to.
                 .requestMatchers(HttpMethod.GET, "/api/inventory/**").authenticated()
                 .requestMatchers("/api/inventory/**", "/api/appeals/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())

@@ -23,12 +23,11 @@ import com.bloodlink.web.error.ConflictException;
  * which is a separate decision for later; nothing here touches an existing row.
  *
  * <h2>What a new blood bank does not need</h2>
- * No BloodInventory rows are written. InventoryService.listInventory already
- * reports all eight blood groups for every bank, filling any group with no row as
- * zero units (and so Critical, Business Rule 3); the first "Add New Batch" or
- * recorded donation creates the real row. Seeding eight zero rows here would be a
- * second way of saying the same thing, and would need an expiry date that does not
- * exist for stock that does not exist.
+ * No stock batches are written. InventoryService.listInventory already reports all
+ * eight blood groups for every bank, filling any group with no batch as zero units
+ * (and so Critical, Business Rule 3); the first "Add New Batch" or recorded donation
+ * creates the first real batch. A batch of zero units cannot exist anyway (V18), and
+ * would need an expiry date that does not exist for stock that does not exist.
  *
  * Every creation is recorded in the audit log in the same transaction
  * (Business Rule 17's pattern), naming the administrator who did it.

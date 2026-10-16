@@ -7,11 +7,13 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,18 +29,27 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import com.bloodlink.domain.BatchWriteOff;
 import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
+import com.bloodlink.domain.enums.WriteOffReason;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.AddBatchRequest;
+import com.bloodlink.repository.BatchWriteOffRepository;
 import com.bloodlink.repository.BloodBankRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.BloodRequestRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.RequestService;
@@ -91,6 +102,10 @@ class PartialFulfilmentRaceIT {
     @Autowired private HospitalRepository hospitalRepository;
     @Autowired private BloodRequestRepository bloodRequestRepository;
     @Autowired private BloodRequestContributionRepository contributionRepository;
+    @Autowired private BloodInventoryBatchRepository batchRepository;
+    @Autowired private ContributionAllocationRepository allocationRepository;
+    @Autowired private BatchWriteOffRepository writeOffRepository;
+    @Autowired private PlatformTransactionManager transactionManager;
 
     // ---------- the throwaway database ----------
 
@@ -275,6 +290,208 @@ class PartialFulfilmentRaceIT {
             .findFirst()
             .orElseThrow()
             .unitsAvailable();
+    }
+
+    // ---------- batch-level stock: the FEFO lock under contention (Business Rule 24) ----------
+
+    /**
+     * One bank, two different requests, stock split over two batches (3 + 3), both
+     * contributions of 4 at the same instant. The request locks do not serialise them
+     * (they are different requests); the batch locks must. Exactly one succeeds,
+     * taking the earlier batch whole and 1 unit of the later one; the other is
+     * refused, having waited and re-read the 2 units that are genuinely left.
+     */
+    @Test
+    void oneBankTwoRequestsStockInTwoBatchesExactlyOneContributionSucceeds() throws Exception {
+        String group = "B-";
+        Shelf shelf = new Shelf(group);
+        UUID earlier = shelf.addBatch(3, 5);
+        UUID later = shelf.addBatch(3, 30);
+        UUID first = shelf.raiseRequest(4);
+        UUID second = shelf.raiseRequest(4);
+
+        List<Outcome> outcomes = raceOnShelf(shelf, List.of(first, second), 4);
+
+        assertThat(outcomes).filteredOn(Outcome::succeeded).hasSize(1);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).singleElement()
+            .satisfies(o -> assertThat(o.failure()).contains("2 units available", "4 being contributed"));
+        assertThat(remaining(earlier)).isZero();
+        assertThat(remaining(later)).isEqualTo(2);
+        // The winner's units are traced to both batches, earliest first: 3 + 1.
+        assertThat(allocationRepository.findForBatch(earlier)).extracting(a -> a.getUnitsAllocated()).containsExactly(3);
+        assertThat(allocationRepository.findForBatch(later)).extracting(a -> a.getUnitsAllocated()).containsExactly(1);
+        assertThat(contributionRepository.sumUnitsForRequest(first) + contributionRepository.sumUnitsForRequest(second))
+            .isEqualTo(4);
+        assertLedgersBalance();
+    }
+
+    /**
+     * Eight threads, eight requests of 1 unit each, 5 units over three batches (2, 2, 1).
+     * Exactly 5 succeed and 3 are refused, the shelf ends at exactly 0, and every
+     * thread finishes within the timeout: the batches are always locked in the same
+     * order (earliest expiry, then id), so no two transactions can each hold a batch
+     * the other is waiting for. PostgreSQL would abort one with "deadlock detected"
+     * if they could; none is.
+     */
+    @Test
+    void eightThreadsTakingOneUnitEachFromFiveUnitsOverThreeBatchesExactlyFiveSucceedAndNoneDeadlocks() throws Exception {
+        String group = "A+";
+        Shelf shelf = new Shelf(group);
+        List<UUID> batches = List.of(shelf.addBatch(2, 3), shelf.addBatch(2, 10), shelf.addBatch(1, 20));
+        List<UUID> requests = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            requests.add(shelf.raiseRequest(1));
+        }
+
+        long started = System.nanoTime();
+        List<Outcome> outcomes = raceOnShelf(shelf, requests, 1);
+        long tookMillis = (System.nanoTime() - started) / 1_000_000;
+
+        assertThat(outcomes).hasSize(8);
+        assertThat(outcomes).filteredOn(Outcome::succeeded).hasSize(5);
+        assertThat(outcomes).filteredOn(o -> !o.succeeded()).hasSize(3)
+            .allSatisfy(o -> assertThat(o.failure()).contains("0 units available").doesNotContainIgnoringCase("deadlock"));
+        for (UUID batch : batches) {
+            assertThat(remaining(batch)).isZero();
+        }
+        int contributed = 0;
+        for (UUID request : requests) {
+            contributed += contributionRepository.sumUnitsForRequest(request);
+        }
+        assertThat(contributed).isEqualTo(5);
+        assertThat(tookMillis).as("all eight finished well within the 30 s timeout").isLessThan(30_000);
+        assertLedgersBalance();
+    }
+
+    /**
+     * A contribution arrives while another transaction holds the batch's lock (here,
+     * writing 3 of its 5 units off). It must wait, not fail and not deadlock, and then
+     * see the 2 units that are really left: asked for 4, it is refused. Had it used
+     * the 5 it would have read before the lock was released, 4 units would have left
+     * a shelf holding 2.
+     */
+    @Test
+    void aContributionRacingABatchLockWaitsForItAndSeesTheUnitsActuallyLeft() throws Exception {
+        String group = "O+";
+        Shelf shelf = new Shelf(group);
+        UUID batchId = shelf.addBatch(5, 15);
+        UUID request = shelf.raiseRequest(4);
+
+        CountDownLatch locked = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(1);
+        try {
+            Future<?> holder = threads.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                BloodInventoryBatch batch = batchRepository
+                    .lockUsableBatchesInIssueOrder(shelf.bank.getId(), BloodType.fromLabel(group), LocalDate.now(ZoneOffset.UTC))
+                    .get(0);
+                batch.deductUnits(3);
+                writeOffRepository.save(BatchWriteOff.record(batch, 3, WriteOffReason.DAMAGED, null, shelf.staff));
+                locked.countDown();
+                try {
+                    Thread.sleep(1_500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            Outcome outcome = contribute(shelf, request, 4);
+            long waitedMillis = (System.nanoTime() - started) / 1_000_000;
+            holder.get(30, TimeUnit.SECONDS);
+
+            assertThat(waitedMillis).as("waited for the lock rather than reading past it").isGreaterThanOrEqualTo(1_000);
+            assertThat(outcome.succeeded()).isFalse();
+            assertThat(outcome.failure()).contains("2 units available", "4 being contributed");
+        } finally {
+            threads.shutdownNow();
+        }
+        assertThat(remaining(batchId)).isEqualTo(2);
+        assertThat(contributionRepository.sumUnitsForRequest(request)).isZero();
+        assertLedgersBalance();
+    }
+
+    /** Every request contributed to at once, one thread each, released together. */
+    private List<Outcome> raceOnShelf(Shelf shelf, List<UUID> requestIds, int units) throws Exception {
+        CyclicBarrier startTogether = new CyclicBarrier(requestIds.size());
+        ExecutorService threads = Executors.newFixedThreadPool(requestIds.size());
+        try {
+            List<Future<Outcome>> futures = new ArrayList<>();
+            for (UUID requestId : requestIds) {
+                futures.add(threads.submit(() -> {
+                    startTogether.await(30, TimeUnit.SECONDS);
+                    return contribute(shelf, requestId, units);
+                }));
+            }
+            List<Outcome> outcomes = new ArrayList<>();
+            for (Future<Outcome> future : futures) {
+                outcomes.add(future.get(30, TimeUnit.SECONDS));
+            }
+            return outcomes;
+        } finally {
+            threads.shutdownNow();
+        }
+    }
+
+    private Outcome contribute(Shelf shelf, UUID requestId, int units) {
+        try {
+            requestService.act(requestId, new RequestActionPayload(RequestAction.CONTRIBUTE, null, units),
+                principalFor(shelf.staff, Role.BLOOD_BANK_STAFF));
+            return new Outcome(true, null);
+        } catch (RuntimeException refused) {
+            return new Outcome(false, String.valueOf(refused.getMessage()));
+        }
+    }
+
+    private int remaining(UUID batchId) {
+        return batchRepository.findById(batchId).orElseThrow().getUnitsRemaining();
+    }
+
+    /** Nothing anywhere breaks the stock identity or the allocation-sum rule. */
+    private void assertLedgersBalance() {
+        assertThat(batchRepository.findIdsBreakingStockIdentity()).isEmpty();
+        assertThat(allocationRepository.findContributionIdsWithMismatchedAllocations()).isEmpty();
+    }
+
+    /**
+     * A blood bank of its own, created and committed for one test, with one staff
+     * member, and requests raised against it by a hospital. Its own bank, so the
+     * figures each race test checks are exact even though this class never rolls back.
+     */
+    private final class Shelf {
+        private final BloodBank bank;
+        private final User staff;
+        private final User hospitalStaff;
+        private final String group;
+
+        private Shelf(String group) {
+            this.group = group;
+            BloodBank created = new BloodBank();
+            created.setName("Race Shelf " + UUID.randomUUID().toString().substring(0, 8));
+            created.setLocation("Makeni");
+            created.setContactPhone("076 000 000");
+            this.bank = bloodBankRepository.save(created);
+            this.staff = staff("Shelf Technician", Role.BLOOD_BANK_STAFF, bank, null);
+            Hospital hospital = hospitalRepository.findAllByOrderByNameAsc().get(0);
+            this.hospitalStaff = staff("Shelf Ward Clerk", Role.HOSPITAL_STAFF, null, hospital);
+        }
+
+        /** Adds one batch through the real Add New Batch path; returns its id. */
+        private UUID addBatch(int units, int daysToExpiry) {
+            LocalDate expiry = LocalDate.now(ZoneOffset.UTC).plusDays(daysToExpiry);
+            inventoryService.addBatch(bank.getId(), group, new AddBatchRequest(units, expiry),
+                principalFor(staff, Role.BLOOD_BANK_STAFF));
+            return batchRepository.findLiveForBankAndBloodType(bank.getId(), BloodType.fromLabel(group)).stream()
+                .filter(b -> b.getExpiryDate().equals(expiry) && b.getUnitsReceived() == units)
+                .findFirst().orElseThrow().getId();
+        }
+
+        private UUID raiseRequest(int units) {
+            return requestService.createRequest(
+                new CreateRequestPayload(group, units, UrgencyLevel.URGENT, "Race ward"),
+                principalFor(hospitalStaff, Role.HOSPITAL_STAFF)
+            ).id();
+        }
     }
 
     // ---------- fixture ----------

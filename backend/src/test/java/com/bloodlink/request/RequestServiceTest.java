@@ -5,11 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,13 +25,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.BloodRequestContribution;
 import com.bloodlink.domain.BloodRequestDecline;
+import com.bloodlink.domain.ContributionAllocation;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
@@ -36,16 +42,19 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.InvalidFieldException;
 
@@ -64,8 +73,12 @@ class RequestServiceTest {
     private static final UUID REQUEST_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
 
+    private static final Clock CLOCK = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+    private static final LocalDate TODAY = LocalDate.now(CLOCK);
+
     @Mock private BloodRequestRepository bloodRequestRepository;
-    @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodInventoryBatchRepository batchRepository;
+    @Mock private ContributionAllocationRepository allocationRepository;
     @Mock private BloodRequestDeclineRepository declineRepository;
     @Mock private BloodRequestContributionRepository contributionRepository;
     @Mock private BloodBankRepository bloodBankRepository;
@@ -79,10 +92,12 @@ class RequestServiceTest {
         // A real ActingBankResolver over the mocked repositories, not a mock of it.
         // "Which bank is this caller acting as" moved out of RequestService when
         // donation appeals needed the same rule, and stubbing it here would quietly
-        // delete the coverage the "who may act" tests below already give it.
+        // delete the coverage the "who may act" tests below already give it. The same
+        // goes for BatchStockService: it is real, over a mocked batch repository, so
+        // every contribution test still sees the units actually leave a batch.
         service = new RequestService(
             bloodRequestRepository,
-            bloodInventoryRepository,
+            new BatchStockService(batchRepository, allocationRepository, new StockPolicy(CLOCK)),
             declineRepository,
             contributionRepository,
             bloodBankRepository,
@@ -134,11 +149,21 @@ class RequestServiceTest {
         return request;
     }
 
-    private static BloodInventory stock(int units) {
-        BloodInventory row = new BloodInventory();
-        row.setBloodType(BloodType.O_NEGATIVE);
-        row.setUnitsAvailable(units);
-        return row;
+    /** One usable O- batch on a bank's shelf, with an id, as a locked row would have. */
+    private static BloodInventoryBatch stock(int units) {
+        return batch(units, TODAY.plusDays(20));
+    }
+
+    private static BloodInventoryBatch batch(int units, LocalDate expiry) {
+        BloodInventoryBatch batch = BloodInventoryBatch.manual(new BloodBank(), BloodType.O_NEGATIVE, units, expiry);
+        ReflectionTestUtils.setField(batch, "id", UUID.randomUUID());
+        return batch;
+    }
+
+    /** The bank's usable O- batches, as the FEFO lock query would return them. */
+    private void shelfHolds(UUID bankId, BloodInventoryBatch... batches) {
+        when(batchRepository.lockUsableBatchesInIssueOrder(bankId, BloodType.O_NEGATIVE, TODAY))
+            .thenReturn(List.of(batches));
     }
 
     /** save() returns its argument, as the real repository does for an update. */
@@ -238,17 +263,19 @@ class RequestServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
-        BloodInventory row = stock(5);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(row));
+        BloodInventoryBatch row = stock(5);
+        shelfHolds(BANK_ID, row);
         echoSavedRequest();
 
         BloodRequestResponse fulfilled = contributeAs(Role.BLOOD_BANK_STAFF, null, 2);
 
         assertThat(fulfilled.status()).isEqualTo(RequestStatus.FULFILLED);
         assertThat(fulfilled.lastContributedByBloodBankId()).isEqualTo(BANK_ID);
-        assertThat(row.getUnitsAvailable()).isEqualTo(3); // 5 - 2
-        verify(bloodInventoryRepository).save(row);
+        assertThat(row.getUnitsRemaining()).isEqualTo(3); // 5 - 2
+        // And the units are traced to the batch they came from (Business Rule 24).
+        ContributionAllocation allocation = savedAllocation();
+        assertThat(allocation.getBatch()).isSameAs(row);
+        assertThat(allocation.getUnitsAllocated()).isEqualTo(2);
 
         // The contribution row carries the three facts the table exists for.
         BloodRequestContribution recorded = savedContribution();
@@ -268,15 +295,14 @@ class RequestServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
         BloodRequest pending = request(RequestStatus.PENDING, null);
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID)).thenReturn(Optional.of(pending));
-        BloodInventory row = stock(5);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(row));
+        BloodInventoryBatch row = stock(5);
+        shelfHolds(BANK_ID, row);
         echoSavedRequest();
 
         BloodRequestResponse afterFirst = contributeAs(Role.BLOOD_BANK_STAFF, null, 1);
 
         assertThat(afterFirst.status()).isEqualTo(RequestStatus.PARTIALLY_FULFILLED);
-        assertThat(row.getUnitsAvailable()).isEqualTo(4); // only what was given
+        assertThat(row.getUnitsRemaining()).isEqualTo(4); // only what was given
         // The hospital is told the figures, and the other banks are told what is left.
         verify(notificationService).notifyRequestPartlyFilled(pending, actingBank, 1, 1);
         verify(notificationService).notifyRequestProgress(pending, actingBank, 1, 1);
@@ -292,9 +318,8 @@ class RequestServiceTest {
             Optional.of(request(RequestStatus.PARTIALLY_FULFILLED, bank(BANK_ID, "Makeni Regional Blood Bank"))));
         // 1 of the 2 units already given by the other bank.
         when(contributionRepository.sumUnitsForRequest(REQUEST_ID)).thenReturn(1);
-        BloodInventory row = stock(4);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(OTHER_BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(row));
+        BloodInventoryBatch row = stock(4);
+        shelfHolds(OTHER_BANK_ID, row);
         echoSavedRequest();
 
         BloodRequestResponse fulfilled = contributeAs(Role.BLOOD_BANK_STAFF, null, 1);
@@ -302,7 +327,7 @@ class RequestServiceTest {
         assertThat(fulfilled.status()).isEqualTo(RequestStatus.FULFILLED);
         // The pointer follows the most recent contributor, not the first.
         assertThat(fulfilled.lastContributedByBloodBankId()).isEqualTo(OTHER_BANK_ID);
-        assertThat(row.getUnitsAvailable()).isEqualTo(3);
+        assertThat(row.getUnitsRemaining()).isEqualTo(3);
         assertThat(savedContribution().getUnitsContributed()).isEqualTo(1);
     }
 
@@ -319,9 +344,8 @@ class RequestServiceTest {
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PARTIALLY_FULFILLED, null)));
         when(contributionRepository.sumUnitsForRequest(REQUEST_ID)).thenReturn(1); // 1 of 2 covered
-        BloodInventory row = stock(9);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(row));
+        BloodInventoryBatch row = stock(9);
+        shelfHolds(BANK_ID, row);
         echoSavedRequest();
 
         // Offers five; only one is still wanted.
@@ -330,7 +354,7 @@ class RequestServiceTest {
         assertThat(fulfilled.status()).isEqualTo(RequestStatus.FULFILLED);
         assertThat(savedContribution().getUnitsContributed()).isEqualTo(1);
         // Only the capped amount leaves the shelf — never the five that were typed.
-        assertThat(row.getUnitsAvailable()).isEqualTo(8);
+        assertThat(row.getUnitsRemaining()).isEqualTo(8);
     }
 
     @Test
@@ -339,9 +363,8 @@ class RequestServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
-        BloodInventory row = stock(1);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(row));
+        BloodInventoryBatch row = stock(1);
+        shelfHolds(BANK_ID, row);
 
         assertThatThrownBy(() -> contributeAs(Role.BLOOD_BANK_STAFF, null, 2))
             .isInstanceOf(ConflictException.class)
@@ -350,8 +373,8 @@ class RequestServiceTest {
             .hasMessageContaining("2 being contributed");
 
         // Nothing partially applied: the units stay put and nothing is recorded.
-        assertThat(row.getUnitsAvailable()).isEqualTo(1);
-        verify(bloodInventoryRepository, never()).save(any());
+        assertThat(row.getUnitsRemaining()).isEqualTo(1);
+        verify(allocationRepository, never()).save(any());
         verify(contributionRepository, never()).save(any());
         verify(bloodRequestRepository, never()).save(any());
     }
@@ -362,8 +385,7 @@ class RequestServiceTest {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.empty());
+        shelfHolds(BANK_ID);
 
         assertThatThrownBy(() -> contributeAs(Role.BLOOD_BANK_STAFF, null, 1))
             .isInstanceOf(ConflictException.class)
@@ -382,7 +404,7 @@ class RequestServiceTest {
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("already fulfilled");
 
-        verify(bloodInventoryRepository, never()).findByBloodBankIdAndBloodTypeForUpdate(any(), any());
+        verify(batchRepository, never()).lockUsableBatchesInIssueOrder(any(), any(), any());
         verify(contributionRepository, never()).save(any());
     }
 
@@ -436,7 +458,7 @@ class RequestServiceTest {
             .hasMessageContaining("already declined");
 
         verify(contributionRepository, never()).save(any());
-        verify(bloodInventoryRepository, never()).findByBloodBankIdAndBloodTypeForUpdate(any(), any());
+        verify(batchRepository, never()).lockUsableBatchesInIssueOrder(any(), any(), any());
     }
 
     /**
@@ -500,8 +522,7 @@ class RequestServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(actingBank));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodTypeForUpdate(BANK_ID, BloodType.O_NEGATIVE))
-            .thenReturn(Optional.of(stock(9)));
+        shelfHolds(BANK_ID, stock(9));
         echoSavedRequest();
 
         BloodRequestResponse fulfilled = contributeAs(Role.ADMIN, BANK_ID, 2);
@@ -526,5 +547,78 @@ class RequestServiceTest {
         ArgumentCaptor<BloodRequestContribution> captor = ArgumentCaptor.forClass(BloodRequestContribution.class);
         verify(contributionRepository).save(captor.capture());
         return captor.getValue();
+    }
+
+    /** The single allocation row written by the call under test. */
+    private ContributionAllocation savedAllocation() {
+        return savedAllocations().get(0);
+    }
+
+    /** Every allocation row written by the call under test, in the order written. */
+    private List<ContributionAllocation> savedAllocations() {
+        ArgumentCaptor<ContributionAllocation> captor = ArgumentCaptor.forClass(ContributionAllocation.class);
+        verify(allocationRepository, atLeastOnce()).save(captor.capture());
+        return captor.getAllValues();
+    }
+
+    // ---------- first expiry, first out (Business Rule 24) ----------
+
+    /**
+     * Stock in two batches: the one expiring sooner is emptied first, and the
+     * contribution's allocations name both batches and add up to its units.
+     */
+    @Test
+    void aContributionTakesTheEarliestExpiringBatchFirstAndRecordsEachBatchItDrewOn() {
+        BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
+        BloodRequest pending = request(RequestStatus.PENDING, null);
+        pending.setUnitsRequested(4);
+        when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID)).thenReturn(Optional.of(pending));
+        BloodInventoryBatch soon = batch(3, TODAY.plusDays(2));
+        BloodInventoryBatch later = batch(5, TODAY.plusDays(40));
+        // Passed in the lock query's order, which is earliest expiry first.
+        shelfHolds(BANK_ID, soon, later);
+        echoSavedRequest();
+
+        BloodRequestResponse fulfilled = contributeAs(Role.BLOOD_BANK_STAFF, null, 4);
+
+        assertThat(fulfilled.status()).isEqualTo(RequestStatus.FULFILLED);
+        assertThat(soon.getUnitsRemaining()).isZero();     // all 3 taken
+        assertThat(later.getUnitsRemaining()).isEqualTo(4); // only the 1 still needed
+
+        List<ContributionAllocation> allocations = savedAllocations();
+        assertThat(allocations).extracting(ContributionAllocation::getBatch).containsExactly(soon, later);
+        assertThat(allocations).extracting(ContributionAllocation::getUnitsAllocated).containsExactly(3, 1);
+        assertThat(allocations).allSatisfy(a -> assertThat(a.getContribution()).isSameAs(savedContribution()));
+        assertThat(allocations.stream().mapToInt(ContributionAllocation::getUnitsAllocated).sum())
+            .isEqualTo(savedContribution().getUnitsContributed());
+
+        // The low-stock check is told USABLE stock either side: 8 before, 4 after.
+        verify(notificationService).notifyStockCrossing(actingBank, BloodType.O_NEGATIVE, 8, 4);
+    }
+
+    /**
+     * Expired units are never counted (Business Rule 24). The refusal names the usable
+     * units, the units being contributed, and the expired units that could not be
+     * counted, so an operator looking at a fridge full of bags knows why.
+     */
+    @Test
+    void aRefusalForShortStockAlsoSaysHowManyExpiredUnitsCouldNotBeCounted() {
+        BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(actingBank, null)));
+        when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
+            .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
+        shelfHolds(BANK_ID, stock(1));
+        when(batchRepository.sumExpiredUnits(BANK_ID, BloodType.O_NEGATIVE, TODAY)).thenReturn(10L);
+
+        assertThatThrownBy(() -> contributeAs(Role.BLOOD_BANK_STAFF, null, 2))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("Not enough usable O-")
+            .hasMessageContaining("1 unit available")
+            .hasMessageContaining("2 being contributed")
+            .hasMessageContaining("10 expired units cannot be issued");
+
+        verify(contributionRepository, never()).save(any());
+        verify(allocationRepository, never()).save(any());
     }
 }

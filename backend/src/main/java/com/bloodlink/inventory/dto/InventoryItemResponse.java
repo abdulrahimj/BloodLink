@@ -13,14 +13,28 @@ import com.bloodlink.domain.enums.StockStatus;
  * come back with unitsAvailable 0, null expiryDate/lastUpdated, and status
  * CRITICAL (0 is below the 15-unit floor), matching what both mockups assume —
  * a fixed eight-row table, never a partial one.
+ *
+ * <h2>The shape is a contract</h2>
+ * The first six fields are the ones the Hospital Dashboard and the Blood Bank screens
+ * have always read, with the same names and types; only their meaning was sharpened
+ * by batch-level stock (Business Rule 24): {@code unitsAvailable} is USABLE units,
+ * excluding expired batches, and {@code expiryDate} is the earliest expiry among
+ * those usable batches. The last three were added after them, so an older client
+ * that does not know them simply ignores them. InventoryApiContractIT pins this.
+ *
+ * Hospitals read this endpoint too. It carries totals per group only, never
+ * batch-level detail; that is /batches, which hospitals cannot reach.
  */
 public record InventoryItemResponse(
     String bloodType,
+    /** Units in batches not yet expired: what this bank can issue now. */
     int unitsAvailable,
+    /** The earliest expiry date among usable batches with units left; null if none. */
     LocalDate expiryDate,
+    /** The most recent change to any of this group's batches; null if never stocked. */
     Instant lastUpdated,
+    /** Business Rule 3's badge, judged on {@code unitsAvailable}. */
     StockStatus status,
-
     /**
      * Whether this bank may appeal for this group right now, and if not, why
      * (Business Rule 12) — the state of the row's Send Appeal button.
@@ -39,5 +53,12 @@ public record InventoryItemResponse(
      * recovering past the threshold that triggered it. The server owns this
      * decision.
      */
-    AppealAvailability appealAvailability
+    AppealAvailability appealAvailability,
+    /** Of {@code unitsAvailable}, the units expiring within the 28-day window. */
+    int expiringSoonUnits,
+    /** Units still on the shelf in expired batches: awaiting discard, and NOT part
+     *  of {@code unitsAvailable}. */
+    int expiredUnits,
+    /** Batches of this group with any units left, expired ones included. */
+    int batchCount
 ) {}

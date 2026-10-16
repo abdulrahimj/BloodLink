@@ -106,6 +106,21 @@ class StockPolicyTest {
         assertThat(StockPolicy.defaultDonationExpiry(TODAY)).isEqualTo(LocalDate.of(2026, 11, 27));
     }
 
+    // ---------- an expiry date entered by staff ----------
+
+    @Test
+    void anEnteredExpiryMayBeTodayUpToExactly365DaysAwayAndNothingElse() {
+        assertThat(StockPolicy.problemWithEnteredExpiry(TODAY, TODAY)).isEmpty();
+        assertThat(StockPolicy.problemWithEnteredExpiry(TODAY.plusDays(365), TODAY)).isEmpty();
+
+        assertThat(StockPolicy.problemWithEnteredExpiry(TODAY.minusDays(1), TODAY))
+            .hasValueSatisfying(message -> assertThat(message).contains("cannot be in the past"));
+        assertThat(StockPolicy.problemWithEnteredExpiry(TODAY.plusDays(366), TODAY))
+            .hasValueSatisfying(message -> assertThat(message)
+                .contains("within 365 days").contains(TODAY.plusDays(365).toString()));
+        assertThat(StockPolicy.MAX_ENTERED_EXPIRY_DAYS).isEqualTo(365);
+    }
+
     // ---------- the clock bean ----------
 
     @Test

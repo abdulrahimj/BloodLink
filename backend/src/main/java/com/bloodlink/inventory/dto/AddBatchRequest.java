@@ -2,21 +2,20 @@ package com.bloodlink.inventory.dto;
 
 import java.time.LocalDate;
 
-import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
 /**
- * "Add New Batch" — records a freshly tested/received batch against one bank's
- * (bank, blood group) inventory row, creating it if this is the first stock ever
- * held for that group.
+ * "Add New Batch" — records a freshly tested or received batch of one blood group
+ * at one bank. Each call creates a NEW batch with its own expiry date (Business
+ * Rule 24); nothing is merged into existing stock, and no earlier date is inherited.
  *
- * There is no per-batch table in the schema (BloodInventory is "one row per
- * (blood_bank_id, blood_type) — not one row per unit"), so a batch is an upsert:
- * it adds to the existing unit count rather than replacing it. See
- * InventoryService.addBatch for how the single expiry_date column is kept
- * meaningful across multiple batches.
+ * The expiry date's range (today, up to 365 days ahead) is checked by
+ * InventoryService against StockPolicy rather than by an annotation here: the rule
+ * is shared with Record Donation, and "today" must be the UTC date StockPolicy uses
+ * everywhere else, not the server's local date that {@code @FutureOrPresent} would
+ * read. A date outside the range is still a 400 on the {@code expiryDate} field.
  */
 public record AddBatchRequest(
 
@@ -32,7 +31,7 @@ public record AddBatchRequest(
     @Max(value = 1000, message = "That is more units than a single batch should carry — please check the figure")
     Integer unitsToAdd,
 
+    /** The last day the batch may be used, inclusive (StockPolicy). */
     @NotNull(message = "Expiry date is required")
-    @FutureOrPresent(message = "Expiry date cannot be in the past")
     LocalDate expiryDate
 ) {}

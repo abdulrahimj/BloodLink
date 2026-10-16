@@ -17,26 +17,40 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.appeal.AppealCooldownPolicy;
 import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
+import com.bloodlink.domain.BloodInventoryBatch;
+import com.bloodlink.domain.Donation;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.inventory.dto.AddBatchRequest;
+import com.bloodlink.inventory.dto.BatchHistoryResponse;
+import com.bloodlink.inventory.dto.BatchResponse;
 import com.bloodlink.inventory.dto.CompositionSlice;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.inventory.dto.InventorySummaryResponse;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.AppealCooldownRepository;
+import com.bloodlink.repository.BatchWriteOffRepository;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.stock.BatchStockService.GroupStock;
+import com.bloodlink.stock.StockPolicy;
+import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Reads and updates one blood bank's stock.
+ * Reads and adds to one blood bank's stock, which is held batch by batch with each
+ * batch's own expiry date (Business Rule 24).
+ *
+ * Every figure this class reports counts USABLE units only, read through
+ * {@link BatchStockService}; units in expired batches are reported separately and
+ * never counted as available.
  *
  * "Own bank only" for BLOOD_BANK_STAFF is enforced here, not in SecurityConfig —
  * a URL rule can match a role, but only a lookup against the caller's own User
@@ -45,24 +59,28 @@ import com.bloodlink.web.error.NotFoundException;
 @Service
 public class InventoryService {
 
-    /** Business Rule 3's "within 4 weeks" window for the Expiring Soon stat. Public so
-     *  the Admin Reports page (Business Rule 23) counts expiring stock the same way. */
-    public static final int EXPIRING_SOON_WINDOW_DAYS = 28;
-
     private final BloodBankRepository bloodBankRepository;
-    private final BloodInventoryRepository bloodInventoryRepository;
+    private final BloodInventoryBatchRepository batchRepository;
+    private final ContributionAllocationRepository allocationRepository;
+    private final BatchWriteOffRepository writeOffRepository;
+    private final BatchStockService batchStockService;
+    private final StockPolicy stockPolicy;
     private final UserRepository userRepository;
     private final BloodRequestContributionRepository contributionRepository;
     private final NotificationService notificationService;
     // Both only for the Send Appeal button's state on each row (Business Rule 12):
     // the repository supplies this bank's cooldown rows, the policy turns them and
-    // current stock into the one answer the send endpoint would also give.
+    // current usable stock into the one answer the send endpoint would also give.
     private final AppealCooldownRepository appealCooldownRepository;
     private final AppealCooldownPolicy appealCooldownPolicy;
 
     InventoryService(
         BloodBankRepository bloodBankRepository,
-        BloodInventoryRepository bloodInventoryRepository,
+        BloodInventoryBatchRepository batchRepository,
+        ContributionAllocationRepository allocationRepository,
+        BatchWriteOffRepository writeOffRepository,
+        BatchStockService batchStockService,
+        StockPolicy stockPolicy,
         UserRepository userRepository,
         BloodRequestContributionRepository contributionRepository,
         NotificationService notificationService,
@@ -70,7 +88,11 @@ public class InventoryService {
         AppealCooldownPolicy appealCooldownPolicy
     ) {
         this.bloodBankRepository = bloodBankRepository;
-        this.bloodInventoryRepository = bloodInventoryRepository;
+        this.batchRepository = batchRepository;
+        this.allocationRepository = allocationRepository;
+        this.writeOffRepository = writeOffRepository;
+        this.batchStockService = batchStockService;
+        this.stockPolicy = stockPolicy;
         this.userRepository = userRepository;
         this.contributionRepository = contributionRepository;
         this.notificationService = notificationService;
@@ -79,7 +101,7 @@ public class InventoryService {
     }
 
     /**
-     * All eight blood groups' stock at one bank.
+     * All eight blood groups' usable stock at one bank.
      * Always eight rows: a group this bank has never stocked comes back as a zero
      * row rather than being omitted, since both frontend screens render a fixed
      * eight-row table/chart.
@@ -87,7 +109,7 @@ public class InventoryService {
     @Transactional(readOnly = true)
     public List<InventoryItemResponse> listInventory(UUID bloodBankId) {
         requireBank(bloodBankId);
-        Map<BloodType, BloodInventory> byType = indexByType(bloodInventoryRepository.findByBloodBankId(bloodBankId));
+        Map<BloodType, GroupStock> stock = batchStockService.stockForBank(bloodBankId);
 
         // Every cooldown this bank holds, in one query rather than one per row —
         // the Send Appeal button's state (Business Rule 12) is derived per group
@@ -102,19 +124,22 @@ public class InventoryService {
         Instant now = Instant.now();
 
         return List.of(BloodType.values()).stream()
-            .map(type -> toResponse(type, byType.get(type), cooldownsByType.get(type), now))
+            .map(type -> toResponse(stock.get(type), cooldownsByType.get(type), now))
             .toList();
     }
 
-    /** The stat cards and charts on the Blood Inventory detail page. */
+    /**
+     * The stat cards and charts on the Blood Inventory detail page. Every unit figure
+     * is usable stock; expired units are counted on their own, in expiredUnits.
+     */
     @Transactional(readOnly = true)
     public InventorySummaryResponse getSummary(UUID bloodBankId) {
         BloodBank bank = requireBank(bloodBankId);
         List<InventoryItemResponse> items = listInventory(bloodBankId);
-        LocalDate expiringSoonCutoff = LocalDate.now().plusDays(EXPIRING_SOON_WINDOW_DAYS);
 
         int totalUnits = 0;
         int expiringSoonUnits = 0;
+        int expiredUnits = 0;
         int criticalGroups = 0;
         Map<StockStatus, Integer> compositionUnits = new EnumMap<>(StockStatus.class);
         for (StockStatus status : StockStatus.values()) {
@@ -123,13 +148,13 @@ public class InventoryService {
 
         for (InventoryItemResponse item : items) {
             totalUnits += item.unitsAvailable();
+            // Counted batch by batch, so only the units that really expire soon are
+            // included — not the whole group because its earliest batch does.
+            expiringSoonUnits += item.expiringSoonUnits();
+            expiredUnits += item.expiredUnits();
             compositionUnits.merge(item.status(), item.unitsAvailable(), Integer::sum);
             if (item.status() == StockStatus.CRITICAL) {
                 criticalGroups++;
-            }
-            // A row with no expiry (never stocked) has nothing to expire.
-            if (item.expiryDate() != null && !item.expiryDate().isAfter(expiringSoonCutoff)) {
-                expiringSoonUnits += item.unitsAvailable();
             }
         }
 
@@ -147,75 +172,162 @@ public class InventoryService {
 
         return new InventorySummaryResponse(
             bank.getId(), bank.getName(), totalUnits, expiringSoonUnits, criticalGroups,
-            (int) unitsIssued, composition
+            (int) unitsIssued, composition, expiredUnits, StockPolicy.EXPIRING_SOON_WINDOW_DAYS
         );
     }
 
     /**
-     * "Add New Batch": adds freshly received/tested units to a (bank, group) row,
-     * creating the row if this bank has never stocked that group before.
+     * "Add New Batch": records freshly received or tested units as a NEW batch with
+     * its own expiry date. Business Rule 7's merge into one row, keeping the earlier
+     * of two dates, no longer exists (Business Rule 24): each batch keeps the date it
+     * arrived with, so a fresh batch can never inherit an older, possibly passed date.
      *
-     * The single expiry_date column has to represent the whole aggregate after this
-     * batch is folded in, so it is kept at the *earliest* of the two dates — the
-     * soonest-expiring stock is the one staff need to see and act on, and silently
-     * losing track of it by overwriting with the newest batch's date would be a
-     * patient-safety regression, not just a display quirk.
+     * The expiry date must be today or later and at most 365 days away (StockPolicy);
+     * anything else is a 400 on the expiryDate field, with nothing written.
      */
     @Transactional
     public InventoryItemResponse addBatch(
         UUID bloodBankId, String bloodTypeLabel, AddBatchRequest request, AuthenticatedUser principal
     ) {
         BloodBank bank = requireBank(bloodBankId);
-        assertCanModify(bloodBankId, principal);
+        assertCanManage(bloodBankId, principal);
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType bloodType = BloodType.fromLabel(bloodTypeLabel);
+        requireAcceptableExpiry(request.expiryDate());
 
-        BloodInventory row = bloodInventoryRepository.findByBloodBankIdAndBloodType(bloodBankId, bloodType)
-            .orElseGet(() -> {
-                BloodInventory created = new BloodInventory();
-                created.setBloodBank(bank);
-                created.setBloodType(bloodType);
-                created.setUnitsAvailable(0);
-                return created;
-            });
-
-        int unitsBefore = row.getUnitsAvailable();
-        row.setUnitsAvailable(unitsBefore + request.unitsToAdd());
-        row.setExpiryDate(
-            row.getExpiryDate() == null
-                ? request.expiryDate()
-                : earlierOf(row.getExpiryDate(), request.expiryDate())
-        );
-        // touch() on the entity's @PrePersist/@PreUpdate sets lastUpdated.
-        BloodInventory saved = bloodInventoryRepository.save(row);
-
-        // Every path that changes a stock figure reports the change, so the
-        // low-stock rule lives in one place rather than being re-derived per caller.
-        // Adding units can only improve a level, so in practice this raises nothing
-        // today — it is here so that a future path through addBatch which lowers a
-        // count (a correction, a write-off) cannot silently skip the alert.
-        notificationService.notifyStockCrossing(bank, bloodType, unitsBefore, saved.getUnitsAvailable());
-
-        // This is the only place stock can rise, so it is the only place an appeal
-        // cooldown can be recovered out of (Business Rule 12). If these units take
-        // the group back over the threshold that triggered its cooldown, that
-        // cooldown is finished for good — a later relapse into shortage is a new
-        // event with its own chance to appeal, not the tail of this one's timer.
-        //
-        // What comes back is whatever cooldown survives, which is exactly what the
-        // returned row should report: the state this batch has just produced, not
-        // the one it replaced.
-        AppealCooldown cooldown =
-            appealCooldownPolicy.clearIfRecovered(bloodBankId, bloodType, saved.getUnitsAvailable());
-
-        return toResponse(bloodType, saved, cooldown, Instant.now());
+        return receive(bank, BloodInventoryBatch.manual(bank, bloodType, request.unitsToAdd(), request.expiryDate()));
     }
 
     /**
-     * ADMIN may modify any bank. BLOOD_BANK_STAFF may modify only the bank on their
-     * own User row — null (no admin has assigned one yet) means access to none.
+     * Puts a recorded donation's units on the shelf as one batch linked to that
+     * donation (DONATION source, donation_id unique: one donation, one batch). Called
+     * by DonationService inside its own transaction, after it has decided which bank
+     * the caller acts for (ActingBankResolver), so no second permission check is
+     * needed here.
+     *
+     * The expiry date is checked against the same rule as Add New Batch; the caller
+     * has normally checked it already, before writing the donation, so that a bad date
+     * refuses the whole action before anything is written.
      */
-    private void assertCanModify(UUID bloodBankId, AuthenticatedUser principal) {
+    @Transactional
+    public InventoryItemResponse receiveDonation(Donation donation, LocalDate expiryDate) {
+        requireAcceptableExpiry(expiryDate);
+        return receive(donation.getBloodBank(), BloodInventoryBatch.fromDonation(donation, expiryDate));
+    }
+
+    /**
+     * Refuses an expiry date outside today .. today + 365 days with a 400 on the
+     * expiryDate field. Public so Record Donation can check its own optional date
+     * before writing anything.
+     */
+    public void requireAcceptableExpiry(LocalDate expiryDate) {
+        stockPolicy.problemWithEnteredExpiry(expiryDate).ifPresent(problem -> {
+            throw new InvalidFieldException("expiryDate", problem);
+        });
+    }
+
+    /**
+     * Saves a new batch and runs what follows from stock rising, for both ways units
+     * arrive (Add New Batch and Record Donation).
+     */
+    private InventoryItemResponse receive(BloodBank bank, BloodInventoryBatch batch) {
+        BloodType bloodType = batch.getBloodType();
+        int usableBefore = batchStockService.usableUnits(bank.getId(), bloodType);
+        batchRepository.save(batch);
+        // The new batch's date was checked to be today or later, so all of its units
+        // are usable now.
+        int usableAfter = usableBefore + batch.getUnitsReceived();
+
+        // Every path that changes a stock figure reports the change, so the low-stock
+        // rule lives in one place rather than being re-derived per caller. Adding
+        // units can only improve a level, so in practice this raises nothing; it is
+        // here so the rule stays in one place should a future path lower a count.
+        notificationService.notifyStockCrossing(bank, bloodType, usableBefore, usableAfter);
+
+        // A new batch is the only way usable stock can rise, so this is the only place
+        // an appeal cooldown can be recovered out of (Business Rule 12). If these units
+        // take the group back over the threshold that triggered its cooldown, that
+        // cooldown is finished for good. Stock falling by expiry at midnight is not an
+        // event anything reacts to yet (a nightly job is future work).
+        //
+        // What comes back is whatever cooldown survives, which is exactly what the
+        // returned row should report: the state this batch has just produced.
+        AppealCooldown cooldown = appealCooldownPolicy.clearIfRecovered(bank.getId(), bloodType, usableAfter);
+
+        // Read back through the same query every screen uses (it sees the batch just
+        // saved: a query flushes pending changes first), so the response is exactly
+        // what the next GET of the inventory would show.
+        GroupStock groupStock = batchStockService.stockForBank(bank.getId()).get(bloodType);
+        return toResponse(groupStock, cooldown, Instant.now());
+    }
+
+    // ---------- batch-level views: bank staff of that bank, and ADMIN ----------
+
+    /**
+     * One bank's live batches (any units left, expired ones included), optionally for
+     * one blood group, in issue order. Hospitals and donors are refused before this is
+     * reached (SecurityConfig); staff of another bank are refused here.
+     */
+    @Transactional(readOnly = true)
+    public List<BatchResponse> listBatches(UUID bloodBankId, String bloodTypeLabel, AuthenticatedUser principal) {
+        requireBank(bloodBankId);
+        assertCanManage(bloodBankId, principal);
+        List<BloodInventoryBatch> batches = bloodTypeLabel == null || bloodTypeLabel.isBlank()
+            ? batchRepository.findLiveForBank(bloodBankId)
+            // Propagates IllegalArgumentException for an unrecognised label -> 400.
+            : batchRepository.findLiveForBankAndBloodType(bloodBankId, BloodType.fromLabel(bloodTypeLabel.trim()));
+        LocalDate today = stockPolicy.today();
+        return batches.stream().map(batch -> BatchResponse.from(batch, today)).toList();
+    }
+
+    /**
+     * One batch and where its units went: issued to hospital requests, or written off.
+     * A batch that belongs to another bank is a 404, exactly as one that does not exist,
+     * so a bank cannot learn anything about another bank's stock by guessing ids.
+     */
+    @Transactional(readOnly = true)
+    public BatchHistoryResponse batchHistory(UUID bloodBankId, UUID batchId, AuthenticatedUser principal) {
+        requireBank(bloodBankId);
+        assertCanManage(bloodBankId, principal);
+        BloodInventoryBatch batch = batchRepository.findById(batchId)
+            .filter(found -> found.getBloodBank().getId().equals(bloodBankId))
+            .orElseThrow(() -> new NotFoundException("No batch found for this id at this blood bank."));
+
+        List<BatchHistoryResponse.IssueEntry> issues = allocationRepository.findForBatch(batchId).stream()
+            .map(allocation -> new BatchHistoryResponse.IssueEntry(
+                allocation.getContribution().getId(),
+                allocation.getContribution().getBloodRequest().getId(),
+                allocation.getContribution().getBloodRequest().getHospital().getName(),
+                allocation.getUnitsAllocated(),
+                allocation.getContribution().getContributedAt()))
+            .toList();
+        List<BatchHistoryResponse.WriteOffEntry> writeOffs = writeOffRepository.findForBatch(batchId).stream()
+            .map(writeOff -> new BatchHistoryResponse.WriteOffEntry(
+                writeOff.getId(),
+                writeOff.getUnits(),
+                writeOff.getReason(),
+                writeOff.getNote(),
+                writeOff.getWrittenOffBy().getFullName(),
+                writeOff.getWrittenOffAt()))
+            .toList();
+
+        return new BatchHistoryResponse(
+            BatchResponse.from(batch, stockPolicy.today()),
+            issues.stream().mapToInt(BatchHistoryResponse.IssueEntry::units).sum(),
+            writeOffs.stream().mapToInt(BatchHistoryResponse.WriteOffEntry::units).sum(),
+            issues,
+            writeOffs
+        );
+    }
+
+    // ---------- helpers ----------
+
+    /**
+     * ADMIN may manage any bank. BLOOD_BANK_STAFF may manage only the bank on their
+     * own User row — null (no admin has assigned one yet) means access to none. Used
+     * for adding stock and for reading batch-level detail alike.
+     */
+    private void assertCanManage(UUID bloodBankId, AuthenticatedUser principal) {
         if (principal.getRole() == Role.ADMIN) {
             return;
         }
@@ -232,36 +344,26 @@ public class InventoryService {
             .orElseThrow(() -> new NotFoundException("No blood bank found for this id."));
     }
 
-    private Map<BloodType, BloodInventory> indexByType(List<BloodInventory> rows) {
-        Map<BloodType, BloodInventory> byType = new EnumMap<>(BloodType.class);
-        rows.forEach(row -> byType.put(row.getBloodType(), row));
-        return byType;
-    }
-
-    /** Maps a possibly-absent row to a response — absent means never stocked. */
     /**
-     * One table row: the stock figures, the Business Rule 3 badge, and the Business
-     * Rule 12 state of its Send Appeal button.
+     * One table row: the usable stock figures, the Business Rule 3 badge judged on
+     * them, and the Business Rule 12 state of its Send Appeal button.
      *
      * The last of those is asked of {@link AppealCooldownPolicy} rather than worked
      * out here, so this screen and the send endpoint cannot come to different
      * conclusions about whether an appeal is allowed.
      */
-    private InventoryItemResponse toResponse(
-        BloodType type, BloodInventory row, AppealCooldown cooldown, Instant now
-    ) {
-        int units = row == null ? 0 : row.getUnitsAvailable();
+    private InventoryItemResponse toResponse(GroupStock stock, AppealCooldown cooldown, Instant now) {
+        int usable = stock.usableUnits();
         return new InventoryItemResponse(
-            type.getLabel(),
-            units,
-            row == null ? null : row.getExpiryDate(),
-            row == null ? null : row.getLastUpdated(),
-            StockStatus.fromUnits(units),
-            appealCooldownPolicy.evaluate(units, cooldown, now)
+            stock.bloodType().getLabel(),
+            usable,
+            stock.earliestUsableExpiry(),
+            stock.lastUpdated(),
+            StockStatus.fromUnits(usable),
+            appealCooldownPolicy.evaluate(usable, cooldown, now),
+            stock.expiringSoonUnits(),
+            stock.expiredUnits(),
+            stock.batchCount()
         );
-    }
-
-    private LocalDate earlierOf(LocalDate a, LocalDate b) {
-        return a.isBefore(b) ? a : b;
     }
 }

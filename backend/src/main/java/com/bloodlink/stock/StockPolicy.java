@@ -3,6 +3,7 @@ package com.bloodlink.stock;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 
@@ -43,6 +44,14 @@ public class StockPolicy {
      * bank staff, and staff will be able to edit the date when recording.
      */
     public static final int DONATION_SHELF_LIFE_DAYS = 42;
+
+    /**
+     * The furthest ahead an expiry date entered by staff may be: 365 days from today,
+     * today itself being the earliest. A typo guard (a year typed as 2027 instead of
+     * 2026 would otherwise make a batch look good for a year), agreed with the project
+     * owner. Applies to Add New Batch and to Record Donation's optional expiry date.
+     */
+    public static final int MAX_ENTERED_EXPIRY_DAYS = 365;
 
     /** Where a batch stands on a given day. EXPIRING_SOON is still usable. */
     public enum ExpiryState {
@@ -107,6 +116,24 @@ public class StockPolicy {
         return donationDate.plusDays(DONATION_SHELF_LIFE_DAYS);
     }
 
+    /**
+     * What is wrong with an expiry date typed by staff, or empty if it is acceptable:
+     * it must be today or later, and at most {@link #MAX_ENTERED_EXPIRY_DAYS} days
+     * away. Returned as a message rather than thrown, so each caller can attach it to
+     * its own request field.
+     */
+    public static Optional<String> problemWithEnteredExpiry(LocalDate expiryDate, LocalDate today) {
+        if (expiryDate.isBefore(today)) {
+            return Optional.of("Expiry date cannot be in the past");
+        }
+        LocalDate latest = today.plusDays(MAX_ENTERED_EXPIRY_DAYS);
+        if (expiryDate.isAfter(latest)) {
+            return Optional.of("Expiry date must be within " + MAX_ENTERED_EXPIRY_DAYS
+                + " days of today (on or before " + latest + ") — please check the year");
+        }
+        return Optional.empty();
+    }
+
     // ---------- the same rules, with today from the clock ----------
 
     public boolean isExpired(LocalDate expiryDate) {
@@ -127,5 +154,9 @@ public class StockPolicy {
 
     public long daysUntilExpiry(LocalDate expiryDate) {
         return daysUntilExpiry(expiryDate, today());
+    }
+
+    public Optional<String> problemWithEnteredExpiry(LocalDate expiryDate) {
+        return problemWithEnteredExpiry(expiryDate, today());
     }
 }

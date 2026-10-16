@@ -8,8 +8,11 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,15 +30,17 @@ import com.bloodlink.appeal.dto.DonationAppealResponse;
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.enums.AppealTier;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.notification.NotificationService.AppealReach;
 import com.bloodlink.repository.AppealCooldownRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.web.error.ConflictException;
 
 /**
@@ -57,11 +62,14 @@ class AppealServiceTest {
 
     private static final UUID BANK_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
+    private static final Clock CLOCK = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+    private static final LocalDate TODAY = LocalDate.now(CLOCK);
 
     @Mock private ActingBankResolver actingBankResolver;
     @Mock private NotificationService notificationService;
     @Mock private AppealCooldownRepository cooldownRepository;
-    @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodInventoryBatchRepository batchRepository;
+    @Mock private ContributionAllocationRepository allocationRepository;
 
     private AppealService service;
 
@@ -72,24 +80,22 @@ class AppealServiceTest {
         // cooldown is a rule this service is now responsible for enforcing, so
         // stubbing it away would leave that enforcement untested here.
         //
-        // Both mocks return Optional.empty() by default, which reads as "no stock
-        // row and no prior appeal" — 0 units is the worst possible shortage, so the
-        // send tests below that predate the cooldown are unaffected by it.
+        // The mocks return 0 usable units and no cooldown by default, which reads as
+        // "no stock and no prior appeal" — 0 units is the worst possible shortage, so
+        // the send tests below that predate the cooldown are unaffected by it. The
+        // stock figure comes from a real BatchStockService over the mocked batch
+        // repository, so it is the usable units the real rule would read.
         service = new AppealService(
             actingBankResolver,
             notificationService,
             new AppealCooldownPolicy(cooldownRepository),
-            bloodInventoryRepository
+            new BatchStockService(batchRepository, allocationRepository, new StockPolicy(CLOCK))
         );
     }
 
-    /** This bank's stock row for O-, at the given level. */
+    /** This bank's USABLE units of one group, at the given level (Business Rule 24). */
     private void stubStock(BloodType type, int units) {
-        BloodInventory row = new BloodInventory();
-        row.setBloodType(type);
-        row.setUnitsAvailable(units);
-        when(bloodInventoryRepository.findByBloodBankIdAndBloodType(BANK_ID, type))
-            .thenReturn(Optional.of(row));
+        when(batchRepository.sumUsableUnits(BANK_ID, type, TODAY)).thenReturn((long) units);
     }
 
     /** An existing cooldown for this bank and group, sent {@code elapsed} ago. */

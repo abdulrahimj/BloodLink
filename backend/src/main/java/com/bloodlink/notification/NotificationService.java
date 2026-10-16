@@ -22,11 +22,11 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.notification.dto.NotificationResponse;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.stock.BatchStockService;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -63,7 +63,7 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final DonorRepository donorRepository;
-    private final BloodInventoryRepository bloodInventoryRepository;
+    private final BatchStockService batchStockService;
     // Both only for notifyRequestProgress: which banks exist, and which of them
     // have declined the request and so are no longer watching it.
     private final BloodBankRepository bloodBankRepository;
@@ -74,7 +74,7 @@ public class NotificationService {
         NotificationRepository notificationRepository,
         UserRepository userRepository,
         DonorRepository donorRepository,
-        BloodInventoryRepository bloodInventoryRepository,
+        BatchStockService batchStockService,
         BloodBankRepository bloodBankRepository,
         BloodRequestDeclineRepository declineRepository,
         NotificationPublisher publisher
@@ -82,7 +82,7 @@ public class NotificationService {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.donorRepository = donorRepository;
-        this.bloodInventoryRepository = bloodInventoryRepository;
+        this.batchStockService = batchStockService;
         this.bloodBankRepository = bloodBankRepository;
         this.declineRepository = declineRepository;
         this.publisher = publisher;
@@ -136,6 +136,8 @@ public class NotificationService {
      * Raises a low-stock alert when a change to one bank's stock has pushed a blood
      * group down past a Business Rule 3 threshold — into Low (below 40 units) or
      * Critical (below 15).
+     *
+     * The counts are USABLE units (Business Rule 24): expired batches are not stock.
      *
      * Called with the unit count on either side of the change, not just the new one,
      * because the alert is about a crossing and not about a level. A group that was
@@ -285,10 +287,10 @@ public class NotificationService {
     /**
      * Tells blood bank staff that a hospital has raised a request they could take.
      *
-     * "Could take" is read as holding enough units of that group to cover it right
-     * now — those are the banks able to act on it this minute, and alerting a bank
-     * that plainly cannot help is the kind of noise that trains people to ignore the
-     * bell.
+     * "Could take" is read as holding enough USABLE units of that group to cover it
+     * right now (expired batches do not count, Business Rule 24) — those are the
+     * banks able to act on it this minute, and alerting a bank that plainly cannot
+     * help is the kind of noise that trains people to ignore the bell.
      *
      * When no bank holds enough, every bank's staff are told instead. That is not a
      * contradiction of the rule above but the case it exists for: an unfillable
@@ -306,7 +308,7 @@ public class NotificationService {
             request.getPatientReference() == null ? "" : " For " + request.getPatientReference() + "."
         );
 
-        List<UUID> capableBankIds = bloodInventoryRepository.findBankIdsHoldingAtLeast(
+        List<UUID> capableBankIds = batchStockService.bankIdsWithUsableUnitsAtLeast(
             request.getBloodType(), request.getUnitsRequested()
         );
 

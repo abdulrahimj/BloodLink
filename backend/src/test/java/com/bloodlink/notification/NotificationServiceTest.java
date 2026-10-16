@@ -8,7 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -33,11 +36,14 @@ import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService.AppealReach;
 import com.bloodlink.notification.dto.NotificationResponse;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.stock.StockPolicy;
 
 /**
  * Covers the decisions this service makes that a screen cannot show you were wrong
@@ -56,11 +62,14 @@ class NotificationServiceTest {
     private static final UUID BANK_ID = UUID.randomUUID();
     private static final UUID OTHER_BANK_ID = UUID.randomUUID();
     private static final UUID HOSPITAL_ID = UUID.randomUUID();
+    private static final Clock CLOCK = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+    private static final LocalDate TODAY = LocalDate.now(CLOCK);
 
     @Mock private NotificationRepository notificationRepository;
     @Mock private UserRepository userRepository;
     @Mock private DonorRepository donorRepository;
-    @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodInventoryBatchRepository batchRepository;
+    @Mock private ContributionAllocationRepository allocationRepository;
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private BloodRequestDeclineRepository declineRepository;
     @Mock private NotificationPublisher publisher;
@@ -70,7 +79,10 @@ class NotificationServiceTest {
     @BeforeEach
     void setUp() {
         service = new NotificationService(
-            notificationRepository, userRepository, donorRepository, bloodInventoryRepository,
+            notificationRepository, userRepository, donorRepository,
+            // Real, over the mocked batch repository: the request alert asks for banks
+            // holding enough USABLE units, as of TODAY (Business Rule 24).
+            new BatchStockService(batchRepository, allocationRepository, new StockPolicy(CLOCK)),
             bloodBankRepository, declineRepository, publisher
         );
     }
@@ -351,7 +363,7 @@ class NotificationServiceTest {
     @Test
     void aNewRequestAlertsOnlyTheBanksThatCouldCoverIt() {
         User capableStaff = user("Aminata Kamara");
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID));
         when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
             .thenReturn(List.of(capableStaff));
@@ -370,7 +382,7 @@ class NotificationServiceTest {
 
     @Test
     void aRequestNoBankCanCoverStillAlertsEveryBank() {
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of());
         when(userRepository.findByRole(Role.BLOOD_BANK_STAFF))
             .thenReturn(List.of(user("Aminata Kamara"), user("Mohamed Bangura")));
@@ -530,7 +542,7 @@ class NotificationServiceTest {
     @Test
     void oneRecipientReachedByTwoBanksIsWrittenToOnce() {
         User shared = user("Aminata Kamara");
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID, OTHER_BANK_ID));
         when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
             .thenReturn(List.of(shared));

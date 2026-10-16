@@ -10,13 +10,12 @@ import com.bloodlink.appeal.dto.DonationAppealPayload;
 import com.bloodlink.appeal.dto.DonationAppealResponse;
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.AppealTier;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.notification.NotificationService;
-import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.BatchStockService;
 import com.bloodlink.web.error.ConflictException;
 
 /**
@@ -47,18 +46,18 @@ public class AppealService {
     private final ActingBankResolver actingBankResolver;
     private final NotificationService notificationService;
     private final AppealCooldownPolicy cooldownPolicy;
-    private final BloodInventoryRepository bloodInventoryRepository;
+    private final BatchStockService batchStockService;
 
     AppealService(
         ActingBankResolver actingBankResolver,
         NotificationService notificationService,
         AppealCooldownPolicy cooldownPolicy,
-        BloodInventoryRepository bloodInventoryRepository
+        BatchStockService batchStockService
     ) {
         this.actingBankResolver = actingBankResolver;
         this.notificationService = notificationService;
         this.cooldownPolicy = cooldownPolicy;
-        this.bloodInventoryRepository = bloodInventoryRepository;
+        this.batchStockService = batchStockService;
     }
 
     /**
@@ -106,12 +105,10 @@ public class AppealService {
         // be judged against one clock reading and recorded against a later one.
         Instant now = Instant.now();
 
-        // A group this bank has never stocked has no inventory row at all, which is
-        // 0 units — the worst possible shortage, not an absent one.
-        int unitsAvailable = bloodInventoryRepository
-            .findByBloodBankIdAndBloodType(bank.getId(), bloodType)
-            .map(BloodInventory::getUnitsAvailable)
-            .orElse(0);
+        // Usable units only (Business Rule 24): expired batches are not stock, so a
+        // bank whose shelf holds 35 units of which 10 have expired is short, and may
+        // appeal. A group never stocked is 0 units, the worst possible shortage.
+        int unitsAvailable = batchStockService.usableUnits(bank.getId(), bloodType);
 
         AppealAvailability availability =
             cooldownPolicy.evaluate(bank.getId(), bloodType, unitsAvailable, now);

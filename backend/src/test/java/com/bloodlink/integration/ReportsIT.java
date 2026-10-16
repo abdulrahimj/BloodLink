@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,7 +38,7 @@ import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.auth.dto.LoginRequest;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.BloodRequestContribution;
 import com.bloodlink.domain.Donation;
@@ -49,7 +50,7 @@ import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.DonationRepository;
@@ -85,6 +86,8 @@ class ReportsIT {
 
     private static final String PASSWORD = "correct-horse-battery-2026";
     private static final LocalDate TODAY = LocalDate.now();
+    /** The stock section is as of today in UTC, StockPolicy's "today" (Business Rule 24). */
+    private static final LocalDate STOCK_TODAY = LocalDate.now(ZoneOffset.UTC);
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
@@ -95,7 +98,7 @@ class ReportsIT {
     @Autowired private DonationRepository donationRepository;
     @Autowired private BloodBankRepository bloodBankRepository;
     @Autowired private HospitalRepository hospitalRepository;
-    @Autowired private BloodInventoryRepository inventoryRepository;
+    @Autowired private BloodInventoryBatchRepository batchRepository;
     @Autowired private BloodRequestRepository requestRepository;
     @Autowired private BloodRequestContributionRepository contributionRepository;
 
@@ -114,10 +117,10 @@ class ReportsIT {
     void stockPerBankCountsCriticalAndLowAtTheThresholdEdgesAndMissingGroupsAsCritical() throws Exception {
         BloodBank seeded = bank("Report Stock Bank " + mark);
         BloodBank empty = bank("Report Empty Bank " + mark);
-        stock(seeded, BloodType.A_POSITIVE, 14, TODAY.plusDays(100));   // Critical (just under 15)
-        stock(seeded, BloodType.A_NEGATIVE, 15, TODAY.plusDays(100));   // Low (exactly 15)
-        stock(seeded, BloodType.B_POSITIVE, 39, TODAY.plusDays(100));   // Low (just under 40)
-        stock(seeded, BloodType.B_NEGATIVE, 40, TODAY.plusDays(100));   // Sufficient (exactly 40)
+        stock(seeded, BloodType.A_POSITIVE, 14, STOCK_TODAY.plusDays(100));   // Critical (just under 15)
+        stock(seeded, BloodType.A_NEGATIVE, 15, STOCK_TODAY.plusDays(100));   // Low (exactly 15)
+        stock(seeded, BloodType.B_POSITIVE, 39, STOCK_TODAY.plusDays(100));   // Low (just under 40)
+        stock(seeded, BloodType.B_NEGATIVE, 40, STOCK_TODAY.plusDays(100));   // Sufficient (exactly 40)
         flush();
 
         StockReport report = stockReport();
@@ -128,26 +131,50 @@ class ReportsIT {
         assertThat(bankRow(report, empty)).isEqualTo(new StockBankRow(empty.getName(), 0, 8, 0));
     }
 
+    /**
+     * Business Rule 23, reversed by Business Rule 24: an expired batch is NOT stock.
+     * Its units appear only in pastExpiryUnits (awaiting discard), never in the total,
+     * a group's figure, or "expiring soon" — exactly as the Inventory screen now
+     * counts them.
+     */
     @Test
-    void stockTotalsMoveByExactlyWhatWasAddedAndAnExpiredBatchIsCountedAsTheInventoryScreenCountsIt() throws Exception {
+    void stockTotalsMoveByExactlyWhatWasAddedAndAnExpiredBatchIsExcludedAndReportedSeparately() throws Exception {
         StockReport before = stockReport();
         BloodBank bank = bank("Report Expiry Bank " + mark);
-        stock(bank, BloodType.O_POSITIVE, 5, TODAY.minusDays(1));        // already expired
-        stock(bank, BloodType.A_POSITIVE, 14, TODAY.plusDays(10));       // expiring soon
-        stock(bank, BloodType.AB_NEGATIVE, 40, TODAY.plusDays(100));     // fine
+        stock(bank, BloodType.O_POSITIVE, 5, STOCK_TODAY.minusDays(1));        // already expired
+        stock(bank, BloodType.A_POSITIVE, 14, STOCK_TODAY.plusDays(10));       // expiring soon
+        stock(bank, BloodType.AB_NEGATIVE, 40, STOCK_TODAY.plusDays(100));     // fine
         flush();
 
         StockReport after = stockReport();
 
-        // The expired 5 units are still counted as stock — the Inventory screen's
-        // totals count them too — and are reported separately as past expiry.
-        assertThat(after.totalUnits() - before.totalUnits()).isEqualTo(59);
-        assertThat(after.expiringSoonUnits() - before.expiringSoonUnits()).isEqualTo(19);   // 5 expired + 14 within 28 days
+        // 14 + 40 usable; the 5 expired units are not stock.
+        assertThat(after.totalUnits() - before.totalUnits()).isEqualTo(54);
+        // Only the 14 usable units within 28 days; the expired 5 are not "expiring soon".
+        assertThat(after.expiringSoonUnits() - before.expiringSoonUnits()).isEqualTo(14);
         assertThat(after.pastExpiryUnits() - before.pastExpiryUnits()).isEqualTo(5);
         assertThat(after.expiringSoonWindowDays()).isEqualTo(28);
-        assertThat(units(after, "O+") - units(before, "O+")).isEqualTo(5);
+        assertThat(units(after, "O+") - units(before, "O+")).isZero();
+        assertThat(units(after, "A+") - units(before, "A+")).isEqualTo(14);
         assertThat(units(after, "AB-") - units(before, "AB-")).isEqualTo(40);
         assertThat(after.groups()).hasSize(8);
+        // And the bank's own row counts the expired group as the zero it is: Critical.
+        assertThat(bankRow(after, bank)).isEqualTo(new StockBankRow(bank.getName(), 54, 7, 0));
+    }
+
+    /** A batch expiring today is still stock (usable through its expiry date). */
+    @Test
+    void aBatchExpiringTodayIsStillCountedAsUsableStock() throws Exception {
+        StockReport before = stockReport();
+        BloodBank bank = bank("Report Today Bank " + mark);
+        stock(bank, BloodType.O_NEGATIVE, 6, STOCK_TODAY);
+        flush();
+
+        StockReport after = stockReport();
+
+        assertThat(after.totalUnits() - before.totalUnits()).isEqualTo(6);
+        assertThat(after.expiringSoonUnits() - before.expiringSoonUnits()).isEqualTo(6);
+        assertThat(after.pastExpiryUnits() - before.pastExpiryUnits()).isZero();
     }
 
     // ---------- 2. requests ----------
@@ -291,7 +318,7 @@ class ReportsIT {
             .andExpect(status().isOk())
             .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"))
             .andExpect(header().string("Content-Disposition",
-                "attachment; filename=\"bloodlink-report-stock-" + TODAY + ".csv\""))
+                "attachment; filename=\"bloodlink-report-stock-" + STOCK_TODAY + ".csv\""))
             .andReturn();
         byte[] body = result.getResponse().getContentAsByteArray();
         String text = new String(body, StandardCharsets.UTF_8);
@@ -302,6 +329,13 @@ class ReportsIT {
         // Apostrophe-prefixed so a spreadsheet shows it as text, and quotes doubled.
         assertThat(text).contains("\"'=HYPERLINK(\"\"http://evil\"\") " + mark + "\"");
         assertThat(text).doesNotContain("\"=HYPERLINK");
+        // The stock section says plainly that it counts usable stock, and that expired
+        // units are reported apart from it (Business Rules 23 and 24).
+        assertThat(text)
+            .contains("\"Total usable units\"")
+            .contains("\"Usable units expiring within 28 days\"")
+            .contains("\"Expired units awaiting discard (not counted as stock)\"")
+            .doesNotContain("including already expired");
 
         // Called from the frontend's own origin, the file name header must be readable
         // by the page (CORS-exposed), or every download gets a generic name.
@@ -361,13 +395,9 @@ class ReportsIT {
         return bloodBankRepository.save(bank);
     }
 
+    /** One batch of stock: since Business Rule 24 a bank's stock is its batches. */
     private void stock(BloodBank bank, BloodType type, int units, LocalDate expiry) {
-        BloodInventory row = new BloodInventory();
-        row.setBloodBank(bank);
-        row.setBloodType(type);
-        row.setUnitsAvailable(units);
-        row.setExpiryDate(expiry);
-        inventoryRepository.save(row);
+        batchRepository.save(BloodInventoryBatch.manual(bank, type, units, expiry));
     }
 
     private BloodRequest request(BloodType type, UrgencyLevel urgency, RequestStatus status, String createdAt) {

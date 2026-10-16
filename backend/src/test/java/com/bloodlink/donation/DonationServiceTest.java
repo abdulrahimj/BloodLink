@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -34,12 +35,13 @@ import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
 import com.bloodlink.inventory.InventoryService;
-import com.bloodlink.inventory.dto.AddBatchRequest;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -100,7 +102,7 @@ class DonationServiceTest {
     }
 
     private static RecordDonationPayload payload(String testedGroup, int units) {
-        return new RecordDonationPayload(DONOR_ID, testedGroup, units, null);
+        return new RecordDonationPayload(DONOR_ID, testedGroup, units, null, null);
     }
 
     /** The lookup every path makes — the bank, then the donor under its lock. */
@@ -117,17 +119,17 @@ class DonationServiceTest {
             d.setId(UUID.randomUUID());
             return d;
         });
-        when(inventoryService.addBatch(any(), any(), any(), any()))
+        when(inventoryService.receiveDonation(any(), any()))
             .thenAnswer(inv -> new InventoryItemResponse(
-                inv.getArgument(1), resultingUnits, LocalDate.now().plusDays(30),
-                Instant.now(), StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE
+                ((Donation) inv.getArgument(0)).getBloodType().getLabel(), resultingUnits, LocalDate.now().plusDays(30),
+                Instant.now(), StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE, 0, 0, 1
             ));
     }
 
     private void verifyNothingWasWritten() {
         verify(donationRepository, never()).save(any());
         verify(donorRepository, never()).save(any());
-        verify(inventoryService, never()).addBatch(any(), any(), any(), any());
+        verify(inventoryService, never()).receiveDonation(any(), any());
     }
 
     // ---------- the three effects ----------
@@ -172,8 +174,13 @@ class DonationServiceTest {
         verify(donationRepository).save(donationCaptor.capture());
         assertThat(donationCaptor.getValue().getBloodType()).isEqualTo(BloodType.O_NEGATIVE);
 
-        // The units must land against O- stock too, not A+.
-        verify(inventoryService).addBatch(eq(BANK_ID), eq("O-"), any(), any());
+        // The units must land against O- stock too, not A+: the batch is made from
+        // the donation row itself, which carries the tested group and this bank.
+        ArgumentCaptor<Donation> batchSource = ArgumentCaptor.forClass(Donation.class);
+        verify(inventoryService).receiveDonation(batchSource.capture(), any());
+        assertThat(batchSource.getValue()).isSameAs(donationCaptor.getValue());
+        assertThat(batchSource.getValue().getBloodType()).isEqualTo(BloodType.O_NEGATIVE);
+        assertThat(batchSource.getValue().getBloodBank().getId()).isEqualTo(BANK_ID);
 
         // And the profile value is left exactly as it was — recording a donation
         // is not a back door for editing the donor's record.
@@ -186,14 +193,51 @@ class DonationServiceTest {
         stubBankAndDonor(donor);
         stubWritesAccepting(3);
 
-        service.recordDonation(payload("AB-", 2), principal());
+        DonationRecordedResponse response = service.recordDonation(payload("AB-", 2), principal());
 
-        ArgumentCaptor<AddBatchRequest> batchCaptor = ArgumentCaptor.forClass(AddBatchRequest.class);
-        verify(inventoryService).addBatch(eq(BANK_ID), eq("AB-"), batchCaptor.capture(), any());
+        // The batch is the donation's own: its units, and donation date + the 42-day
+        // StockPolicy constant, since no expiry date was entered.
+        LocalDate expected = LocalDate.now().plusDays(StockPolicy.DONATION_SHELF_LIFE_DAYS);
+        ArgumentCaptor<Donation> donationCaptor = ArgumentCaptor.forClass(Donation.class);
+        verify(inventoryService).receiveDonation(donationCaptor.capture(), eq(expected));
+        assertThat(donationCaptor.getValue().getUnitsDonated()).isEqualTo(2);
+        assertThat(response.batchExpiryDate()).isEqualTo(expected);
+        // Checked against the same today .. today + 365 rule as Add New Batch.
+        verify(inventoryService).requireAcceptableExpiry(expected);
+    }
 
-        assertThat(batchCaptor.getValue().unitsToAdd()).isEqualTo(2);
-        assertThat(batchCaptor.getValue().expiryDate())
-            .isEqualTo(LocalDate.now().plusDays(DonationService.SHELF_LIFE_DAYS));
+    @Test
+    void anEnteredExpiryDateIsUsedInsteadOfTheDefault() {
+        Donor donor = donorWithProfileGroup(null);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(3);
+        LocalDate onTheBagLabel = LocalDate.now().plusDays(35);
+
+        DonationRecordedResponse response = service.recordDonation(
+            new RecordDonationPayload(DONOR_ID, "AB-", 1, null, onTheBagLabel), principal());
+
+        verify(inventoryService).receiveDonation(any(), eq(onTheBagLabel));
+        assertThat(response.batchExpiryDate()).isEqualTo(onTheBagLabel);
+    }
+
+    /**
+     * An entered date outside today .. today + 365 is refused before anything is
+     * written — not the donation, not the donor's clock, not the stock — and before
+     * the donor's row is even locked.
+     */
+    @Test
+    void aRefusedExpiryDateWritesNothingAtAll() {
+        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        LocalDate typo = LocalDate.now().plusYears(2);
+        doThrow(new InvalidFieldException("expiryDate", "Expiry date must be within 365 days of today"))
+            .when(inventoryService).requireAcceptableExpiry(typo);
+
+        assertThatThrownBy(() -> service.recordDonation(
+                new RecordDonationPayload(DONOR_ID, "O+", 1, null, typo), principal()))
+            .isInstanceOf(InvalidFieldException.class);
+
+        verifyNothingWasWritten();
+        verify(donorRepository, never()).findByIdForUpdate(any());
     }
 
     // ---------- Business Rule 2: a hard block ----------

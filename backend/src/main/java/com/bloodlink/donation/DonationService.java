@@ -15,11 +15,11 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
 import com.bloodlink.inventory.InventoryService;
-import com.bloodlink.inventory.dto.AddBatchRequest;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
@@ -43,25 +43,20 @@ import com.bloodlink.web.error.NotFoundException;
  * the shelf — each is a worse state than the whole thing failing and being
  * entered again.
  *
- * Business Rule 7 is not reimplemented here. Step 3 calls
- * {@link InventoryService#addBatch}, which already owns the accumulation and the
- * keep-the-earlier-expiry rule; a second copy of that arithmetic is exactly how
- * the two paths into inventory would eventually start disagreeing.
+ * Step 3 makes the donation's units a batch of their own (Business Rule 24),
+ * through {@link InventoryService#receiveDonation}, which owns what follows stock
+ * rising for both ways units arrive. The batch is linked to the donation (one
+ * donation, one batch) and carries the donation's units, so the shelf can always be
+ * traced back to who gave the blood.
+ *
+ * The batch's expiry is the date the staff member enters, or, if they enter none,
+ * donation date + StockPolicy.DONATION_SHELF_LIFE_DAYS (42, the usual shelf life of
+ * red cells in additive solution; provisional until the project owner confirms the
+ * figure Makeni's labs use). An entered date must be today or later and at most 365
+ * days away, checked before anything is written.
  */
 @Service
 public class DonationService {
-
-    /**
-     * How long the units from a fresh donation are treated as good for.
-     *
-     * 42 days is the standard shelf life of red cells in an additive solution,
-     * which is what a whole-blood donation becomes. It is a default, not a
-     * measurement: BloodInventory holds one expiry per (bank, group), so a
-     * donation cannot carry the real date off its own bag label. Flagged for the
-     * project owner — if Makeni's labs use a different preparation this number
-     * should follow theirs, and this is the only place it is written down.
-     */
-    static final int SHELF_LIFE_DAYS = 42;
 
     /** "10 December 2026" — the same long form the frontend's formatFullDate
      *  uses, so the refusal reads like the rest of the app's dates. */
@@ -119,12 +114,20 @@ public class DonationService {
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType testedBloodType = BloodType.fromLabel(payload.bloodType().trim());
 
+        LocalDate today = LocalDate.now();
+
+        // The batch's expiry: as entered, or the default shelf life. An entered date
+        // is checked here, before anything is written, so a typo in the date refuses
+        // the whole action with a 400 on expiryDate rather than half of it.
+        LocalDate expiryDate = payload.expiryDate() != null
+            ? payload.expiryDate()
+            : StockPolicy.defaultDonationExpiry(today);
+        inventoryService.requireAcceptableExpiry(expiryDate);
+
         Donor donor = donorRepository.findByIdForUpdate(payload.donorId())
             .orElseThrow(() -> new NotFoundException("No donor found for this id."));
 
         requireEligible(donor);
-
-        LocalDate today = LocalDate.now();
 
         // 1. What was drawn and tested. Business Rule 4: the group stored here is
         //    the one the staff member entered from today's test — donor.getBloodType()
@@ -142,16 +145,11 @@ public class DonationService {
         donor.setLastDonationDate(today);
         donorRepository.save(donor);
 
-        // 3. The units, into this bank's stock of the tested group. addBatch owns
-        //    Business Rule 7 — units add together, expiry keeps the earlier of the
-        //    two — and raises the low-stock check on the way through, which cannot
-        //    fire on an increase but stays correct if that ever changes.
-        InventoryItemResponse stock = inventoryService.addBatch(
-            bank.getId(),
-            testedBloodType.getLabel(),
-            new AddBatchRequest(payload.unitsDonated(), today.plusDays(SHELF_LIFE_DAYS)),
-            principal
-        );
+        // 3. The units, as a new batch of the tested group linked to this donation
+        //    (Business Rule 24: no merging into older stock, no inherited date).
+        //    receiveDonation also runs the low-stock check and the appeal-cooldown
+        //    recovery that follow stock rising, exactly as Add New Batch does.
+        InventoryItemResponse stock = inventoryService.receiveDonation(saved, expiryDate);
 
         return new DonationRecordedResponse(
             saved.getId(),
@@ -164,7 +162,8 @@ public class DonationService {
             bank.getName(),
             stock.unitsAvailable(),
             stock.expiryDate(),
-            stock.status()
+            stock.status(),
+            expiryDate
         );
     }
 

@@ -1,8 +1,9 @@
 package com.bloodlink.domain.enums;
 
 /**
- * Derived (never stored) — computed from BloodInventory.unitsAvailable at read
- * time, per blood bank and blood group (CLAUDE.md Business Rule 3).
+ * Derived (never stored) — computed from a bank's USABLE units of one blood group
+ * (expired batches excluded, Business Rule 24) at read time, per blood bank and blood
+ * group (CLAUDE.md Business Rule 3).
  * Same pattern as {@link EligibilityStatus}: a fact about the data, not a column.
  */
 public enum StockStatus {

@@ -94,15 +94,17 @@ public final class ReportCsv {
             .row("As of", today.toString())
             .blank()
             .row("Measure", "Units")
-            .row("Total units", report.totalUnits())
-            .row("Expiring within " + report.expiringSoonWindowDays() + " days (including already expired)", report.expiringSoonUnits())
-            .row("Already past expiry date", report.pastExpiryUnits())
+            // Usable stock only (Business Rules 23 and 24): expired units are not stock, and
+            // appear only on their own row, never inside the two figures before it.
+            .row("Total usable units", report.totalUnits())
+            .row("Usable units expiring within " + report.expiringSoonWindowDays() + " days", report.expiringSoonUnits())
+            .row("Expired units awaiting discard (not counted as stock)", report.pastExpiryUnits())
             .blank()
-            .row("Blood group", "Units", "Status");
+            .row("Blood group", "Usable units", "Status");
         for (StockGroupRow group : report.groups()) {
             csv.row(group.bloodType(), group.units(), group.status().name());
         }
-        csv.blank().row("Blood bank", "Total units", "Critical groups", "Low groups");
+        csv.blank().row("Blood bank", "Usable units", "Critical groups", "Low groups");
         for (StockBankRow bank : report.banks()) {
             csv.row(bank.bankName(), bank.totalUnits(), bank.criticalGroups(), bank.lowGroups());
         }

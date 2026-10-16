@@ -155,10 +155,11 @@ class AdminFacilityCreationIT {
             .andExpect(status().isCreated())
             .andReturn());
 
-        // Nothing was written to blood_inventory for it...
+        // No stock batch was written for it (blood_inventory_batches has held all stock
+        // since V19)...
         entityManager.flush();
         Number rows = (Number) entityManager
-            .createNativeQuery("select count(*) from blood_inventory where blood_bank_id = :id")
+            .createNativeQuery("select count(*) from blood_inventory_batches where blood_bank_id = :id")
             .setParameter("id", bankId)
             .getSingleResult();
         assertThat(rows.longValue()).isZero();

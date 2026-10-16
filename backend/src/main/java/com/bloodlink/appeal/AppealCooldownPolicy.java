@@ -107,8 +107,8 @@ public class AppealCooldownPolicy {
      * Ends a cooldown for good once stock has climbed back over the threshold that
      * triggered it — 15 for CRITICAL, 30 for LOW.
      *
-     * Called from the one place stock can rise ({@code InventoryService.addBatch},
-     * which every route into inventory goes through under Business Rule 7), so the
+     * Called from the one place usable stock can rise (InventoryService, where a new
+     * batch arrives by Add New Batch or Record Donation), with usable units, so the
      * clearing happens at the moment of the crossing rather than being re-decided
      * on every later read. That is the whole point: the appeal this cooldown was
      * throttling has done its job, so the cooldown is finished. If the group later

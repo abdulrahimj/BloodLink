@@ -11,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
-import com.bloodlink.domain.BloodInventory;
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.BloodRequestContribution;
 import com.bloodlink.domain.BloodRequestDecline;
@@ -22,7 +21,6 @@ import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
@@ -31,6 +29,7 @@ import com.bloodlink.request.dto.BloodRequestResponse;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.stock.BatchStockService;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
@@ -64,7 +63,7 @@ import com.bloodlink.web.error.NotFoundException;
 public class RequestService {
 
     private final BloodRequestRepository bloodRequestRepository;
-    private final BloodInventoryRepository bloodInventoryRepository;
+    private final BatchStockService batchStockService;
     private final BloodRequestDeclineRepository declineRepository;
     private final BloodRequestContributionRepository contributionRepository;
     private final BloodBankRepository bloodBankRepository;
@@ -74,7 +73,7 @@ public class RequestService {
 
     RequestService(
         BloodRequestRepository bloodRequestRepository,
-        BloodInventoryRepository bloodInventoryRepository,
+        BatchStockService batchStockService,
         BloodRequestDeclineRepository declineRepository,
         BloodRequestContributionRepository contributionRepository,
         BloodBankRepository bloodBankRepository,
@@ -83,7 +82,7 @@ public class RequestService {
         NotificationService notificationService
     ) {
         this.bloodRequestRepository = bloodRequestRepository;
-        this.bloodInventoryRepository = bloodInventoryRepository;
+        this.batchStockService = batchStockService;
         this.declineRepository = declineRepository;
         this.contributionRepository = contributionRepository;
         // Used for one question only: how many blood banks exist, which is what
@@ -272,15 +271,23 @@ public class RequestService {
      *      between the operator reading the screen and pressing the button, another
      *      bank may have taken part of it, and that is not their mistake to be
      *      punished for. The response says what was actually recorded.
-     *   4. Stock is re-read under its own write lock and must cover the capped
-     *      amount. Asking for more than this bank holds *is* refused (rather than
-     *      capped again): that is a mistake about its own shelf, and quietly issuing
-     *      fewer units than the operator typed would leave them believing they had
-     *      sent more than they did.
-     *   5. The deduction, the contribution row and the new status are written
-     *      together. There is no ordering of these that can half-happen — one
-     *      transaction covers all three — so units can never leave stock without
-     *      being recorded, nor be recorded without leaving stock.
+     *   4. This bank's USABLE batches of the group are locked, in issue order
+     *      (earliest expiry, then id), and must cover the capped amount; units in
+     *      expired batches never count (Business Rule 24). The request row was locked
+     *      first, in act(), and batches second: that is the one lock order anywhere,
+     *      so no two transactions can each hold what the other needs. Asking for more
+     *      than this bank holds *is* refused (rather than capped again): that is a
+     *      mistake about its own shelf, and quietly issuing fewer units than the
+     *      operator typed would leave them believing they had sent more than they
+     *      did. The refusal names the usable units, the units asked for, and the
+     *      expired units that could not be counted.
+     *   5. The units are taken first expiry, first out (FefoAllocator), so blood is
+     *      used before it can go to waste.
+     *   6. The deductions, the contribution row, one allocation row per batch drawn
+     *      on (which batches the units came from, adding up to units_contributed),
+     *      and the new status are written together. One transaction covers them all,
+     *      so units can never leave stock without being recorded, nor be recorded
+     *      without leaving stock.
      */
     private void contribute(BloodRequest request, BloodBank actingBank, Integer requestedUnits) {
         if (requestedUnits == null || requestedUnits <= 0) {
@@ -313,18 +320,12 @@ public class RequestService {
         }
         int units = Math.min(requestedUnits, outstanding);
 
-        BloodInventory stock = bloodInventoryRepository
-            .findByBloodBankIdAndBloodTypeForUpdate(actingBank.getId(), request.getBloodType())
-            .orElseThrow(() -> insufficientStock(request, 0, units));
-
-        if (stock.getUnitsAvailable() < units) {
-            throw insufficientStock(request, stock.getUnitsAvailable(), units);
+        BatchStockService.Issue issue;
+        try {
+            issue = batchStockService.issue(actingBank.getId(), request.getBloodType(), units);
+        } catch (BatchStockService.InsufficientStockException shortOfStock) {
+            throw insufficientStock(request, shortOfStock.getUsableUnits(), units, shortOfStock.getExpiredUnits());
         }
-
-        int unitsBefore = stock.getUnitsAvailable();
-        stock.setUnitsAvailable(unitsBefore - units);
-        // touch() on the entity's @PreUpdate refreshes lastUpdated.
-        bloodInventoryRepository.save(stock);
 
         BloodRequestContribution contribution = new BloodRequestContribution();
         contribution.setBloodRequest(request);
@@ -332,6 +333,9 @@ public class RequestService {
         contribution.setUnitsContributed(units);
         // contributedAt is set by the entity's @PrePersist.
         contributionRepository.save(contribution);
+        // Which batches the units came from. Refuses (rolling everything back) if the
+        // draws do not add up to the contribution's units.
+        batchStockService.recordAllocations(contribution, issue);
 
         int contributedNow = alreadyContributed + units;
         // Status is derived, never declared: whatever the arithmetic says is what
@@ -346,7 +350,7 @@ public class RequestService {
         // the inventory save so the alert reflects the deduction that actually
         // happened, after every check above has passed.
         notificationService.notifyStockCrossing(
-            actingBank, request.getBloodType(), unitsBefore, stock.getUnitsAvailable()
+            actingBank, request.getBloodType(), issue.usableBefore(), issue.usableAfter()
         );
 
         // The hospital hears about units that arrived without completing the
@@ -449,14 +453,22 @@ public class RequestService {
      *  rather than being told only that it failed. Names the units this bank was
      *  trying to contribute — which may be fewer than the request asked for, since
      *  another bank may already have covered part of it. */
-    private ConflictException insufficientStock(BloodRequest request, int available, int attempted) {
+    /**
+     * The 409 for a contribution this bank's usable stock cannot cover. Names the
+     * usable units, the units being contributed, and the expired units on the shelf
+     * that could not be counted, so an operator who can see 12 bags in the fridge
+     * understands why the system says 9.
+     */
+    private ConflictException insufficientStock(BloodRequest request, int usable, int attempted, int expired) {
         return new ConflictException(
-            "Not enough %s in stock — %d unit%s available, %d being contributed."
+            "Not enough usable %s in stock — %d unit%s available, %d being contributed (%d expired unit%s cannot be issued)."
                 .formatted(
                     request.getBloodType().getLabel(),
-                    available,
-                    available == 1 ? "" : "s",
-                    attempted
+                    usable,
+                    usable == 1 ? "" : "s",
+                    attempted,
+                    expired,
+                    expired == 1 ? "" : "s"
                 )
         );
     }

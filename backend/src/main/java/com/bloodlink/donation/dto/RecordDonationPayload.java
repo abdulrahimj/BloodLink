@@ -1,5 +1,6 @@
 package com.bloodlink.donation.dto;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 import com.bloodlink.domain.enums.BloodType;
@@ -55,5 +56,15 @@ public record RecordDonationPayload(
      * ADMIN, who belongs to no single bank. The same split ActingBankResolver
      * already applies to inventory writes and donation appeals.
      */
-    UUID bloodBankId
+    UUID bloodBankId,
+
+    /**
+     * Optional: the last day the donated units may be used, inclusive, as on the bag
+     * label. When absent, the donation date + StockPolicy.DONATION_SHELF_LIFE_DAYS
+     * (42, provisional). When given, it must be today or later and at most 365 days
+     * away (StockPolicy), or the whole request is a 400 on this field with nothing
+     * written. Checked in DonationService rather than by annotation, because the rule
+     * and its UTC "today" are shared with Add New Batch.
+     */
+    LocalDate expiryDate
 ) {}

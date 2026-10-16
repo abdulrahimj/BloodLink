@@ -26,11 +26,13 @@ import com.bloodlink.admin.report.dto.ReportDtos.RequestReport;
 import com.bloodlink.admin.report.dto.ReportDtos.StockBankRow;
 import com.bloodlink.admin.report.dto.ReportDtos.StockGroupRow;
 import com.bloodlink.admin.report.dto.ReportDtos.StockReport;
+import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.StockStatus;
-import com.bloodlink.repository.BloodInventoryRepository;
-import com.bloodlink.repository.BloodInventoryRepository.BankStockRow;
+import com.bloodlink.repository.BloodBankRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository.BankGroupUnits;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.BloodTypeCount;
 import com.bloodlink.repository.DonationRepository;
@@ -48,7 +50,8 @@ class ReportSummaryServiceTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 10, 15);
 
-    @Mock private BloodInventoryRepository inventoryRepository;
+    @Mock private BloodInventoryBatchRepository batchRepository;
+    @Mock private BloodBankRepository bloodBankRepository;
     @Mock private BloodRequestRepository requestRepository;
     @Mock private DonationRepository donationRepository;
     @Mock private DonorRepository donorRepository;
@@ -59,10 +62,9 @@ class ReportSummaryServiceTest {
 
     @Test
     void citywideGroupStatusUsesBusinessRule3AtBothEdges() {
-        when(inventoryRepository.sumUnitsByBloodType()).thenReturn(List.of(
+        when(batchRepository.sumUsableUnitsByBloodType(TODAY)).thenReturn(List.of(
             typeCount(BloodType.A_POSITIVE, 14), typeCount(BloodType.A_NEGATIVE, 15),
             typeCount(BloodType.B_POSITIVE, 39), typeCount(BloodType.B_NEGATIVE, 40)));
-        when(inventoryRepository.summariseStockByBank(15, 40)).thenReturn(List.of());
 
         StockReport report = service.stock(TODAY);
 
@@ -76,38 +78,54 @@ class ReportSummaryServiceTest {
         assertThat(report.totalUnits()).isEqualTo(108);
     }
 
+    /**
+     * Each bank's eight groups are judged one by one with StockStatus, the same rule
+     * its own Inventory page applies, on the usable units the database summed per
+     * (bank, group). The thresholds are StockStatus's own, not written again here.
+     */
     @Test
-    void thresholdsArePassedToTheDatabaseFromStockStatusNotWrittenAgain() {
-        when(inventoryRepository.sumUnitsByBloodType()).thenReturn(List.of());
-        when(inventoryRepository.summariseStockByBank(StockStatus.CRITICAL_BELOW, StockStatus.LOW_BELOW))
-            .thenReturn(List.of(bankRow("Partly Stocked", 108, 4, 1, 2), bankRow("No Stock Yet", 0, 0, 0, 0)));
+    void eachBanksGroupsAreJudgedWithStockStatusAndMissingGroupsAreCritical() {
+        BloodBank partly = bank("Partly Stocked");
+        BloodBank empty = bank("No Stock Yet");
+        when(bloodBankRepository.findAllByOrderByNameAsc()).thenReturn(List.of(partly, empty));
+        when(batchRepository.sumUsableUnitsByBankAndBloodType(TODAY)).thenReturn(List.of(
+            bankGroup(partly, BloodType.A_POSITIVE, StockStatus.LOW_BELOW + 10),  // 50: Sufficient
+            bankGroup(partly, BloodType.A_NEGATIVE, StockStatus.LOW_BELOW - 20),  // 20: Low
+            bankGroup(partly, BloodType.B_POSITIVE, StockStatus.CRITICAL_BELOW + 15), // 30: Low
+            bankGroup(partly, BloodType.B_NEGATIVE, StockStatus.CRITICAL_BELOW - 7))); // 8: Critical
 
         StockReport report = service.stock(TODAY);
 
-        // Groups with no row are zero units, so Critical — as the bank's own page shows.
+        // Groups with no usable stock are zero units, so Critical — as the bank's own
+        // page shows: 1 judged Critical + 4 never stocked = 5.
         assertThat(report.banks()).containsExactly(
             new StockBankRow("Partly Stocked", 108, 5, 2),
             new StockBankRow("No Stock Yet", 0, 8, 0));
     }
 
+    /**
+     * Business Rules 23 and 24: expired units are reported on their own and are NOT
+     * part of the total or of "expiring soon". Expiring soon is usable units within
+     * StockPolicy's 28-day window, so the expired 5 can never be inside the 19.
+     */
     @Test
-    void expiringSoonUsesTheInventoryPagesTwentyEightDayWindow() {
-        when(inventoryRepository.sumUnitsByBloodType()).thenReturn(List.of());
-        when(inventoryRepository.summariseStockByBank(15, 40)).thenReturn(List.of());
-        when(inventoryRepository.sumUnitsExpiringOnOrBefore(TODAY.plusDays(28))).thenReturn(19L);
-        when(inventoryRepository.sumUnitsPastExpiry(TODAY)).thenReturn(5L);
+    void expiredUnitsAreReportedSeparatelyAndExpiringSoonIsUsableStockWithinTwentyEightDays() {
+        when(batchRepository.sumUsableUnitsByBloodType(TODAY)).thenReturn(List.of(typeCount(BloodType.O_POSITIVE, 60)));
+        when(batchRepository.sumUsableUnitsExpiringOnOrBefore(TODAY, TODAY.plusDays(28))).thenReturn(19L);
+        when(batchRepository.sumExpiredUnits(TODAY)).thenReturn(5L);
 
         StockReport report = service.stock(TODAY);
 
         assertThat(report.expiringSoonUnits()).isEqualTo(19);
         assertThat(report.pastExpiryUnits()).isEqualTo(5);
         assertThat(report.expiringSoonWindowDays()).isEqualTo(28);
+        // The total is usable stock only: the 5 expired units are not added to it.
+        assertThat(report.totalUnits()).isEqualTo(60);
     }
 
     @Test
     void anEmptyDatabaseGivesEightZeroGroupsAndNoBanks() {
-        when(inventoryRepository.sumUnitsByBloodType()).thenReturn(List.of());
-        when(inventoryRepository.summariseStockByBank(15, 40)).thenReturn(List.of());
+        when(batchRepository.sumUsableUnitsByBloodType(TODAY)).thenReturn(List.of());
 
         StockReport report = service.stock(TODAY);
 
@@ -238,14 +256,18 @@ class ReportSummaryServiceTest {
         };
     }
 
-    private static BankStockRow bankRow(String name, long units, long stockedGroups, long critical, long low) {
-        return new BankStockRow() {
-            public UUID getBankId() { return UUID.randomUUID(); }
-            public String getBankName() { return name; }
-            public long getTotalUnits() { return units; }
-            public long getStockedGroups() { return stockedGroups; }
-            public long getCriticalRows() { return critical; }
-            public long getLowRows() { return low; }
+    private static BloodBank bank(String name) {
+        BloodBank bank = new BloodBank();
+        bank.setId(UUID.randomUUID());
+        bank.setName(name);
+        return bank;
+    }
+
+    private static BankGroupUnits bankGroup(BloodBank bank, BloodType type, long units) {
+        return new BankGroupUnits() {
+            public UUID getBankId() { return bank.getId(); }
+            public BloodType getBloodType() { return type; }
+            public long getUsableUnits() { return units; }
         };
     }
 }

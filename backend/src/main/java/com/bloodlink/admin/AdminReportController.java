@@ -71,10 +71,10 @@ public class AdminReportController {
     // is a 400 naming the field (GlobalExceptionHandler.handleTypeMismatch), and
     // ReportRange.resolve refuses a backwards range or one longer than five years.
 
-    /** Section 1: stock across every bank, as of today. */
+    /** Section 1: usable stock across every bank, as of today in UTC (StockPolicy). */
     @GetMapping("/summary/stock")
     public StockReport stockSummary() {
-        return reportSummaryService.stock(LocalDate.now());
+        return reportSummaryService.stock(reportSummaryService.stockDate());
     }
 
     /** Section 2: hospital requests raised in the range. */
@@ -103,7 +103,7 @@ public class AdminReportController {
 
     @GetMapping("/summary/stock/export")
     public ResponseEntity<byte[]> exportStock() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = reportSummaryService.stockDate();
         return csv(ReportCsv.stock(reportSummaryService.stock(today), today), ReportCsv.fileName("stock", today));
     }
 

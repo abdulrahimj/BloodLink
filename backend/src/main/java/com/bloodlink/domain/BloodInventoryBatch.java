@@ -27,8 +27,8 @@ import lombok.NoArgsConstructor;
 
 /**
  * One batch of blood units at one bank, with its own expiry date — the batch-stock
- * redesign (table V18). Replaces the one-row-per-(bank, group) {@link BloodInventory}
- * at cutover (V19); until then nothing in the application uses this class.
+ * redesign (table V18). Since the V19 cutover the only record of stock: it replaced
+ * the old one-row-per-(bank, group) blood_inventory table (Business Rule 24).
  *
  * <h2>What can change, and what cannot</h2>
  * Only {@link #unitsRemaining}, {@link #lastUpdated} and {@link #expiryNoticedAt}

@@ -28,8 +28,10 @@ public final class ReportDtos {
      *  the same per-group judgement its own inventory page makes. */
     public record StockBankRow(String bankName, long totalUnits, int criticalGroups, int lowGroups) {}
 
-    /** Section 1. Units past their expiry date are counted as stock, as the Inventory
-     *  screen's totals count them; {@code pastExpiryUnits} says how many of the total that is. */
+    /** Section 1: USABLE stock only (Business Rules 23 and 24). {@code totalUnits} and
+     *  {@code expiringSoonUnits} exclude every unit in an expired batch;
+     *  {@code pastExpiryUnits} is those expired units, awaiting discard, reported on their
+     *  own and NOT part of the total. (The field name predates the rule reversing.) */
     public record StockReport(
         long totalUnits,
         long expiringSoonUnits,
