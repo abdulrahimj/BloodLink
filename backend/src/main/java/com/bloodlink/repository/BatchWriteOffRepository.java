@@ -12,8 +12,8 @@ import com.bloodlink.domain.BatchWriteOff;
 
 /**
  * The write-off ledger (V18). Append-only: a bare {@link Repository} with no way to
- * change or remove an entry. Nothing writes to it until the write-off action
- * (Stage 3); the batch history already reads it, so that page needs no change then.
+ * change or remove an entry. Written only by the write-off action
+ * (BatchWriteOffService); read by the batch history.
  */
 public interface BatchWriteOffRepository extends Repository<BatchWriteOff, UUID> {
 

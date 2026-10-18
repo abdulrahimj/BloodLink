@@ -142,7 +142,8 @@ const HEADINGS = {
 /** How each audit action reads, and the badge tone it wears: the two that remove
  *  or restrict access in red and green (the same pair Suspend/Activate use), a
  *  creation in navy, an edit in amber. A facility being added is a creation too,
- *  so it wears the same navy; the Subject column says what kind of thing it was. */
+ *  so it wears the same navy; the Subject column says what kind of thing it was.
+ *  Stock written off a batch (Business Rule 24) is blood lost, so it wears red. */
 const AUDIT_ACTION = {
   ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
   ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
@@ -150,13 +151,16 @@ const AUDIT_ACTION = {
   ACCOUNT_REACTIVATED: { label: "Reactivated", tone: "ad-au-reactivated" },
   BLOOD_BANK_CREATED: { label: "Created", tone: "ad-au-created" },
   HOSPITAL_CREATED: { label: "Created", tone: "ad-au-created" },
+  STOCK_WRITTEN_OFF: { label: "Written off", tone: "ad-au-written-off" },
 };
 
-/** The line under an audit entry's subject: the account's role, or which kind of
- *  facility it is (Business Rule 19 — a facility has no role). */
+/** The line under an audit entry's subject: the account's role, which kind of
+ *  facility it is (Business Rule 19 — a facility has no role), or a stock batch
+ *  (a write-off; the server names it by group, expiry date and bank). */
 function auditSubjectKind(entry) {
   if (entry.targetType === "BLOOD_BANK") return "Blood bank";
   if (entry.targetType === "HOSPITAL") return "Hospital";
+  if (entry.targetType === "BATCH") return "Stock batch";
   return ROLE_LABEL[entry.targetRole] ?? entry.targetRole;
 }
 
@@ -502,6 +506,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-au-edited      { background: var(--amber); }
         .ad-au-suspended   { background: var(--red); }
         .ad-au-reactivated { background: var(--green); }
+        .ad-au-written-off { background: var(--red); }
 
         /* paging footer, below the table */
         .ad-log-pager {

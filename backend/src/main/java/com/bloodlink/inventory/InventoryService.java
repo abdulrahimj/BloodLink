@@ -323,9 +323,22 @@ public class InventoryService {
     // ---------- helpers ----------
 
     /**
+     * The bank, if it exists (404 otherwise) and the caller may manage it (403
+     * otherwise): ADMIN any bank, BLOOD_BANK_STAFF only their own. Public so the
+     * write-off action (BatchWriteOffService) applies this same rule rather than a
+     * copy of it: an access rule written twice is a rule that will one day be fixed
+     * in one place and not the other.
+     */
+    public BloodBank requireManageableBank(UUID bloodBankId, AuthenticatedUser principal) {
+        BloodBank bank = requireBank(bloodBankId);
+        assertCanManage(bloodBankId, principal);
+        return bank;
+    }
+
+    /**
      * ADMIN may manage any bank. BLOOD_BANK_STAFF may manage only the bank on their
      * own User row — null (no admin has assigned one yet) means access to none. Used
-     * for adding stock and for reading batch-level detail alike.
+     * for adding stock, reading batch-level detail and writing stock off alike.
      */
     private void assertCanManage(UUID bloodBankId, AuthenticatedUser principal) {
         if (principal.getRole() == Role.ADMIN) {

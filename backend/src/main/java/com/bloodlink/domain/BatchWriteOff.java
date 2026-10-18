@@ -1,6 +1,7 @@
 package com.bloodlink.domain;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.hibernate.annotations.Immutable;
@@ -25,12 +26,12 @@ import lombok.NoArgsConstructor;
 
 /**
  * Units of one batch discarded, why, and by whom — the write-off ledger of the
- * batch-stock redesign (table V18). Nothing in the application writes these yet.
+ * batch-stock redesign (table V18). Written only by the write-off action,
+ * BatchWriteOffService (Stage 3).
  *
  * Append-only for the same reasons and by the same four means as
  * {@link ContributionAllocation}. The matching STOCK_WRITTEN_OFF audit-log entry is
- * written alongside it by the write-off service (a later stage), in the same
- * transaction.
+ * written alongside it by BatchWriteOffService, in the same transaction.
  */
 @Entity
 @Table(name = "batch_write_offs")
@@ -81,21 +82,54 @@ public class BatchWriteOff {
         if (units <= 0) {
             throw new IllegalArgumentException("A write-off must be at least one unit.");
         }
-        String cleanNote = note == null || note.isBlank() ? null : note.strip();
-        if (reason.requiresNote() && cleanNote == null) {
-            throw new IllegalArgumentException("A note is required when the reason is " + reason + ".");
-        }
-        if (cleanNote != null && cleanNote.length() > NOTE_MAX_LENGTH) {
-            throw new IllegalArgumentException("A note must be at most " + NOTE_MAX_LENGTH + " characters.");
-        }
+        problemWithNote(reason, note).ifPresent(problem -> {
+            throw new IllegalArgumentException(problem);
+        });
 
         BatchWriteOff writeOff = new BatchWriteOff();
         writeOff.batch = batch;
         writeOff.units = units;
         writeOff.reason = reason;
-        writeOff.note = cleanNote;
+        writeOff.note = cleanNote(note);
         writeOff.writtenOffBy = writtenOffBy;
         return writeOff;
+    }
+
+    /**
+     * The same, stamped with the moment it happened as read from the application's
+     * clock — what the write-off action uses, so that the entry, its audit-log entry
+     * and the batch's last_updated all carry one instant, and a test can fix it.
+     */
+    public static BatchWriteOff record(
+        BloodInventoryBatch batch, int units, WriteOffReason reason, String note, User writtenOffBy,
+        Instant writtenOffAt
+    ) {
+        BatchWriteOff writeOff = record(batch, units, reason, note, writtenOffBy);
+        writeOff.writtenOffAt = writtenOffAt;
+        return writeOff;
+    }
+
+    /** A note as it is stored: trimmed, and blank becomes null (never ''). */
+    public static String cleanNote(String note) {
+        return note == null || note.isBlank() ? null : note.strip();
+    }
+
+    /**
+     * What is wrong with a note for this reason, or empty if it is acceptable:
+     * required for OTHER, at most {@link #NOTE_MAX_LENGTH} characters once trimmed.
+     * Returned rather than thrown, as StockPolicy.problemWithEnteredExpiry is, so the
+     * write-off endpoint can attach it to its own "note" field — one copy of the rule
+     * for the endpoint and this factory alike.
+     */
+    public static Optional<String> problemWithNote(WriteOffReason reason, String note) {
+        String clean = cleanNote(note);
+        if (reason.requiresNote() && clean == null) {
+            return Optional.of("A note is required when the reason is " + reason + ".");
+        }
+        if (clean != null && clean.length() > NOTE_MAX_LENGTH) {
+            return Optional.of("A note must be at most " + NOTE_MAX_LENGTH + " characters.");
+        }
+        return Optional.empty();
     }
 
     @PrePersist

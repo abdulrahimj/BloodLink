@@ -46,9 +46,13 @@ import lombok.NoArgsConstructor;
  *
  * <h2>One subject per entry</h2>
  * An account action's subject is {@link #target}; a facility creation's (Business
- * Rule 19, V14) is {@link #targetBloodBank} or {@link #targetHospital}. Exactly one
- * of the three is set, matching the action — the factory methods below build only
- * those shapes, and V14's CHECK constraint refuses any other at the database.
+ * Rule 19, V14) is {@link #targetBloodBank} or {@link #targetHospital}; a stock
+ * write-off's (Business Rule 24, V18) is {@link #targetBatch}. Exactly one of the
+ * four is set, matching the action — the factory methods below build only those
+ * shapes, and V18's CHECK constraint refuses any other at the database.
+ *
+ * The actor is an administrator for every action except STOCK_WRITTEN_OFF, whose
+ * actor may also be a member of the batch's own bank's staff.
  */
 @Entity
 @Table(name = "audit_log")
@@ -86,6 +90,11 @@ public class AuditLog {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_hospital_id", updatable = false)
     private Hospital targetHospital;
+
+    /** The batch units were written off from — set only for STOCK_WRITTEN_OFF (V18). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_batch_id", updatable = false)
+    private BloodInventoryBatch targetBatch;
 
     /** What changed, in words, as of the moment it changed. Never a password. */
     @Column(name = "details", nullable = false, updatable = false, columnDefinition = "text")
@@ -125,6 +134,23 @@ public class AuditLog {
         entry.action = AuditAction.HOSPITAL_CREATED;
         entry.targetHospital = hospital;
         entry.details = details;
+        return entry;
+    }
+
+    /**
+     * Units written off one batch, as a STOCK_WRITTEN_OFF entry (Business Rule 24).
+     * Stamped with {@code createdAt} from the application's clock, the same instant
+     * as the write-off it records, rather than left to {@link #onCreate}.
+     */
+    public static AuditLog recordStockWrittenOff(
+        User actor, BloodInventoryBatch batch, String details, Instant createdAt
+    ) {
+        AuditLog entry = new AuditLog();
+        entry.actor = actor;
+        entry.action = AuditAction.STOCK_WRITTEN_OFF;
+        entry.targetBatch = batch;
+        entry.details = details;
+        entry.createdAt = createdAt;
         return entry;
     }
 

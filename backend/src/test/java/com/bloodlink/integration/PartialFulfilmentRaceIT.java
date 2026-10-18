@@ -42,8 +42,10 @@ import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.domain.enums.WriteOffReason;
+import com.bloodlink.inventory.BatchWriteOffService;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.AddBatchRequest;
+import com.bloodlink.inventory.dto.WriteOffBatchRequest;
 import com.bloodlink.repository.BatchWriteOffRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodInventoryBatchRepository;
@@ -82,6 +84,9 @@ import com.bloodlink.security.AuthenticatedUser;
  * is the only thing standing between them and a hospital being sent more blood than
  * it asked for, out of two banks' shelves.
  *
+ * Since batch-level stock the batch locks are proven here too, including a write-off
+ * (Stage 3) racing a contribution for the same batch.
+ *
  * <pre>{@code .\mvnw.cmd test -Dtest=PartialFulfilmentRaceIT}</pre>
  */
 @SpringBootTest
@@ -97,6 +102,7 @@ class PartialFulfilmentRaceIT {
 
     @Autowired private RequestService requestService;
     @Autowired private InventoryService inventoryService;
+    @Autowired private BatchWriteOffService batchWriteOffService;
     @Autowired private UserRepository userRepository;
     @Autowired private BloodBankRepository bloodBankRepository;
     @Autowired private HospitalRepository hospitalRepository;
@@ -409,6 +415,71 @@ class PartialFulfilmentRaceIT {
         assertThat(remaining(batchId)).isEqualTo(2);
         assertThat(contributionRepository.sumUnitsForRequest(request)).isZero();
         assertLedgersBalance();
+    }
+
+    /**
+     * A write-off (Stage 3) and a contribution reaching for the same batch at the same
+     * instant: 5 units on the shelf, the contribution wanting 4 and the write-off 3.
+     * Both cannot fit, so exactly one may succeed — whichever takes the batch's lock
+     * first — and the other must wait, re-read the units really left, and be refused.
+     * Without the lock both would read 5 and 7 units would leave a shelf holding 5;
+     * the database's CHECK would then refuse one of them only as a failed commit.
+     *
+     * Five rounds, each on a fresh bank, so the race is run more than once and the
+     * assertions hold whichever side wins it.
+     */
+    @Test
+    void aWriteOffAndAContributionRacingForOneBatchNeverTakeMoreUnitsThanItHolds() throws Exception {
+        for (int round = 0; round < 5; round++) {
+            Shelf shelf = new Shelf("AB+");
+            UUID batchId = shelf.addBatch(5, 20);
+            UUID request = shelf.raiseRequest(4);
+
+            CyclicBarrier startTogether = new CyclicBarrier(2);
+            ExecutorService threads = Executors.newFixedThreadPool(2);
+            Outcome contributed;
+            Outcome wroteOff;
+            try {
+                Future<Outcome> contribution = threads.submit(() -> {
+                    startTogether.await(30, TimeUnit.SECONDS);
+                    return contribute(shelf, request, 4);
+                });
+                Future<Outcome> writeOff = threads.submit(() -> {
+                    startTogether.await(30, TimeUnit.SECONDS);
+                    return writeOff(shelf, batchId, 3);
+                });
+                contributed = contribution.get(30, TimeUnit.SECONDS);
+                wroteOff = writeOff.get(30, TimeUnit.SECONDS);
+            } finally {
+                threads.shutdownNow();
+            }
+
+            assertThat(List.of(contributed, wroteOff)).as("round " + round).filteredOn(Outcome::succeeded).hasSize(1);
+            if (contributed.succeeded()) {
+                // The contribution took 4; the write-off then saw the 1 really left.
+                assertThat(wroteOff.failure()).contains("only 1 unit left", "3 units cannot be written off");
+            } else {
+                // The write-off took 3; the contribution then saw the 2 really left.
+                assertThat(contributed.failure()).contains("2 units available", "4 being contributed");
+            }
+
+            int taken = (contributed.succeeded() ? 4 : 0) + (wroteOff.succeeded() ? 3 : 0);
+            int writtenOff = writeOffRepository.findForBatch(batchId).stream().mapToInt(BatchWriteOff::getUnits).sum();
+            assertThat(remaining(batchId)).isEqualTo(5 - taken);
+            assertThat(contributionRepository.sumUnitsForRequest(request) + writtenOff).isEqualTo(taken);
+            assertLedgersBalance();
+        }
+    }
+
+    private Outcome writeOff(Shelf shelf, UUID batchId, int units) {
+        try {
+            batchWriteOffService.writeOff(shelf.bank.getId(), batchId,
+                new WriteOffBatchRequest(units, WriteOffReason.DAMAGED.name(), null),
+                principalFor(shelf.staff, Role.BLOOD_BANK_STAFF));
+            return new Outcome(true, null);
+        } catch (RuntimeException refused) {
+            return new Outcome(false, String.valueOf(refused.getMessage()));
+        }
     }
 
     /** Every request contributed to at once, one thread each, released together. */

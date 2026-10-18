@@ -21,6 +21,7 @@ import jakarta.persistence.OneToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -134,6 +135,30 @@ public class BloodInventoryBatch {
         unitsRemaining -= units;
     }
 
+    /**
+     * The same deduction, with last_updated stamped at {@code at} — an instant read
+     * from the application's clock by the caller (the write-off action) — instead of
+     * by the {@link #onUpdate} hook's system clock. The value is set now, so a
+     * response built before the transaction flushes already shows it.
+     */
+    public void deductUnits(int units, Instant at) {
+        deductUnits(units);
+        lastUpdated = at;
+        lastUpdatedGiven = true;
+    }
+
+    /**
+     * Set by {@link #deductUnits(int, Instant)} so the update hook keeps the instant it
+     * was given. Not a column: it lives only as long as this loaded instance, which is
+     * one transaction, and a freshly loaded batch always starts false. Deliberately
+     * never reset by the hook — Hibernate may run the hook more than once within the
+     * transaction (an automatic flush before a query, then the commit), and resetting
+     * it after the first run let the second overwrite the given instant.
+     */
+    @Transient
+    @Getter(AccessLevel.NONE)
+    private boolean lastUpdatedGiven;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();
@@ -145,6 +170,8 @@ public class BloodInventoryBatch {
 
     @PreUpdate
     void onUpdate() {
-        lastUpdated = Instant.now();
+        if (!lastUpdatedGiven) {
+            lastUpdated = Instant.now();
+        }
     }
 }

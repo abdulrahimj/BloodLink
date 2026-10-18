@@ -39,9 +39,11 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
      * so pagination's LIMIT/OFFSET is still applied to whole rows, not fragments
      * of a to-many collection.
      *
-     * The three subjects are LEFT joins because each entry has exactly one of them
-     * (V14): an inner join on the account would silently drop every facility
-     * creation from the page, and an inner join on a facility every account action.
+     * The four subjects are LEFT joins because each entry has exactly one of them
+     * (V14, V18): an inner join on the account would silently drop every facility
+     * creation and write-off from the page, and so on for each of the others. A
+     * write-off's batch is fetched with its bank, since the page names both; still
+     * to-one all the way down.
      *
      * {@code order by a.createdAt desc, a.id desc} — the tie-breaker. Two entries
      * can share a timestamp (they are often written back-to-back in the same
@@ -59,6 +61,7 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
     @Query(
         value = "select a from AuditLog a join fetch a.actor left join fetch a.target"
             + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
+            + " left join fetch a.targetBatch tb left join fetch tb.bloodBank"
             + " order by a.createdAt desc, a.id desc",
         countQuery = "select count(a) from AuditLog a"
     )
@@ -76,6 +79,11 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
     /** Creation entries for one hospital — used by tests (Business Rule 19). */
     @Query("select a from AuditLog a join fetch a.actor join fetch a.targetHospital where a.targetHospital.id = :hospitalId")
     List<AuditLog> findByTargetHospitalId(@Param("hospitalId") UUID hospitalId);
+
+    /** Write-off entries for one batch, oldest first — used by tests (Business Rule 24). */
+    @Query("select a from AuditLog a join fetch a.actor join fetch a.targetBatch"
+        + " where a.targetBatch.id = :batchId order by a.createdAt asc, a.id asc")
+    List<AuditLog> findByTargetBatchIdOldestFirst(@Param("batchId") UUID batchId);
 
     long count();
 }

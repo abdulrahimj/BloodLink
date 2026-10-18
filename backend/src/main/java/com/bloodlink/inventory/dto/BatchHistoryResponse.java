@@ -20,7 +20,7 @@ public record BatchHistoryResponse(
     BatchResponse batch,
     /** Units of this batch issued to hospital requests. */
     int unitsIssued,
-    /** Units of this batch written off. Always 0 until write-offs exist (Stage 3). */
+    /** Units of this batch written off (POST .../batches/{batchId}/write-offs). */
     int unitsWrittenOff,
     List<IssueEntry> issues,
     List<WriteOffEntry> writeOffs

@@ -66,7 +66,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 2 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock. Still to come: Stage 3 the write-off action and its audit entries (the tables and the `STOCK_WRITTEN_OFF` audit action exist, nothing writes them yet), Stage 4 the frontend, Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries. Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
 
 ### User
 | field | type |
@@ -177,9 +177,9 @@ DELETE and TRUNCATE (including a TRUNCATE reaching it by CASCADE).
 | written_off_at | timestamp |
 
 Table `batch_write_offs` (V18): units discarded, why and by whom — the discard ledger. Append-only by the
-same four means as ContributionAllocation. **Nothing writes it yet**: the write-off action, open to
-blood bank staff for their own bank and ADMIN, and its STOCK_WRITTEN_OFF audit entry are Stage 3. The
-batch history endpoint already reads it.
+same four means as ContributionAllocation. Written only by the write-off action
+(`BatchWriteOffService`, Business Rule 24), together with the batch's deduction and its STOCK_WRITTEN_OFF
+audit entry in one transaction; read by the batch history endpoint.
 
 ### Donation
 | field | type |
@@ -264,8 +264,8 @@ reach to clear it. See Business Rule 12.
 | field | type |
 |---|---|
 | id | UUID, PK |
-| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, from Stage 3, the blood bank staff member or administrator who discarded the units) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; the Java `AuditAction` value and anything that writes it arrive in Stage 3) |
+| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member or administrator who discarded the units) |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3) |
 | target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
@@ -614,12 +614,16 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       +232… to +232…. Blood bank changed from X to Y.") and the time. Only real changes are logged: a
       status set to what it already was, or an edit that changes nothing, records nothing. The generated
       password (Business Rule 14) never appears in an entry. Reads are not logged.
-    - **Widening to stock write-offs (decided; Stage 3 of the batch-stock redesign).** The log will also
-      record STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank or by an
-      ADMIN — so its actor may then be bank staff, and the Admin Audit Log will show those entries. As of
-      Stage 2 only the database is ready (V18: the action in `audit_log_action_check`, `target_batch_id`,
-      and the one-target rule covering it, tested in `BatchStockSchemaIT`); the Java `AuditAction` value,
-      the write-off endpoint and the page labels do not exist yet, so no such entry can be created.
+    - **Widened to stock write-offs (Stage 3 of the batch-stock redesign).** The log also records
+      STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank or by an ADMIN
+      (Business Rule 24) — so its actor may be bank staff. Each entry points at its batch through
+      `target_batch_id` and at nothing else (V18's one-target rule), and its `details` read like "Wrote off
+      3 units of O+ from a batch at X expiring 2026-10-01 (already expired). Reason: Expired. 7 of 10 units
+      remain in the batch." plus the note when there is one. Written by `AuditLogService.recordStockWrittenOff`
+      (`Propagation.MANDATORY`, stamped with the same clock instant as the write-off). The Admin Audit Log
+      shows these entries: `AuditLogEntryResponse.targetType` is `BATCH`, `targetName` describes the batch
+      ("O+ batch, expiry 2026-10-01 — X", since a batch has no name), and the page labels the action
+      "Written off" (red) with the subject kind "Stock batch" (`AdminConsole.jsx`).
     - **Same transaction as the action.** `AuditLogService.record` is `Propagation.MANDATORY`: it refuses
       to run without the caller's transaction, so an action and its entry commit or roll back together —
       the log can never show a change that did not happen, or miss one that did.
@@ -942,8 +946,31 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       included, counted batch by batch — only the units that really expire soon, never a whole group
       because its earliest batch does. Already-expired units are never "expiring soon".
     - **Expired units are shown, never counted:** reported as `expiredUnits` (inventory rows and summary)
-      and `pastExpiryUnits` (Admin Reports), "awaiting discard". Until the write-off action (Stage 3)
-      they can only be seen, not discarded.
+      and `pastExpiryUnits` (Admin Reports), "awaiting discard" — discarded with the write-off action below.
+    - **Writing stock off (Stage 3).** `POST /api/inventory/{bank}/batches/{batch}/write-offs` with
+      `{ units, reason, note? }` takes units off one batch and records why (`BatchWriteOffService`).
+      **Who:** the bank's own BLOOD_BANK_STAFF and ADMIN (any bank), by the same `InventoryService` rule as
+      Add New Batch and the batch views (`requireManageableBank`); hospitals and donors are refused by
+      SecurityConfig (403), no token is a 401, staff naming another bank a 403, and a batch of another
+      bank asked for under the caller's bank is a 404 like a missing one. **What:** `units` from 1 up to the
+      batch's units remaining; `reason` one of EXPIRED, DAMAGED, FAILED_TESTING, DATA_ENTRY_ERROR, OTHER
+      (matched exactly; anything else a 400 on `reason`); `note` optional, ≤ 500 characters, blank stored
+      as none, **required for OTHER** (a 400 on `note`) — `BatchWriteOff.problemWithNote`, one copy shared
+      with the entity. More units than remain, or a batch with none left, is a **409** naming the units
+      left, never silently reduced (the same reasoning as Business Rule 20's "more than the bank holds").
+      **Expired batches may be written off** — the main use. **How:** the batch row is locked with
+      `BloodInventoryBatchRepository.lockById` (PESSIMISTIC_WRITE, i.e. `FOR NO KEY UPDATE`, the mode a
+      contribution's batch lock uses; read back in `BatchWriteOffIT`), and the remaining units are judged
+      only after the lock is granted. A write-off takes that one lock and no other, so it can never deadlock
+      with a contribution (request first, batches second); `PartialFulfilmentRaceIT` races the two for one
+      batch and exactly one wins, never more units out than were there. The deduction, the
+      `batch_write_offs` row and the STOCK_WRITTEN_OFF audit entry (Business Rule 17) are one transaction,
+      all stamped with one instant from the injected `Clock` (the batch's `last_updated` too, via
+      `BloodInventoryBatch.deductUnits(units, at)`). If the batch was usable, usable stock falls and
+      `notifyStockCrossing` runs exactly as after a contribution, so a write-off that takes a group into Low
+      or Critical raises a LOW_STOCK_ALERT; writing off expired units changes no stock figure and alerts
+      nobody. **Answers 201** with `{ writeOff, batch }` — the entry in the batch history's `writeOffs`
+      shape, and the batch as it now stands. Nothing is undone or bulk-discarded: one batch per call.
     - **New stock is always a new batch.** Add New Batch (`MANUAL`) and Record Donation (`DONATION`,
       linked by unique `donation_id`, carrying the donation's units) each create one; nothing is merged.
       **An entered expiry must be today or later and at most 365 days away**
@@ -1007,9 +1034,9 @@ listed so nothing is forgotten when the chapters are next revised.
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history — Business Rule 24), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), write units off any bank's batch (Business Rule 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -1041,7 +1068,8 @@ listed so nothing is forgotten when the chapters are next revised.
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
-    `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`),
+    `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
+    `BatchWriteOffIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

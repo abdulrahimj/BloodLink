@@ -133,6 +133,23 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
         @Param("today") LocalDate today
     );
 
+    /**
+     * Locks one batch by id, whatever its expiry date or units left, and returns it:
+     * the write-off's lock (Business Rule 24). The same PESSIMISTIC_WRITE as
+     * {@link #lockUsableBatchesInIssueOrder}, which on PostgreSQL is
+     * {@code FOR NO KEY UPDATE}: a contribution wanting this batch waits for the
+     * write-off to commit and then re-reads the units it left, and vice versa.
+     *
+     * Expired and empty batches are deliberately not filtered out here — writing off
+     * an expired batch is the main reason this exists, and an empty one must be found
+     * so the caller can say it is empty rather than that it does not exist. A
+     * write-off holds no other row lock, so it can never be one half of a deadlock
+     * with a contribution (request first, batches second).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select b from BloodInventoryBatch b where b.id = :id")
+    Optional<BloodInventoryBatch> lockById(@Param("id") UUID id);
+
     // ---------- across banks ----------
 
     /**

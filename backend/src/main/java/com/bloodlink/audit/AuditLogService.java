@@ -1,5 +1,6 @@
 package com.bloodlink.audit;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
@@ -12,6 +13,7 @@ import com.bloodlink.audit.dto.AuditLogEntryResponse;
 import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AuditAction;
@@ -72,6 +74,18 @@ public class AuditLogService {
     public void recordHospitalCreated(UUID actorId, Hospital hospital, String details) {
         User actor = userRepository.getReferenceById(actorId);
         auditLogRepository.save(AuditLog.recordHospitalCreated(actor, hospital, details));
+    }
+
+    /**
+     * Records units written off a batch as STOCK_WRITTEN_OFF (Business Rule 24).
+     * MANDATORY for the same reason as {@link #record}: the write-off, the stock it
+     * took off the shelf and this entry commit or roll back together. The actor is
+     * the blood bank staff member or administrator who discarded the units.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordStockWrittenOff(UUID actorId, BloodInventoryBatch batch, String details, Instant at) {
+        User actor = userRepository.getReferenceById(actorId);
+        auditLogRepository.save(AuditLog.recordStockWrittenOff(actor, batch, details, at));
     }
 
     /**

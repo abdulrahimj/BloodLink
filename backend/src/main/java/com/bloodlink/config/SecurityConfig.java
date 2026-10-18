@@ -126,8 +126,9 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/inventory/*/batches", "/api/inventory/*/batches/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
                 // Reading inventory totals is open to all signed-in staff (hospitals need
-                // a live view across banks); only bank staff may change it. Which bank a
-                // given BLOOD_BANK_STAFF member may write to is enforced in
+                // a live view across banks); only bank staff may change it — adding a
+                // batch, or writing one off (POST .../batches/{id}/write-offs). Which bank
+                // a given BLOOD_BANK_STAFF member may write to is enforced in
                 // InventoryService, not here — a URL rule can't see whose bank the path
                 // id belongs to.
                 .requestMatchers(HttpMethod.GET, "/api/inventory/**").authenticated()
