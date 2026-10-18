@@ -252,20 +252,60 @@ class BatchWriteOffIT {
         assertThat(batchRepository.findIdsBreakingStockIdentity()).doesNotContain(expiredId);
     }
 
-    @Test
-    void anAdministratorCanWriteOffAnyBanksBatchAndIsRecordedAsTheActor() throws Exception {
-        UUID batchId = addBatch("B+", 10, today.plusDays(20));
+    // ---------- ADMIN reads stock but cannot change it (Stage 3b) ----------
 
-        writeOff(adminToken, bank.getId(), batchId, 2, "OTHER", "Returned unopened by a ward, cold chain unknown")
-            .andExpect(status().isCreated())
-            .andExpect(jsonPath("$.writeOff.writtenOffByName").value("Write-off Administrator"))
-            .andExpect(jsonPath("$.batch.unitsRemaining").value(8));
+    /**
+     * Until Stage 3b this test asserted the opposite — that an ADMIN could write off
+     * any bank's batch and was recorded as the actor. The project owner has decided an
+     * administrator must not change stock at all, expired batches included.
+     */
+    @Test
+    void anAdministratorCannotWriteOffAnyBatchExpiredOrNotAndNothingIsWritten() throws Exception {
+        UUID usableId = addBatch("B+", 10, today.plusDays(20));
+        UUID expiredId = batchRepository.save(
+            BloodInventoryBatch.manual(bank, BloodType.B_POSITIVE, 5, today.minusDays(1))).getId();
+
+        writeOff(adminToken, bank.getId(), usableId, 2, "DAMAGED", null).andExpect(status().isForbidden());
+        writeOff(adminToken, bank.getId(), expiredId, 5, "EXPIRED", null).andExpect(status().isForbidden());
+
+        assertUntouched(usableId, 10);
+        assertUntouched(expiredId, 5);
+    }
+
+    @Test
+    void anAdministratorCannotAddABatchAndNoBatchIsCreated() throws Exception {
+        addBatchAs(adminToken, bank.getId(), "B-", 6, today.plusDays(20)).andExpect(status().isForbidden());
         flush();
 
-        assertThat(writeOffRepository.findForBatch(batchId)).singleElement()
-            .satisfies(w -> assertThat(w.getWrittenOffBy().getId()).isEqualTo(admin.getId()));
-        assertThat(auditLogRepository.findByTargetBatchIdOldestFirst(batchId)).singleElement()
-            .satisfies(entry -> assertThat(entry.getActor().getId()).isEqualTo(admin.getId()));
+        assertThat(batchRepository.findLiveForBank(bank.getId())).isEmpty();
+        assertThat(inventoryRow(staffToken, "B-").get("unitsAvailable").asInt()).isZero();
+    }
+
+    @Test
+    void ownBankStaffCanAddABatchAndAnotherBanksStaffCannot() throws Exception {
+        addBatchAs(staffToken, bank.getId(), "B-", 6, today.plusDays(20)).andExpect(status().isOk())
+            .andExpect(jsonPath("$.unitsAvailable").value(6));
+        addBatchAs(otherStaffToken, bank.getId(), "B-", 4, today.plusDays(20)).andExpect(status().isForbidden());
+        flush();
+
+        assertThat(batchRepository.findLiveForBank(bank.getId())).singleElement()
+            .satisfies(b -> assertThat(b.getUnitsReceived()).isEqualTo(6));
+    }
+
+    @Test
+    void anAdministratorCanStillReadTheBatchListTheBatchHistoryAndTheAuditLog() throws Exception {
+        UUID batchId = addBatch("AB-", 7, today.plusDays(25));
+        writeOff(staffToken, bank.getId(), batchId, 1, "DAMAGED", null).andExpect(status().isCreated());
+        flush();
+
+        listBatches(adminToken, "AB-").andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].unitsRemaining").value(6));
+        history(adminToken, batchId).andExpect(status().isOk())
+            .andExpect(jsonPath("$.unitsWrittenOff").value(1));
+        mockMvc.perform(get("/api/admin/audit-log").header("Authorization", bearer(adminToken)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content").isArray());
     }
 
     @Test
@@ -367,8 +407,9 @@ class BatchWriteOffIT {
         // Staff of this bank, naming the other bank: likewise.
         writeOff(staffToken, otherBank.getId(), othersBatchId, 1, "DAMAGED", null)
             .andExpect(status().isForbidden());
-        // No such bank.
-        writeOff(adminToken, UUID.randomUUID(), batchId, 1, "DAMAGED", null)
+        // No such bank. (Asked by own-bank staff: since Stage 3b an ADMIN is refused
+        // with a 403 before any bank is looked up, so it can no longer show this.)
+        writeOff(staffToken, UUID.randomUUID(), batchId, 1, "DAMAGED", null)
             .andExpect(status().isNotFound());
 
         assertUntouched(batchId, 4);
@@ -416,13 +457,19 @@ class BatchWriteOffIT {
             .content(objectMapper.writeValueAsString(body)));
     }
 
-    /** Adds a batch through the real Add New Batch endpoint and returns its id. */
+    /** Add New Batch through the real endpoint, as whoever {@code token} belongs to. */
+    private ResultActions addBatchAs(String token, UUID bankId, String group, int units, LocalDate expiry)
+        throws Exception {
+        return mockMvc.perform(patch("/api/inventory/{b}/{t}", bankId, group)
+            .header("Authorization", bearer(token))
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(Map.of("unitsToAdd", units, "expiryDate", expiry.toString()))));
+    }
+
+    /** Adds a batch through the real Add New Batch endpoint, as this bank's staff,
+     *  and returns its id. */
     private UUID addBatch(String group, int units, LocalDate expiry) throws Exception {
-        mockMvc.perform(patch("/api/inventory/{b}/{t}", bank.getId(), group)
-                .header("Authorization", bearer(staffToken))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("unitsToAdd", units, "expiryDate", expiry.toString()))))
-            .andExpect(status().isOk());
+        addBatchAs(staffToken, bank.getId(), group, units, expiry).andExpect(status().isOk());
         return batchRepository.findLiveForBankAndBloodType(bank.getId(), BloodType.fromLabel(group)).stream()
             .filter(b -> b.getExpiryDate().equals(expiry) && b.getUnitsReceived() == units)
             .findFirst().orElseThrow().getId();

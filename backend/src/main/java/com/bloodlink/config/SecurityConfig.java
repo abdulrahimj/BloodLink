@@ -126,13 +126,16 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/inventory/*/batches", "/api/inventory/*/batches/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
                 // Reading inventory totals is open to all signed-in staff (hospitals need
-                // a live view across banks); only bank staff may change it — adding a
-                // batch, or writing one off (POST .../batches/{id}/write-offs). Which bank
-                // a given BLOOD_BANK_STAFF member may write to is enforced in
-                // InventoryService, not here — a URL rule can't see whose bank the path
-                // id belongs to.
+                // a live view across banks). Changing stock — adding a batch, or writing
+                // one off (POST .../batches/{id}/write-offs) — is for blood bank staff
+                // ONLY: an administrator reads every bank's stock but changes none of it
+                // (Stage 3b), and InventoryService.requireStockChangeAccess refuses ADMIN
+                // again in case a route ever escapes this rule. Which bank a given
+                // BLOOD_BANK_STAFF member may write to is enforced there too — a URL rule
+                // can't see whose bank the path id belongs to.
                 .requestMatchers(HttpMethod.GET, "/api/inventory/**").authenticated()
-                .requestMatchers("/api/inventory/**", "/api/appeals/**")
+                .requestMatchers("/api/inventory/**").hasRole(Role.BLOOD_BANK_STAFF.name())
+                .requestMatchers("/api/appeals/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
                 .requestMatchers("/api/donations/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())

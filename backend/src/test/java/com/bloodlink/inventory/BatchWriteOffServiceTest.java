@@ -32,6 +32,7 @@ import com.bloodlink.domain.BatchWriteOff;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.WriteOffReason;
@@ -169,23 +170,40 @@ class BatchWriteOffServiceTest {
         verifyNoInteractions(notificationService);
     }
 
+    // ---------- refused ----------
+
+    /**
+     * Stage 3b: an administrator reads stock but changes none of it. Refused on the
+     * role alone — before the bank is looked up or any batch locked — so nothing is
+     * read, deducted, recorded or audited. (Until Stage 3b this test asserted the
+     * opposite: that an ADMIN could write off any bank's batch.)
+     */
     @Test
-    void anAdministratorCanWriteOffAnyBanksBatch() {
+    void anAdministratorIsRefusedAndNothingIsWritten() {
         User admin = user(UUID.randomUUID(), "System Administrator", Role.ADMIN, null);
-        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank));
-        when(userRepository.findById(admin.getId())).thenReturn(Optional.of(admin));
-        BloodInventoryBatch batch = batch(bank, 4, TODAY.plusDays(30));
-        lockReturns(batch);
-        when(batchRepository.sumUsableUnits(BANK_ID, BloodType.O_POSITIVE, TODAY)).thenReturn(4L);
-        savesWriteOffs();
 
-        service.writeOff(BANK_ID, BATCH_ID, new WriteOffBatchRequest(1, "FAILED_TESTING", null), principal(admin));
+        assertThatThrownBy(() -> service.writeOff(
+                BANK_ID, BATCH_ID, new WriteOffBatchRequest(1, "EXPIRED", null), principal(admin)))
+            .isInstanceOf(AccessDeniedException.class)
+            .hasMessage("Only the blood bank's own staff can change its stock.");
 
-        assertThat(batch.getUnitsRemaining()).isEqualTo(3);
-        verify(auditLogService).recordStockWrittenOff(eq(admin.getId()), eq(batch), anyString(), eq(CLOCK.instant()));
+        verifyNoInteractions(bloodBankRepository);
+        verify(batchRepository, never()).lockById(any());
+        assertNothingWritten();
     }
 
-    // ---------- refused ----------
+    @Test
+    void aSuspendedStaffMemberIsRefusedEvenForTheirOwnBank() {
+        staff.setStatus(AccountStatus.SUSPENDED);
+        signedInAsStaff();
+
+        assertThatThrownBy(() -> service.writeOff(
+                BANK_ID, BATCH_ID, new WriteOffBatchRequest(1, "EXPIRED", null), principal(staff)))
+            .isInstanceOf(AccessDeniedException.class);
+
+        verify(batchRepository, never()).lockById(any());
+        assertNothingWritten();
+    }
 
     @Test
     void moreUnitsThanTheBatchHoldsIsRefusedAndNothingIsWritten() {

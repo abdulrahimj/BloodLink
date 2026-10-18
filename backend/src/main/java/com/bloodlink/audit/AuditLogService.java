@@ -80,7 +80,7 @@ public class AuditLogService {
      * Records units written off a batch as STOCK_WRITTEN_OFF (Business Rule 24).
      * MANDATORY for the same reason as {@link #record}: the write-off, the stock it
      * took off the shelf and this entry commit or roll back together. The actor is
-     * the blood bank staff member or administrator who discarded the units.
+     * the blood bank staff member who discarded the units (never an administrator).
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordStockWrittenOff(UUID actorId, BloodInventoryBatch batch, String details, Instant at) {

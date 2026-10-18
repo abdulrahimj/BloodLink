@@ -3,6 +3,7 @@ package com.bloodlink.inventory;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,6 +31,7 @@ import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.AppealTier;
 import com.bloodlink.domain.enums.BatchSource;
@@ -101,6 +103,20 @@ class InventoryServiceTest {
             userRepository, contributionRepository, notificationService, appealCooldownRepository,
             new AppealCooldownPolicy(appealCooldownRepository)
         );
+    }
+
+    /**
+     * A signed-in staff member of BANK_ID — the only kind of caller that may add stock
+     * since Stage 3b. The Add New Batch tests below used an ADMIN principal purely as
+     * a shortcut past this lookup; ADMIN is now refused, so they use this instead.
+     */
+    private AuthenticatedUser ownBankStaff() {
+        AuthenticatedUser principal = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.BLOOD_BANK_STAFF);
+        User user = new User();
+        user.setId(principal.getId());
+        user.setBloodBank(bank(BANK_ID));
+        when(userRepository.findById(principal.getId())).thenReturn(Optional.of(user));
+        return principal;
     }
 
     private static BloodBank bank(UUID id) {
@@ -254,11 +270,11 @@ class InventoryServiceTest {
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
 
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         // 12 + 3 = 15, exactly the CRITICAL tier's recovery threshold.
         InventoryItemResponse result = service.addBatch(
-            BANK_ID, "O-", new AddBatchRequest(3, TODAY.plusDays(40)), admin
+            BANK_ID, "O-", new AddBatchRequest(3, TODAY.plusDays(40)), staff
         );
 
         verify(appealCooldownRepository).delete(cooldown);
@@ -283,11 +299,11 @@ class InventoryServiceTest {
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
 
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         // 12 + 2 = 14, one short of the 15 that would end it.
         InventoryItemResponse result = service.addBatch(
-            BANK_ID, "O-", new AddBatchRequest(2, TODAY.plusDays(40)), admin
+            BANK_ID, "O-", new AddBatchRequest(2, TODAY.plusDays(40)), staff
         );
 
         verify(appealCooldownRepository, never()).delete(any());
@@ -336,10 +352,10 @@ class InventoryServiceTest {
         LocalDate expiry = TODAY.plusDays(30);
         usableBeforeAndAfter(BloodType.O_NEGATIVE, 0, 5, expiry);
 
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         InventoryItemResponse result = service.addBatch(
-            BANK_ID, "O-", new AddBatchRequest(5, expiry), admin
+            BANK_ID, "O-", new AddBatchRequest(5, expiry), staff
         );
 
         assertThat(result.bloodType()).isEqualTo("O-");
@@ -369,10 +385,10 @@ class InventoryServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
         usableBeforeAndAfter(BloodType.O_POSITIVE, 20, 35, existingExpiry);
 
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         InventoryItemResponse result = service.addBatch(
-            BANK_ID, "O+", new AddBatchRequest(15, newBatchExpiry), admin
+            BANK_ID, "O+", new AddBatchRequest(15, newBatchExpiry), staff
         );
 
         assertThat(result.unitsAvailable()).isEqualTo(35); // 20 + 15
@@ -390,9 +406,9 @@ class InventoryServiceTest {
     @Test
     void anExpiryDateInThePastIsA400OnTheFieldAndNothingIsSaved() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
-        assertThatThrownBy(() -> service.addBatch(BANK_ID, "O+", new AddBatchRequest(5, TODAY.minusDays(1)), admin))
+        assertThatThrownBy(() -> service.addBatch(BANK_ID, "O+", new AddBatchRequest(5, TODAY.minusDays(1)), staff))
             .isInstanceOf(InvalidFieldException.class)
             .hasMessageContaining("cannot be in the past")
             .satisfies(e -> assertThat(((InvalidFieldException) e).getField()).isEqualTo("expiryDate"));
@@ -402,9 +418,9 @@ class InventoryServiceTest {
     @Test
     void anExpiryDateMoreThan365DaysAwayIsA400OnTheFieldAndNothingIsSaved() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
-        assertThatThrownBy(() -> service.addBatch(BANK_ID, "O+", new AddBatchRequest(5, TODAY.plusDays(366)), admin))
+        assertThatThrownBy(() -> service.addBatch(BANK_ID, "O+", new AddBatchRequest(5, TODAY.plusDays(366)), staff))
             .isInstanceOf(InvalidFieldException.class)
             .hasMessageContaining("within 365 days")
             .satisfies(e -> assertThat(((InvalidFieldException) e).getField()).isEqualTo("expiryDate"));
@@ -416,10 +432,10 @@ class InventoryServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
         when(batchRepository.save(any(BloodInventoryBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(batchRepository.summariseGroupsForBank(BANK_ID, TODAY, CUTOFF)).thenReturn(List.of());
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
-        service.addBatch(BANK_ID, "O+", new AddBatchRequest(1, TODAY), admin);
-        service.addBatch(BANK_ID, "O+", new AddBatchRequest(1, TODAY.plusDays(365)), admin);
+        service.addBatch(BANK_ID, "O+", new AddBatchRequest(1, TODAY), staff);
+        service.addBatch(BANK_ID, "O+", new AddBatchRequest(1, TODAY.plusDays(365)), staff);
     }
 
     // ---------- who may add stock and read batch detail ----------
@@ -500,6 +516,49 @@ class InventoryServiceTest {
         assertThat(result.unitsAvailable()).isEqualTo(10);
     }
 
+    // ---------- ADMIN reads stock but cannot change it (Stage 3b) ----------
+
+    @Test
+    void anAdministratorCannotAddABatchAndNothingIsReadOrSaved() {
+        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+
+        assertThatThrownBy(() -> service.addBatch(BANK_ID, "O+", new AddBatchRequest(5, TODAY.plusDays(30)), admin))
+            .isInstanceOf(AccessDeniedException.class)
+            .hasMessage("Only the blood bank's own staff can change its stock.");
+
+        // Refused on the role alone, before the bank is even looked up.
+        verify(bloodBankRepository, never()).findById(any());
+        verify(batchRepository, never()).save(any());
+        verify(notificationService, never()).notifyStockCrossing(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void aSuspendedStaffMemberCannotAddABatchEvenToTheirOwnBank() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        AuthenticatedUser staffPrincipal = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.BLOOD_BANK_STAFF);
+        User staffUser = new User();
+        staffUser.setId(staffPrincipal.getId());
+        staffUser.setBloodBank(bank(BANK_ID));
+        staffUser.setStatus(AccountStatus.SUSPENDED);
+        when(userRepository.findById(staffPrincipal.getId())).thenReturn(Optional.of(staffUser));
+
+        assertThatThrownBy(() -> service.addBatch(
+            BANK_ID, "A+", new AddBatchRequest(1, TODAY.plusDays(30)), staffPrincipal
+        )).isInstanceOf(AccessDeniedException.class);
+        verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void anAdministratorCanStillReadAnyBanksBatches() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        BloodInventoryBatch batch = BloodInventoryBatch.manual(bank(BANK_ID), BloodType.O_POSITIVE, 4, TODAY.plusDays(10));
+        when(batchRepository.findLiveForBank(BANK_ID)).thenReturn(List.of(batch));
+        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+
+        assertThat(service.listBatches(BANK_ID, null, admin)).singleElement()
+            .satisfies(row -> assertThat(row.unitsRemaining()).isEqualTo(4));
+    }
+
     @Test
     void unknownBankIsReportedAsNotFound() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.empty());
@@ -510,10 +569,10 @@ class InventoryServiceTest {
     @Test
     void unrecognisedBloodTypeLabelIsRejected() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         assertThatThrownBy(() -> service.addBatch(
-            BANK_ID, "Z+", new AddBatchRequest(1, TODAY.plusDays(1)), admin
+            BANK_ID, "Z+", new AddBatchRequest(1, TODAY.plusDays(1)), staff
         )).isInstanceOf(IllegalArgumentException.class);
     }
 }

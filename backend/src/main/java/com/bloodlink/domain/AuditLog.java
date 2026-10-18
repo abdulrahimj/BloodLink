@@ -52,7 +52,7 @@ import lombok.NoArgsConstructor;
  * shapes, and V18's CHECK constraint refuses any other at the database.
  *
  * The actor is an administrator for every action except STOCK_WRITTEN_OFF, whose
- * actor may also be a member of the batch's own bank's staff.
+ * actor is a member of the batch's own bank's staff (an administrator cannot write off).
  */
 @Entity
 @Table(name = "audit_log")

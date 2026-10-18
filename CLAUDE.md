@@ -66,7 +66,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries. Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stage 3b made adding and writing off stock own-bank staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
 
 ### User
 | field | type |
@@ -264,7 +264,7 @@ reach to clear it. See Business Rule 12.
 | field | type |
 |---|---|
 | id | UUID, PK |
-| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member or administrator who discarded the units) |
+| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b) |
 | action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3) |
 | target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
@@ -340,8 +340,14 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
    unless staff enter the date from the bag label. **Flagged for review:** confirm 42 days matches the
    preparation Makeni's labs actually use.
 8. **A BLOOD_BANK_STAFF user is tied to exactly one blood bank** via a nullable `blood_bank_id` on
-   `User` (null for all other roles). Inventory writes are restricted to that staff member's own bank;
-   ADMIN can write to any bank. There is no self-registration path for HOSPITAL_STAFF,
+   `User` (null for all other roles). Inventory writes — Add New Batch and writing a batch off — are
+   restricted to that staff member's own bank, and **ADMIN cannot make them at all** (Stage 3b, the
+   project owner's decision): adding and discarding units are physical acts on a bank's own shelf, so an
+   administrator reads every bank's stock and batches but changes none of it. Refused with a 403 by
+   SecurityConfig (non-GET `/api/inventory/**` is BLOOD_BANK_STAFF only) and again by
+   `InventoryService.requireStockChangeAccess`, which also requires the account to be ACTIVE. (Record
+   Donation and request contributions, which also move stock, still accept an ADMIN naming a bank through
+   `ActingBankResolver`; Stage 3b deliberately left them unchanged.) There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
 9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`,
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
@@ -615,8 +621,9 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       status set to what it already was, or an edit that changes nothing, records nothing. The generated
       password (Business Rule 14) never appears in an entry. Reads are not logged.
     - **Widened to stock write-offs (Stage 3 of the batch-stock redesign).** The log also records
-      STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank or by an ADMIN
-      (Business Rule 24) — so its actor may be bank staff. Each entry points at its batch through
+      STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank (Business Rule 24;
+      never by an ADMIN since Stage 3b, Business Rule 8) — so its actor is bank staff, not an
+      administrator. Administrators still read these entries on the Audit Log. Each entry points at its batch through
       `target_batch_id` and at nothing else (V18's one-target rule), and its `details` read like "Wrote off
       3 units of O+ from a batch at X expiring 2026-10-01 (already expired). Reason: Expired. 7 of 10 units
       remain in the batch." plus the note when there is one. Written by `AuditLogService.recordStockWrittenOff`
@@ -949,8 +956,10 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       and `pastExpiryUnits` (Admin Reports), "awaiting discard" — discarded with the write-off action below.
     - **Writing stock off (Stage 3).** `POST /api/inventory/{bank}/batches/{batch}/write-offs` with
       `{ units, reason, note? }` takes units off one batch and records why (`BatchWriteOffService`).
-      **Who:** the bank's own BLOOD_BANK_STAFF and ADMIN (any bank), by the same `InventoryService` rule as
-      Add New Batch and the batch views (`requireManageableBank`); hospitals and donors are refused by
+      **Who:** the bank's own active BLOOD_BANK_STAFF only, by the same `InventoryService` rule as Add New
+      Batch (`requireStockChangeAccess`). **ADMIN is refused (403)**, expired batches included (Stage 3b,
+      Business Rule 8), by SecurityConfig and again in that rule, before any bank is looked up or anything
+      written; ADMIN keeps read access to the batch list and history. Hospitals and donors are refused by
       SecurityConfig (403), no token is a 401, staff naming another bank a 403, and a batch of another
       bank asked for under the caller's bank is a 404 like a missing one. **What:** `units` from 1 up to the
       batch's units remaining; `reason` one of EXPIRED, DAMAGED, FAILED_TESTING, DATA_ENTRY_ERROR, OTHER
@@ -1034,9 +1043,9 @@ listed so nothing is forgotten when the chapters are next revised.
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; adding and writing off stock are theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), write units off any bank's batch (Business Rule 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch or write one off (Business Rules 8, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions

@@ -20,6 +20,7 @@ import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Donation;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
@@ -55,6 +56,9 @@ import com.bloodlink.web.error.NotFoundException;
  * "Own bank only" for BLOOD_BANK_STAFF is enforced here, not in SecurityConfig —
  * a URL rule can match a role, but only a lookup against the caller's own User
  * row can tell whether {bloodBankId} in the path is *their* bank.
+ *
+ * ADMIN may read every bank's stock and batches but change none of it: adding and
+ * writing off stock are for the owning bank's own staff only.
  */
 @Service
 public class InventoryService {
@@ -184,13 +188,14 @@ public class InventoryService {
      *
      * The expiry date must be today or later and at most 365 days away (StockPolicy);
      * anything else is a 400 on the expiryDate field, with nothing written.
+     *
+     * Active staff of this bank only; ADMIN is refused (requireStockChangeAccess).
      */
     @Transactional
     public InventoryItemResponse addBatch(
         UUID bloodBankId, String bloodTypeLabel, AddBatchRequest request, AuthenticatedUser principal
     ) {
-        BloodBank bank = requireBank(bloodBankId);
-        assertCanManage(bloodBankId, principal);
+        BloodBank bank = requireStockChangeAccess(bloodBankId, principal);
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType bloodType = BloodType.fromLabel(bloodTypeLabel);
         requireAcceptableExpiry(request.expiryDate());
@@ -271,7 +276,7 @@ public class InventoryService {
     @Transactional(readOnly = true)
     public List<BatchResponse> listBatches(UUID bloodBankId, String bloodTypeLabel, AuthenticatedUser principal) {
         requireBank(bloodBankId);
-        assertCanManage(bloodBankId, principal);
+        assertCanView(bloodBankId, principal);
         List<BloodInventoryBatch> batches = bloodTypeLabel == null || bloodTypeLabel.isBlank()
             ? batchRepository.findLiveForBank(bloodBankId)
             // Propagates IllegalArgumentException for an unrecognised label -> 400.
@@ -288,7 +293,7 @@ public class InventoryService {
     @Transactional(readOnly = true)
     public BatchHistoryResponse batchHistory(UUID bloodBankId, UUID batchId, AuthenticatedUser principal) {
         requireBank(bloodBankId);
-        assertCanManage(bloodBankId, principal);
+        assertCanView(bloodBankId, principal);
         BloodInventoryBatch batch = batchRepository.findById(batchId)
             .filter(found -> found.getBloodBank().getId().equals(bloodBankId))
             .orElseThrow(() -> new NotFoundException("No batch found for this id at this blood bank."));
@@ -323,33 +328,60 @@ public class InventoryService {
     // ---------- helpers ----------
 
     /**
-     * The bank, if it exists (404 otherwise) and the caller may manage it (403
-     * otherwise): ADMIN any bank, BLOOD_BANK_STAFF only their own. Public so the
-     * write-off action (BatchWriteOffService) applies this same rule rather than a
-     * copy of it: an access rule written twice is a rule that will one day be fixed
-     * in one place and not the other.
+     * The bank whose stock the caller is about to change — by Add New Batch or a
+     * write-off — if it exists (404) and the caller may change it (403). Only active
+     * BLOOD_BANK_STAFF of that very bank may: adding and discarding units are
+     * physical acts on a bank's own shelf, so an ADMIN, who can see every bank's
+     * stock, cannot change any of it (Stage 3b, the project owner's decision).
+     *
+     * ADMIN is refused here as well as by SecurityConfig's rule for /api/inventory
+     * writes, so a future route or caller that skips the URL rule still cannot get
+     * through. The role is checked before the bank is looked up, so the refusal
+     * reveals nothing about which bank ids exist.
+     *
+     * Public so the write-off action (BatchWriteOffService) applies this same rule
+     * rather than a copy of it: an access rule written twice is a rule that will one
+     * day be fixed in one place and not the other.
      */
-    public BloodBank requireManageableBank(UUID bloodBankId, AuthenticatedUser principal) {
+    public BloodBank requireStockChangeAccess(UUID bloodBankId, AuthenticatedUser principal) {
+        if (principal.getRole() != Role.BLOOD_BANK_STAFF) {
+            throw new AccessDeniedException("Only the blood bank's own staff can change its stock.");
+        }
         BloodBank bank = requireBank(bloodBankId);
-        assertCanManage(bloodBankId, principal);
+        User user = requireOwnBankStaff(bloodBankId, principal);
+        // A suspended account's token is already refused on every request
+        // (JwtAuthenticationFilter); this is the same rule once more, at the point
+        // where stock actually changes.
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccessDeniedException("This account is suspended.");
+        }
         return bank;
     }
 
     /**
-     * ADMIN may manage any bank. BLOOD_BANK_STAFF may manage only the bank on their
-     * own User row — null (no admin has assigned one yet) means access to none. Used
-     * for adding stock, reading batch-level detail and writing stock off alike.
+     * Who may READ batch-level detail: ADMIN for any bank, BLOOD_BANK_STAFF only for
+     * the bank on their own User row. Reading only — changing stock is
+     * {@link #requireStockChangeAccess}, which ADMIN does not pass.
      */
-    private void assertCanManage(UUID bloodBankId, AuthenticatedUser principal) {
+    private void assertCanView(UUID bloodBankId, AuthenticatedUser principal) {
         if (principal.getRole() == Role.ADMIN) {
             return;
         }
+        requireOwnBankStaff(bloodBankId, principal);
+    }
+
+    /**
+     * The caller's own User row, provided it is assigned to this bank — null (no
+     * admin has assigned one yet) means access to none.
+     */
+    private User requireOwnBankStaff(UUID bloodBankId, AuthenticatedUser principal) {
         User user = userRepository.findById(principal.getId())
             .orElseThrow(() -> new NotFoundException("Account not found."));
         boolean ownsThisBank = user.getBloodBank() != null && user.getBloodBank().getId().equals(bloodBankId);
         if (!ownsThisBank) {
             throw new AccessDeniedException("This account is not assigned to that blood bank.");
         }
+        return user;
     }
 
     private BloodBank requireBank(UUID bloodBankId) {

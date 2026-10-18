@@ -30,8 +30,8 @@ import jakarta.validation.Valid;
  * Per-bank, per-blood-group stock. The per-group totals are readable by any
  * signed-in role (SecurityConfig: hospitals need a live view across banks); batch
  * detail is for bank staff and administrators only, and writing (adding a batch,
- * writing one off) is role-gated to BLOOD_BANK_STAFF/ADMIN there and further scoped
- * to the caller's own bank inside InventoryService.
+ * writing one off) is for BLOOD_BANK_STAFF alone — refused to ADMIN there and again
+ * inside InventoryService, which also scopes it to the caller's own bank.
  */
 @RestController
 @RequestMapping("/api/inventory")
@@ -82,8 +82,8 @@ public class InventoryController {
 
     /**
      * Writes units of one batch off, with a reason (Business Rule 24) — expired
-     * batches included, which is the main use. Bank staff of that bank and ADMIN
-     * only; 201 with the write-off and the batch as it now stands.
+     * batches included, which is the main use. Active staff of that bank only — not
+     * ADMIN; 201 with the write-off and the batch as it now stands.
      */
     @PostMapping("/{bloodBankId}/batches/{batchId}/write-offs")
     @ResponseStatus(HttpStatus.CREATED)
@@ -99,7 +99,8 @@ public class InventoryController {
     /**
      * "Add New Batch". {bloodType} is the clinical label ("A+", "O-") — the client
      * must URL-encode it (encodeURIComponent) so "+" survives as a literal
-     * character rather than being read as an encoded space.
+     * character rather than being read as an encoded space. Active staff of that
+     * bank only — not ADMIN.
      */
     @PatchMapping("/{bloodBankId}/{bloodType}")
     public InventoryItemResponse addBatch(

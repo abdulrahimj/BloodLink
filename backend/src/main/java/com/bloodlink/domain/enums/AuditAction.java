@@ -16,8 +16,8 @@ package com.bloodlink.domain.enums;
  * or a hospital, and a write-off at its batch. {@link #isAccountAction()} is the
  * Java side of that same split.
  *
- * Every action but STOCK_WRITTEN_OFF is an administrator's; a write-off may also be
- * made by blood bank staff, for their own bank's batches.
+ * Every action but STOCK_WRITTEN_OFF is an administrator's; a write-off is made only by
+ * blood bank staff, for their own bank's batches (an administrator cannot write off).
  */
 public enum AuditAction {
 
@@ -40,7 +40,7 @@ public enum AuditAction {
     HOSPITAL_CREATED,
 
     /** Units of one batch were discarded (Business Rule 24, V18) by blood bank staff
-     *  of that bank or by an administrator. Its subject is the batch. */
+     *  of that bank — never by an administrator. Its subject is the batch. */
     STOCK_WRITTEN_OFF;
 
     /**

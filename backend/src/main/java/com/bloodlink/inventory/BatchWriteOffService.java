@@ -35,10 +35,11 @@ import com.bloodlink.web.error.NotFoundException;
  * a shelf besides issuing them to a hospital request, and the way expired units —
  * shown on every screen but never counted as stock — are finally taken off it.
  *
- * Who may: blood bank staff for their own bank's batches, and an administrator for
- * any bank's. The rule is InventoryService's, asked through
- * {@link InventoryService#requireManageableBank}, so that adding, viewing and writing
- * off stock can never be governed by three different copies of it.
+ * Who may: active blood bank staff, for their own bank's batches only. An
+ * administrator may not — discarding units is a physical act on a bank's own shelf,
+ * and ADMIN's access to stock is read-only (Stage 3b). The rule is InventoryService's,
+ * asked through {@link InventoryService#requireStockChangeAccess}, so that adding and
+ * writing off stock can never be governed by two different copies of it.
  */
 @Service
 public class BatchWriteOffService {
@@ -81,8 +82,9 @@ public class BatchWriteOffService {
     /**
      * Writes {@code units} off one batch. In order, and why in that order:
      * <ol>
-     *   <li>The bank must exist (404) and the caller must be allowed to manage it
-     *       (403) — the same rule as Add New Batch and the batch views.</li>
+     *   <li>The caller must be active staff of this bank (403 otherwise, ADMIN
+     *       included) and the bank must exist (404) — the same rule as Add New
+     *       Batch. Nothing is read or written for a caller who fails it.</li>
      *   <li>The request is checked on its own: units at least 1, a known reason, and
      *       a note that meets the rules (required for OTHER, at most 500 characters).
      *       Each is a 400 on its own field. Nothing is locked yet, so a malformed
@@ -114,7 +116,7 @@ public class BatchWriteOffService {
     public BatchWriteOffResponse writeOff(
         UUID bloodBankId, UUID batchId, WriteOffBatchRequest request, AuthenticatedUser principal
     ) {
-        BloodBank bank = inventoryService.requireManageableBank(bloodBankId, principal);
+        BloodBank bank = inventoryService.requireStockChangeAccess(bloodBankId, principal);
 
         int units = requireUnits(request.units());
         WriteOffReason reason = requireReason(request.reason());
