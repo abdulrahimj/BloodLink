@@ -22,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
 
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
@@ -107,7 +108,7 @@ class DonationServiceTest {
 
     /** The lookup every path makes — the bank, then the donor under its lock. */
     private void stubBankAndDonor(Donor donor) {
-        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        when(actingBankResolver.resolveForStockChange(any(), any())).thenReturn(bank());
         when(donorRepository.findByIdForUpdate(DONOR_ID)).thenReturn(Optional.of(donor));
     }
 
@@ -227,7 +228,7 @@ class DonationServiceTest {
      */
     @Test
     void aRefusedExpiryDateWritesNothingAtAll() {
-        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        when(actingBankResolver.resolveForStockChange(any(), any())).thenReturn(bank());
         LocalDate typo = LocalDate.now().plusYears(2);
         doThrow(new InvalidFieldException("expiryDate", "Expiry date must be within 365 days of today"))
             .when(inventoryService).requireAcceptableExpiry(typo);
@@ -290,11 +291,36 @@ class DonationServiceTest {
         assertThat(service.recordDonation(payload("O+", 1), principal()).donationId()).isNotNull();
     }
 
+    // ---------- who may record a donation (Stage 3b-2) ----------
+
+    /**
+     * Recording a donation puts units on a shelf, so it asks the stock-change rule
+     * (ActingBankResolver.resolveForStockChange — no ADMIN branch, proven in
+     * ActingBankResolverTest) and never the older "acting for a named bank" one.
+     * When that rule refuses — an ADMIN, a hospital, a suspended account — nothing
+     * else happens: no donor is read or locked and nothing is written.
+     */
+    @Test
+    void aCallerTheStockChangeRuleRefusesCausesNoReadAndNoWrite() {
+        when(actingBankResolver.resolveForStockChange(any(), eq("record a donation")))
+            .thenThrow(new AccessDeniedException("Only the blood bank's own staff can record a donation."));
+        AuthenticatedUser admin = new AuthenticatedUser(USER_ID, "+23276000009", "hash", Role.ADMIN);
+
+        assertThatThrownBy(() -> service.recordDonation(
+                new RecordDonationPayload(DONOR_ID, "O+", 1, BANK_ID, null), admin))
+            .isInstanceOf(AccessDeniedException.class);
+
+        verify(actingBankResolver, never()).resolve(any(), any(), any());
+        verify(donorRepository, never()).findByIdForUpdate(any());
+        verify(inventoryService, never()).requireAcceptableExpiry(any());
+        verifyNothingWasWritten();
+    }
+
     // ---------- other failures ----------
 
     @Test
     void anUnknownDonorIsRefusedAndNothingIsWritten() {
-        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        when(actingBankResolver.resolveForStockChange(any(), any())).thenReturn(bank());
         when(donorRepository.findByIdForUpdate(DONOR_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.recordDonation(payload("O+", 1), principal()))
@@ -305,7 +331,7 @@ class DonationServiceTest {
 
     @Test
     void anUnrecognisedBloodGroupIsRefusedBeforeAnythingIsWritten() {
-        when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
+        when(actingBankResolver.resolveForStockChange(any(), any())).thenReturn(bank());
 
         assertThatThrownBy(() -> service.recordDonation(payload("Z+", 1), principal()))
             .isInstanceOf(IllegalArgumentException.class);

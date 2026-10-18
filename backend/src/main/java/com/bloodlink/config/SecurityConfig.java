@@ -137,10 +137,19 @@ public class SecurityConfig {
                 .requestMatchers("/api/inventory/**").hasRole(Role.BLOOD_BANK_STAFF.name())
                 .requestMatchers("/api/appeals/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
-                .requestMatchers("/api/donations/**")
-                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+                // Recording a donation creates a batch of stock, so it is blood bank
+                // staff ONLY — not ADMIN (Business Rule 8, Stage 3b-2). Refused again in
+                // DonationService (ActingBankResolver.resolveForStockChange). There is no
+                // read route under /api/donations; ADMIN reads donations through the
+                // reports under /api/admin/**.
+                .requestMatchers("/api/donations/**").hasRole(Role.BLOOD_BANK_STAFF.name())
 
                 // --- Blood requests: hospitals raise them, bank staff act on them ---
+                // ADMIN stays on this rule because PATCH /api/requests/{id} carries both
+                // REJECT (an ADMIN may decline on a named bank's behalf) and CONTRIBUTE
+                // (which moves stock and an ADMIN may not do). A URL rule cannot see which
+                // one the body asks for, so RequestService.act refuses an ADMIN's
+                // CONTRIBUTE itself, before the request is locked or read.
                 .requestMatchers("/api/requests/**").hasAnyRole(
                     Role.HOSPITAL_STAFF.name(), Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
 

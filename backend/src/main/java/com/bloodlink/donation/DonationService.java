@@ -110,7 +110,12 @@ public class DonationService {
      */
     @Transactional
     public DonationRecordedResponse recordDonation(RecordDonationPayload payload, AuthenticatedUser principal) {
-        BloodBank bank = actingBankResolver.resolve(payload.bloodBankId(), principal, "record a donation");
+        // Recording a donation puts units on a shelf (a new batch), so it is a stock
+        // change: active staff of their own bank only, never an ADMIN on a named
+        // bank's behalf (Business Rule 8, Stage 3b-2). Refused before anything is
+        // read, so a refused caller causes no lookup, lock or write. The payload's
+        // bloodBankId is therefore never consulted.
+        BloodBank bank = actingBankResolver.resolveForStockChange(principal, "record a donation");
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType testedBloodType = BloodType.fromLabel(payload.bloodType().trim());
 

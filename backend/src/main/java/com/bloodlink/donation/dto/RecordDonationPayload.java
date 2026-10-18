@@ -51,10 +51,11 @@ public record RecordDonationPayload(
     Integer unitsDonated,
 
     /**
-     * Which bank took the donation. Ignored for BLOOD_BANK_STAFF — their bank
-     * comes from their own User row, never from the body — and required only for
-     * ADMIN, who belongs to no single bank. The same split ActingBankResolver
-     * already applies to inventory writes and donation appeals.
+     * Ignored. The bank that took the donation is always the recording staff
+     * member's own, from their User row (ActingBankResolver.resolveForStockChange).
+     * It once named the bank for an ADMIN acting on a bank's behalf; since Stage 3b-2
+     * an administrator cannot record donations at all (Business Rule 8). Kept so a
+     * client that still sends it is not refused.
      */
     UUID bloodBankId,
 

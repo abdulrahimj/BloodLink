@@ -16,9 +16,9 @@ public record RequestActionPayload(
 
     /**
      * Which bank is acting. Ignored for BLOOD_BANK_STAFF — their bank comes from
-     * their own User row, never from the body — and required only for ADMIN, who
-     * belongs to no single bank but may act on any (the same split InventoryService
-     * already applies to inventory writes).
+     * their own User row, never from the body — and required only for an ADMIN
+     * declining (REJECT) on a bank's behalf. An ADMIN cannot CONTRIBUTE at all
+     * (Business Rule 8, Stage 3b-2), so it is never read for a contribution.
      */
     UUID bloodBankId,
 

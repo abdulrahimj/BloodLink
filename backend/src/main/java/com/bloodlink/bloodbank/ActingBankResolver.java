@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.UserRepository;
@@ -27,6 +28,12 @@ import com.bloodlink.web.error.NotFoundException;
  *     (an administrator may do this, they just have not said for whom), never a 403.
  *   • Everyone else is refused. Hospitals raise requests; they do not decide their
  *     own request's fate, and donors have no part in this at all.
+ *
+ * That is {@link #resolve}, for actions that move no blood: declining a request,
+ * sending an appeal, reading the donor roster. An action that adds or removes
+ * blood units asks {@link #resolveForStockChange} instead, which has no ADMIN
+ * branch at all (Business Rule 8): an administrator oversees stock but never
+ * changes it.
  *
  * Extracted from RequestService when donation appeals became the second action
  * needing it. An access-control rule copied into two services is a rule that will
@@ -76,5 +83,48 @@ public class ActingBankResolver {
         }
 
         throw new AccessDeniedException("Only blood bank staff can " + action + ".");
+    }
+
+    /**
+     * The bank whose stock the caller is about to change — the one rule for every
+     * action that adds or removes blood units: Add New Batch, writing a batch off,
+     * Record Donation (which creates a batch) and contributing to a request (which
+     * takes units off batches). Stages 3b and 3b-2, the project owner's decision.
+     *
+     * Unlike {@link #resolve}, there is no ADMIN branch: an administrator has
+     * read-only oversight of stock and may not change it on any bank's behalf, so
+     * no bank id from the request is consulted at all. Only BLOOD_BANK_STAFF pass,
+     * acting as the bank on their own User row, and only while their account is
+     * ACTIVE (JwtAuthenticationFilter already refuses a suspended account's token on
+     * every request; this repeats the rule where stock actually changes).
+     *
+     * The role is checked before anything is read, so a refused caller causes no
+     * lookup, no lock and no write.
+     *
+     * @param action completes "Only the blood bank's own staff can ..." — e.g.
+     *               "record a donation", "change its stock".
+     */
+    public BloodBank resolveForStockChange(AuthenticatedUser principal, String action) {
+        refuseUnlessBankStaff(principal, action);
+        User user = userRepository.findById(principal.getId())
+            .orElseThrow(() -> new NotFoundException("Account not found."));
+        if (user.getStatus() != AccountStatus.ACTIVE) {
+            throw new AccessDeniedException("This account is suspended.");
+        }
+        if (user.getBloodBank() == null) {
+            throw new AccessDeniedException("This account is not assigned to a blood bank.");
+        }
+        return user.getBloodBank();
+    }
+
+    /**
+     * The role half of {@link #resolveForStockChange} on its own, reading nothing —
+     * for a caller that must refuse before it looks anything else up (InventoryService
+     * checks the bank in the path exists before it reads the caller's own row).
+     */
+    public void refuseUnlessBankStaff(AuthenticatedUser principal, String action) {
+        if (principal.getRole() != Role.BLOOD_BANK_STAFF) {
+            throw new AccessDeniedException("Only the blood bank's own staff can " + action + ".");
+        }
     }
 }

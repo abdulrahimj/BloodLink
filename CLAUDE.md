@@ -66,7 +66,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stage 3b made adding and writing off stock own-bank staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
 
 ### User
 | field | type |
@@ -340,14 +340,31 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
    unless staff enter the date from the bag label. **Flagged for review:** confirm 42 days matches the
    preparation Makeni's labs actually use.
 8. **A BLOOD_BANK_STAFF user is tied to exactly one blood bank** via a nullable `blood_bank_id` on
-   `User` (null for all other roles). Inventory writes — Add New Batch and writing a batch off — are
-   restricted to that staff member's own bank, and **ADMIN cannot make them at all** (Stage 3b, the
-   project owner's decision): adding and discarding units are physical acts on a bank's own shelf, so an
-   administrator reads every bank's stock and batches but changes none of it. Refused with a 403 by
-   SecurityConfig (non-GET `/api/inventory/**` is BLOOD_BANK_STAFF only) and again by
-   `InventoryService.requireStockChangeAccess`, which also requires the account to be ACTIVE. (Record
-   Donation and request contributions, which also move stock, still accept an ADMIN naming a bank through
-   `ActingBankResolver`; Stage 3b deliberately left them unchanged.) There is no self-registration path for HOSPITAL_STAFF,
+   `User` (null for all other roles). **Every action that adds or removes blood units is restricted to
+   active staff of the bank whose shelf it changes, and ADMIN has no way to make any of them** (Stages 3b
+   and 3b-2, the project owner's decision): an administrator has read-only oversight of stock — stock
+   figures, batch lists, batch history, the audit log, reports — and changes none of it, on any bank's
+   behalf. The four such actions, and where each refuses ADMIN with a 403 before anything is read or
+   written:
+   - **Add New Batch** (`PATCH /api/inventory/{bank}/{group}`) and **write-off**
+     (`POST /api/inventory/{bank}/batches/{batch}/write-offs`): SecurityConfig (non-GET
+     `/api/inventory/**` is BLOOD_BANK_STAFF only) and `InventoryService.requireStockChangeAccess`, which
+     also requires the bank in the path to be the caller's own.
+   - **Record Donation** (`POST /api/donations`, which creates a batch): SecurityConfig
+     (`/api/donations/**` is BLOOD_BANK_STAFF only) and `DonationService`.
+   - **CONTRIBUTE** (`PATCH /api/requests/{id}`, which takes units off batches): `RequestService.act`
+     only. That address also carries REJECT, which an ADMIN keeps (declining on a named bank's behalf
+     moves no blood), and a URL rule cannot see which action the body asks for — so the security rule
+     still admits ADMIN to `/api/requests/**` and the service refuses the contribution.
+
+   All four share one rule, `ActingBankResolver.resolveForStockChange`: BLOOD_BANK_STAFF only (checked
+   before anything is read), ACTIVE, assigned to a bank, acting as that bank — it has no ADMIN branch, and
+   no bank id from the request is consulted. `ActingBankResolver.resolve`, under which an ADMIN names a
+   bank to act for, is now used only for actions that move no blood: REJECT, donation appeals and the
+   donor roster. Staff of one bank can never change another bank's stock: a `bloodBankId` they send is
+   ignored and they act as their own bank. Known limit, not addressed: an administrator creates staff
+   accounts and is shown their one-time password (Business Rule 14), so could sign in *as* that staff
+   member; anything done that way is recorded against the staff account. There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
 9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`,
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
@@ -620,6 +637,12 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       +232… to +232…. Blood bank changed from X to Y.") and the time. Only real changes are logged: a
       status set to what it already was, or an edit that changes nothing, records nothing. The generated
       password (Business Rule 14) never appears in an entry. Reads are not logged.
+    - **No administrator action changes stock** (Stages 3b and 3b-2, Business Rule 8). An administrator
+      can no longer add a batch, write one off, record a donation or contribute to a request, so the log
+      never holds a stock change made by an administrator; it records their account and facility actions,
+      and the write-offs made by bank staff. (Record Donation and contributions are not audit-logged at
+      all: their own rows — `donations`, `blood_request_contributions` and `contribution_allocations` —
+      are their record.)
     - **Widened to stock write-offs (Stage 3 of the batch-stock redesign).** The log also records
       STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank (Business Rule 24;
       never by an ADMIN since Stage 3b, Business Rule 8) — so its actor is bank staff, not an
@@ -733,6 +756,9 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       `units`). It deducts the acting bank's stock immediately, writes a `BloodRequestContribution`
       row, and updates the status — all in one transaction, so units can never leave stock without
       being recorded or be recorded without leaving stock. `REJECT` is unchanged (Business Rule 11).
+      **Only active staff of the contributing bank may CONTRIBUTE; an ADMIN is refused (403)** before
+      the request is locked (Stage 3b-2, Business Rule 8), while an ADMIN may still REJECT on a named
+      bank's behalf.
       Since Business Rule 24 the deduction is **first expiry, first out** from the bank's usable
       batches of that group (`BatchStockService.issue`, `FefoAllocator`), and one `ContributionAllocation`
       row per batch drawn on records where the units came from; the allocations add up to the
@@ -1043,9 +1069,9 @@ listed so nothing is forgotten when the chapters are next revised.
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; adding and writing off stock are theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch or write one off (Business Rules 8, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -1078,7 +1104,7 @@ listed so nothing is forgotten when the chapters are next revised.
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
-    `BatchWriteOffIT`),
+    `BatchWriteOffIT`, `AdminStockLockoutIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

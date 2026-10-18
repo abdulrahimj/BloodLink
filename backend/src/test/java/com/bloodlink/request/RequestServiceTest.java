@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -510,25 +511,42 @@ class RequestServiceTest {
             .isInstanceOf(AccessDeniedException.class);
     }
 
+    /**
+     * Stage 3b-2: a contribution takes units off a shelf, so an ADMIN may not make
+     * one on any bank's behalf, named or not. Refused before the request is locked
+     * or any stock read, so nothing is touched. This replaces two earlier tests
+     * that asserted the opposite: that an ADMIN had to name a bank (a 400 when they
+     * did not) and could then contribute from it.
+     */
     @Test
-    void anAdministratorMustNameTheBankTheyAreActingFor() {
-        assertThatThrownBy(() -> contributeAs(Role.ADMIN, null, 1))
-            .isInstanceOf(IllegalArgumentException.class);
+    void anAdministratorCannotContributeWhetherOrNotABankIsNamed() {
+        for (UUID named : new UUID[] { BANK_ID, null }) {
+            assertThatThrownBy(() -> contributeAs(Role.ADMIN, named, 2))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Only the blood bank's own staff can contribute units to a blood request.");
+        }
+
+        verifyNoInteractions(bloodBankRepository, userRepository, batchRepository);
+        verify(bloodRequestRepository, never()).findByIdForUpdate(any());
+        verify(contributionRepository, never()).save(any());
+        verify(allocationRepository, never()).save(any());
     }
 
+    /** What an ADMIN keeps: declining on a named bank's behalf moves no blood. */
     @Test
-    void anAdministratorCanContributeOnBehalfOfANamedBank() {
-        BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
-        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(actingBank));
+    void anAdministratorCanStillDeclineOnBehalfOfANamedBank() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID, "Makeni Regional Blood Bank")));
         when(bloodRequestRepository.findByIdForUpdate(REQUEST_ID))
             .thenReturn(Optional.of(request(RequestStatus.PENDING, null)));
-        shelfHolds(BANK_ID, stock(9));
+        when(declineRepository.countByBloodRequestId(REQUEST_ID)).thenReturn(1L);
+        when(bloodBankRepository.count()).thenReturn(2L);
         echoSavedRequest();
 
-        BloodRequestResponse fulfilled = contributeAs(Role.ADMIN, BANK_ID, 2);
+        BloodRequestResponse afterDecline = service.act(
+            REQUEST_ID, new RequestActionPayload(RequestAction.REJECT, BANK_ID, null), principal(Role.ADMIN));
 
-        assertThat(fulfilled.status()).isEqualTo(RequestStatus.FULFILLED);
-        assertThat(fulfilled.lastContributedByBloodBankName()).isEqualTo("Makeni Regional Blood Bank");
+        assertThat(afterDecline.status()).isEqualTo(RequestStatus.PENDING);
+        verify(declineRepository).save(any());
     }
 
     // ---------- helpers for the contribution tests ----------

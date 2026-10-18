@@ -15,12 +15,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.appeal.AppealCooldownPolicy;
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Donation;
 import com.bloodlink.domain.User;
-import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
@@ -77,6 +77,9 @@ public class InventoryService {
     // current usable stock into the one answer the send endpoint would also give.
     private final AppealCooldownRepository appealCooldownRepository;
     private final AppealCooldownPolicy appealCooldownPolicy;
+    /** Owns the "who may change stock" rule shared with Record Donation and
+     *  contributions (resolveForStockChange). */
+    private final ActingBankResolver actingBankResolver;
 
     InventoryService(
         BloodBankRepository bloodBankRepository,
@@ -89,8 +92,10 @@ public class InventoryService {
         BloodRequestContributionRepository contributionRepository,
         NotificationService notificationService,
         AppealCooldownRepository appealCooldownRepository,
-        AppealCooldownPolicy appealCooldownPolicy
+        AppealCooldownPolicy appealCooldownPolicy,
+        ActingBankResolver actingBankResolver
     ) {
+        this.actingBankResolver = actingBankResolver;
         this.bloodBankRepository = bloodBankRepository;
         this.batchRepository = batchRepository;
         this.allocationRepository = allocationRepository;
@@ -341,22 +346,24 @@ public class InventoryService {
      *
      * Public so the write-off action (BatchWriteOffService) applies this same rule
      * rather than a copy of it: an access rule written twice is a rule that will one
-     * day be fixed in one place and not the other.
+     * day be fixed in one place and not the other. For the same reason the rule itself
+     * — staff only, active, assigned to a bank — is ActingBankResolver's
+     * {@code resolveForStockChange}, which Record Donation and contributions use too
+     * (Stage 3b-2); this method only adds that the bank in the path must be the
+     * caller's own.
      */
     public BloodBank requireStockChangeAccess(UUID bloodBankId, AuthenticatedUser principal) {
-        if (principal.getRole() != Role.BLOOD_BANK_STAFF) {
-            throw new AccessDeniedException("Only the blood bank's own staff can change its stock.");
-        }
+        actingBankResolver.refuseUnlessBankStaff(principal, CHANGE_STOCK);
         BloodBank bank = requireBank(bloodBankId);
-        User user = requireOwnBankStaff(bloodBankId, principal);
-        // A suspended account's token is already refused on every request
-        // (JwtAuthenticationFilter); this is the same rule once more, at the point
-        // where stock actually changes.
-        if (user.getStatus() != AccountStatus.ACTIVE) {
-            throw new AccessDeniedException("This account is suspended.");
+        BloodBank own = actingBankResolver.resolveForStockChange(principal, CHANGE_STOCK);
+        if (!own.getId().equals(bloodBankId)) {
+            throw new AccessDeniedException("This account is not assigned to that blood bank.");
         }
         return bank;
     }
+
+    /** Completes "Only the blood bank's own staff can ..." for the two stock actions here. */
+    private static final String CHANGE_STOCK = "change its stock";
 
     /**
      * Who may READ batch-level detail: ADMIN for any bank, BLOOD_BANK_STAFF only for

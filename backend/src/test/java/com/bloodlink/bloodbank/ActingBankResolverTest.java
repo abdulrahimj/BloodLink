@@ -2,6 +2,7 @@ package com.bloodlink.bloodbank;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
@@ -16,6 +17,7 @@ import org.springframework.security.access.AccessDeniedException;
 
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.UserRepository;
@@ -136,5 +138,49 @@ class ActingBankResolverTest {
         assertThatThrownBy(() -> resolver.resolve(BANK_ID, principal(Role.DONOR), "send a donation appeal"))
             .isInstanceOf(AccessDeniedException.class)
             .hasMessageContaining("Only blood bank staff can send a donation appeal");
+    }
+
+    // ---------- resolveForStockChange: Business Rule 8, Stages 3b and 3b-2 ----------
+
+    @Test
+    void forAStockChangeActiveBankStaffActAsTheirOwnBank() {
+        User staff = new User();
+        staff.setId(USER_ID);
+        staff.setBloodBank(bank(BANK_ID));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff));
+
+        assertThat(resolver.resolveForStockChange(principal(Role.BLOOD_BANK_STAFF), "record a donation").getId())
+            .isEqualTo(BANK_ID);
+    }
+
+    /** No ADMIN branch at all: an administrator cannot change stock on any bank's
+     *  behalf, and nothing is looked up — not the account, not a bank. */
+    @Test
+    void forAStockChangeAnAdministratorHospitalStaffAndDonorsAreRefusedBeforeAnythingIsRead() {
+        for (Role role : new Role[] { Role.ADMIN, Role.HOSPITAL_STAFF, Role.DONOR }) {
+            assertThatThrownBy(() -> resolver.resolveForStockChange(principal(role), "record a donation"))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Only the blood bank's own staff can record a donation.");
+        }
+        verifyNoInteractions(userRepository, bloodBankRepository);
+    }
+
+    @Test
+    void forAStockChangeASuspendedOrUnassignedStaffAccountIsRefused() {
+        User suspended = new User();
+        suspended.setId(USER_ID);
+        suspended.setBloodBank(bank(BANK_ID));
+        suspended.setStatus(AccountStatus.SUSPENDED);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(suspended));
+        assertThatThrownBy(() -> resolver.resolveForStockChange(principal(Role.BLOOD_BANK_STAFF), "act"))
+            .isInstanceOf(AccessDeniedException.class)
+            .hasMessage("This account is suspended.");
+
+        User unassigned = new User();
+        unassigned.setId(USER_ID);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(unassigned));
+        assertThatThrownBy(() -> resolver.resolveForStockChange(principal(Role.BLOOD_BANK_STAFF), "act"))
+            .isInstanceOf(AccessDeniedException.class)
+            .hasMessageContaining("not assigned to a blood bank");
     }
 }

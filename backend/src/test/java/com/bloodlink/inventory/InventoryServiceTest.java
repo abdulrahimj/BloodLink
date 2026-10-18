@@ -27,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
 import com.bloodlink.appeal.AppealCooldownPolicy;
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.AppealCooldown;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
@@ -101,7 +102,7 @@ class InventoryServiceTest {
             bloodBankRepository, batchRepository, allocationRepository, writeOffRepository,
             new BatchStockService(batchRepository, allocationRepository, stockPolicy), stockPolicy,
             userRepository, contributionRepository, notificationService, appealCooldownRepository,
-            new AppealCooldownPolicy(appealCooldownRepository)
+            new AppealCooldownPolicy(appealCooldownRepository), new ActingBankResolver(userRepository, bloodBankRepository)
         );
     }
 

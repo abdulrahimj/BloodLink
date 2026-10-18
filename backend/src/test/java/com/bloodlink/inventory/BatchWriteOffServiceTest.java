@@ -27,6 +27,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
 import com.bloodlink.appeal.AppealCooldownPolicy;
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.domain.BatchWriteOff;
 import com.bloodlink.domain.BloodBank;
@@ -97,7 +98,8 @@ class BatchWriteOffServiceTest {
         InventoryService inventoryService = new InventoryService(
             bloodBankRepository, batchRepository, allocationRepository, writeOffRepository,
             batchStockService, stockPolicy, userRepository, contributionRepository, notificationService,
-            appealCooldownRepository, new AppealCooldownPolicy(appealCooldownRepository)
+            appealCooldownRepository, new AppealCooldownPolicy(appealCooldownRepository),
+            new ActingBankResolver(userRepository, bloodBankRepository)
         );
         service = new BatchWriteOffService(
             inventoryService, batchRepository, writeOffRepository, batchStockService, stockPolicy,

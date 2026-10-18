@@ -27,6 +27,7 @@ import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
 import com.bloodlink.request.dto.CreateRequestPayload;
+import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.stock.BatchStockService;
@@ -219,7 +220,18 @@ public class RequestService {
      */
     @Transactional
     public BloodRequestResponse act(UUID requestId, RequestActionPayload payload, AuthenticatedUser principal) {
-        BloodBank actingBank = actingBankResolver.resolve(payload.bloodBankId(), principal, "act on a blood request");
+        // CONTRIBUTE takes units off a bank's shelves, so it is a stock change: active
+        // staff of their own bank only, and never an ADMIN (Business Rule 8, Stage
+        // 3b-2). REJECT moves no blood and keeps the older rule, under which an ADMIN
+        // may decline on a named bank's behalf. Decided before the request row is
+        // locked or read, so a refused contribution touches nothing.
+        //
+        // This is the only place ADMIN is refused a contribution: CONTRIBUTE and
+        // REJECT share PATCH /api/requests/{id}, and a URL rule in SecurityConfig
+        // cannot see which one the body asks for.
+        BloodBank actingBank = payload.action() == RequestAction.CONTRIBUTE
+            ? actingBankResolver.resolveForStockChange(principal, "contribute units to a blood request")
+            : actingBankResolver.resolve(payload.bloodBankId(), principal, "act on a blood request");
 
         BloodRequest request = bloodRequestRepository.findByIdForUpdate(requestId)
             .orElseThrow(() -> new NotFoundException("No blood request found for this id."));
