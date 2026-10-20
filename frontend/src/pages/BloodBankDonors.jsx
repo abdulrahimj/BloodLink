@@ -10,6 +10,7 @@ import {
   buildDonorRosterParams, describeDonorRosterEmptyState, describeDonorEligibility,
 } from "../lib/donorRoster.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* BloodLink — Blood Bank: Donors (Business Rule 21): donors with a donation at this bank, paged and filtered,
@@ -24,6 +25,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
   const [pageData, setPageData] = useState(null);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedDonor, setSelectedDonor] = useState(null); // a roster row, or null
   const [recordingDonationFor, setRecordingDonationFor] = useState(null); // a roster row, or null
 
@@ -83,7 +85,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
   const emptyMessage = pageData ? describeDonorRosterEmptyState(totalElements, filters) : null;
 
   return (
-    <div className="bd-root">
+    <div className={`bd-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -308,7 +310,8 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
         @media (prefers-reduced-motion: reduce) { .bd-root * { transition: none !important; } }
       `}</style>
 
-      <aside className="bd-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="bd-side" id="bd-sidebar">
         <div className="bd-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -324,7 +327,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
 
         <div className="bd-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "BLOOD BANK STAFF"}</div>
 
-        <nav className="bd-nav">
+        <nav className="bd-nav" onClick={() => setMobileMenuOpen(false)}>
           <button type="button" onClick={() => onNavigate("dashboard")}><GridIcon /> Dashboard</button>
           <button type="button" onClick={() => onNavigate("inventory")}><DropletOutlineIcon /> Blood Inventory</button>
           <button type="button"><TruckIcon /> Blood Logistics</button>
@@ -338,6 +341,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
 
       <main className="bd-main">
         <div className="bd-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="bd-sidebar" />
           <div>
             <div className="bd-title">Donors</div>
             <div className="bd-sub">Donors who have donated at this blood bank</div>

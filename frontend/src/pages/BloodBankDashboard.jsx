@@ -4,6 +4,7 @@ import { getBankDashboard } from "../api/bloodBanks.js";
 import { actOnRequest, getRequests } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
@@ -23,6 +24,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   // BloodBankPortal shows this page for both "dashboard" and "settings"; on the
   // latter, the main area is the shared Profile Settings screen (Business Rule 16).
   const onSettings = activeView === "settings";
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [stock, setStock] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [requests, setRequests] = useState([]);
@@ -152,7 +154,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }
 
   return (
-    <div className="bb-root">
+    <div className={`bb-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -401,7 +403,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         @media (prefers-reduced-motion: reduce) { .bb-root * { transition: none !important; } }
       `}</style>
 
-      <aside className="bb-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="bb-side" id="bb-sidebar">
         <div className="bb-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -417,7 +420,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 
         <div className="bb-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "BLOOD BANK STAFF"}</div>
 
-        <nav className="bb-nav">
+        <nav className="bb-nav" onClick={() => setMobileMenuOpen(false)}>
           <button
             type="button" className={onSettings ? "" : "is-active"}
             aria-current={onSettings ? undefined : "page"}
@@ -443,6 +446,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 
       <main className="bb-main">
         <div className="bb-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="bb-sidebar" />
           <div>
             <div className="bb-title">{onSettings ? "Profile Settings" : (dashboard?.bloodBankName ?? "Blood Bank Dashboard")}</div>
             <div className="bb-sub">{onSettings ? "Your name, email and password" : "Stock and request overview"}</div>

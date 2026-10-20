@@ -4,6 +4,7 @@ import { getInventory } from "../api/inventory.js";
 import { getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
@@ -55,6 +56,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   // "dashboard" or "settings" (Business Rule 16); the form's half-typed contents survive,
   // as this component stays mounted.
   const [view, setView] = useState("dashboard");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [group, setGroup] = useState("O-");
   const [units, setUnits] = useState(2);
   const [urgency, setUrgency] = useState("EMERGENCY");
@@ -181,7 +183,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   }
 
   return (
-    <div className="hp-root">
+    <div className={`hp-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -439,7 +441,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
       `}</style>
 
       {/* ================= SIDEBAR ================= */}
-      <aside className="hp-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="hp-side" id="hp-sidebar">
         <div className="hp-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -459,7 +462,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
 
         {/* Dashboard and Settings are wired; the middle four are still the
             mockup's inert entries. */}
-        <nav className="hp-nav">
+        <nav className="hp-nav" onClick={() => setMobileMenuOpen(false)}>
           <button
             type="button" className={view === "dashboard" ? "is-active" : ""}
             aria-current={view === "dashboard" ? "page" : undefined}
@@ -486,6 +489,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
       {/* ================= MAIN ================= */}
       <main className="hp-main">
         <div className="hp-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="hp-sidebar" />
           <div>
             <div className="hp-title">{view === "settings" ? "Profile Settings" : (hospital.name ?? "Hospital Portal")}</div>
             <div className="hp-sub">{view === "settings" ? "Your name, email and password" : "Blood request desk"}</div>

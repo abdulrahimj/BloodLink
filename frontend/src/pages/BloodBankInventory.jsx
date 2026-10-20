@@ -6,6 +6,7 @@ import { formatDateTime, formatFullDate, formatHeaderDate } from "../lib/dates.j
 import { describeAppealReach, donorCount } from "../lib/appealReach.js";
 import { appealButtonLabel as getAppealButtonLabel, appealButtonText as getAppealButtonText } from "../lib/appealStatus.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* BloodLink — Blood Bank: Blood Inventory (detail view): stock by group, expiry exposure, the per-group table,
@@ -52,6 +53,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [donationModalOpen, setDonationModalOpen] = useState(false);
   // Separate from appealNotice, so a donation receipt never overwrites an unread appeal receipt.
@@ -196,7 +198,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   }
 
   return (
-    <div className="bi-root">
+    <div className={`bi-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -462,7 +464,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         @media (prefers-reduced-motion: reduce) { .bi-root * { transition: none !important; } }
       `}</style>
 
-      <aside className="bi-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="bi-side" id="bi-sidebar">
         <div className="bi-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -478,7 +481,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
 
         <div className="bi-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "BLOOD BANK STAFF"}</div>
 
-        <nav className="bi-nav">
+        <nav className="bi-nav" onClick={() => setMobileMenuOpen(false)}>
           <button type="button" onClick={() => onNavigate("dashboard")}><GridIcon /> Dashboard</button>
           <button type="button" className="is-active"><DropletOutlineIcon /> Blood Inventory</button>
           <button type="button"><TruckIcon /> Blood Logistics</button>
@@ -492,6 +495,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
 
       <main className="bi-main">
         <div className="bi-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="bi-sidebar" />
           <div>
             <div className="bi-title">Blood Inventory</div>
             <div className="bi-sub">{summary?.bloodBankName ?? "Loading…"}</div>

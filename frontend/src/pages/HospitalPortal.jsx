@@ -57,14 +57,15 @@ export default function HospitalPortal({ user, onSignOut, onUserUpdated }) {
  */
 function HospitalPicker({ choices, error, onChoose, onSignOut }) {
   return (
-    <div style={{
+    <div className="facility-picker" style={{
       minHeight: "100vh", display: "flex", flexDirection: "column",
       alignItems: "center", justifyContent: "center", gap: 16,
+      width: "100%", padding: "24px 16px", boxSizing: "border-box",
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif",
       background: "#F1F2F4", color: "#111111",
     }}>
-      <div style={{ fontSize: 20, fontWeight: 800 }}>Choose a hospital</div>
-      <div style={{ fontSize: 13, color: "#7A7A7A", marginTop: -8 }}>
+      <div className="facility-picker-title" style={{ fontSize: 20, fontWeight: 800 }}>Choose a hospital</div>
+      <div className="facility-picker-subtitle" style={{ fontSize: 13, color: "#7A7A7A", marginTop: -8 }}>
         Your account isn&rsquo;t tied to one hospital — pick one for this session.
       </div>
 
@@ -72,11 +73,12 @@ function HospitalPicker({ choices, error, onChoose, onSignOut }) {
       {!error && !choices && <div style={{ color: "#7A7A7A", fontSize: 13 }}>Loading hospitals…</div>}
 
       {choices && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 280 }}>
+        <div className="facility-choice-list" style={{ display: "flex", flexDirection: "column", gap: 10, width: "min(480px, 100%)", minWidth: 0 }}>
           {choices.map((choice) => (
             <button
               key={choice.id}
               type="button"
+              className="facility-choice"
               onClick={() => onChoose(choice)}
               style={{
                 background: "#FFFFFF", border: "1.5px solid #E6E8EB", borderRadius: 8,
@@ -95,6 +97,7 @@ function HospitalPicker({ choices, error, onChoose, onSignOut }) {
 
       <button
         type="button"
+        className="facility-picker-signout"
         onClick={onSignOut}
         style={{
           background: "transparent", border: "none", color: "#7A7A7A",

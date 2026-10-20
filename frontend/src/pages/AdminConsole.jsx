@@ -13,6 +13,7 @@ import { describeShowingRange } from "../lib/pagination.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import AdminReports from "./AdminReports.jsx";
 import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import {
@@ -111,6 +112,7 @@ const ROLE_FILTERS = ["ALL", "DONOR", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADM
  */
 export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [view, setView] = useState(VIEW.DASHBOARD);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [userCounts, setUserCounts] = useState(null);
   const [trends, setTrends] = useState([]);
@@ -171,7 +173,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   }
 
   return (
-    <div className="ad-root">
+    <div className={`ad-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -615,7 +617,8 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
       `}</style>
 
       {/* ================= SIDEBAR ================= */}
-      <aside className="ad-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="ad-side" id="ad-sidebar">
         <div className="ad-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -633,7 +636,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 
         <div className="ad-role">ADMINISTRATOR</div>
 
-        <nav className="ad-nav">
+        <nav className="ad-nav" onClick={() => setMobileMenuOpen(false)}>
           <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
           <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
           <NavButton view={VIEW.BANKS} current={view} onSelect={setView}><BankIcon /> Blood Banks</NavButton>
@@ -649,6 +652,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
       {/* ================= MAIN ================= */}
       <main className="ad-main">
         <div className="ad-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="ad-sidebar" />
           <div>
             <div className="ad-title">{HEADINGS[view].title}</div>
             <div className="ad-sub">{HEADINGS[view].sub}</div>
