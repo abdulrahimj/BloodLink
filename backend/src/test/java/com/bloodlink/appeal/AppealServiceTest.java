@@ -44,18 +44,8 @@ import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.web.error.ConflictException;
 
 /**
- * AppealService is deliberately thin — which bank is acting is
- * ActingBankResolver's answer, and who hears about it is NotificationService's —
- * so what is worth pinning down here is exactly the seams between them: the blood
- * group is parsed and validated before either collaborator is trusted with it, the
- * AppealReach both of them agree on is passed through to the wire unchanged, and
- * Business Rule 12's cooldown is enforced on the send itself rather than only on
- * the button that normally precedes it.
- *
- * The cooldown's own boundary arithmetic — which tier, which threshold, which
- * window — is pinned down in AppealCooldownPolicyTest. What is tested here is that
- * this service actually consults it, refuses when told to, and records a cooldown
- * only after a send has really gone out.
+ * AppealService's seams: the blood group is validated first, the reach passes through unchanged, and
+ * Business Rule 12's cooldown is enforced on the send. Tier arithmetic is in AppealCooldownPolicyTest.
  */
 @ExtendWith(MockitoExtension.class)
 class AppealServiceTest {
@@ -75,16 +65,8 @@ class AppealServiceTest {
 
     @BeforeEach
     void setUp() {
-        // A real AppealCooldownPolicy over the mocked repository, not a mock of it —
-        // the same choice RequestServiceTest makes for ActingBankResolver. The
-        // cooldown is a rule this service is now responsible for enforcing, so
-        // stubbing it away would leave that enforcement untested here.
-        //
-        // The mocks return 0 usable units and no cooldown by default, which reads as
-        // "no stock and no prior appeal" — 0 units is the worst possible shortage, so
-        // the send tests below that predate the cooldown are unaffected by it. The
-        // stock figure comes from a real BatchStockService over the mocked batch
-        // repository, so it is the usable units the real rule would read.
+        // A real AppealCooldownPolicy and BatchStockService over mocked repositories, so the cooldown is enforced.
+        // Defaults are 0 usable units and no cooldown, the worst shortage, so older send tests are unaffected.
         service = new AppealService(
             actingBankResolver,
             notificationService,
@@ -156,10 +138,7 @@ class AppealServiceTest {
 
     @Test
     void sendAppealResolvesTheActingBankAndSendsThroughNotificationService() {
-        // One shared instance rather than two separate principal() calls:
-        // AuthenticatedUser has no equals() override, so Mockito's argument
-        // matching for the stub below would otherwise compare it by reference
-        // against a different instance built for the real call, and never match.
+        // One shared principal: AuthenticatedUser has no equals(), so separate instances would never match the stub.
         AuthenticatedUser principal = principal();
         when(actingBankResolver.resolve(null, principal, "send a donation appeal")).thenReturn(bank());
         when(notificationService.sendDonationAppeal(any(), eq(BloodType.O_NEGATIVE), any()))
@@ -211,9 +190,7 @@ class AppealServiceTest {
 
     @Test
     void sendAppealRejectsAnUnrecognisedGroupAfterTheBankIsResolvedButBeforeAnythingIsSent() {
-        // The bank is still resolved first — an ADMIN who has not named a bank
-        // should be told that, even on an otherwise-malformed request — but a bad
-        // blood type must stop the appeal before NotificationService is reached.
+        // The bank is still resolved first, but a bad blood type stops the appeal before NotificationService.
         when(actingBankResolver.resolve(any(), any(), any())).thenReturn(bank());
 
         assertThatThrownBy(() -> service.sendAppeal(new DonationAppealPayload("XYZ", null, null), principal()))
@@ -224,9 +201,7 @@ class AppealServiceTest {
 
     @Test
     void sendAppealPropagatesAnActingBankResolverRefusalUntouched() {
-        // Business Rule 1 delegated to ActingBankResolver — a hospital or donor
-        // reaching this method at all would already be blocked by SecurityConfig,
-        // but the service must not swallow or reword the refusal if it happens.
+        // Business Rule 1 is ActingBankResolver's refusal; the service must pass it on unchanged.
         when(actingBankResolver.resolve(any(), any(), any()))
             .thenThrow(new AccessDeniedException("Only blood bank staff can send a donation appeal."));
 
@@ -239,9 +214,7 @@ class AppealServiceTest {
     // ---------- the cooldown, enforced on the send itself (Business Rule 12) ----------
 
     /**
-     * The disabled button is a courtesy; this is the control. A send that arrives
-     * anyway — a stale tab, a retried click, curl — is refused with a 409 and
-     * nothing goes out, because otherwise the whole feature would be cosmetic.
+     * The disabled button is a courtesy; this is the control: a send during a cooldown is a 409 and nothing goes out.
      */
     @Test
     void sendAppealIsRefusedWhileACooldownIsStillRunning() {
@@ -281,13 +254,8 @@ class AppealServiceTest {
     }
 
     /**
-     * A group that recovered past its threshold and then relapsed can appeal again
-     * straight away, even inside what would have been the original window.
-     *
-     * The recovery deleted the cooldown when it happened (InventoryService.addBatch
-     * calls clearIfRecovered), so by the time stock falls again there is no row left
-     * to block on — which is what "no prior cooldown" below represents. The relapse
-     * is a new shortage with its own chance to appeal, not the tail of a spent timer.
+     * A relapse after recovery can appeal straight away: recovery already deleted the cooldown,
+     * which "no prior cooldown" here represents.
      */
     @Test
     void sendAppealIsAllowedForARelapseAfterAnEarlierRecoveryClearedTheCooldown() {
@@ -339,9 +307,7 @@ class AppealServiceTest {
     }
 
     /**
-     * A group this bank has never stocked has no inventory row at all. That is 0
-     * units — the worst shortage there is — not a missing figure that should block
-     * the appeal, which is exactly when donors are most needed.
+     * A never-stocked group is 0 units, the worst shortage, not a missing figure that blocks the appeal.
      */
     @Test
     void aGroupWithNoStockRowIsTreatedAsZeroUnitsRatherThanBlockingTheAppeal() {
@@ -357,10 +323,8 @@ class AppealServiceTest {
     }
 
     /**
-     * The cooldown gates whether the bank may ask; Business Rule 2 gates which
-     * donors are safe to ask. Adding the first changed nothing about the second —
-     * the reach figures still come back from NotificationService untouched,
-     * including the donors it held back.
+     * The cooldown gates whether the bank may ask; Business Rule 2 still decides which donors,
+     * and its figures come back untouched.
      */
     @Test
     void theCooldownDoesNotDisturbBusinessRuleTwosOwnFilter() {

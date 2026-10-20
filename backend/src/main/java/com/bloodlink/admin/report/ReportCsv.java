@@ -15,22 +15,8 @@ import com.bloodlink.admin.report.dto.ReportDtos.StockGroupRow;
 import com.bloodlink.admin.report.dto.ReportDtos.StockReport;
 
 /**
- * The "Download CSV" files of the Admin Reports page (Business Rule 23), built on the
- * server from the same report objects the page shows.
- *
- * <h2>Made safe to open in a spreadsheet</h2>
- * <ul>
- *   <li><b>Formula injection.</b> A spreadsheet runs a cell starting with {@code =},
- *       {@code +}, {@code -} or {@code @} (or a tab or carriage return) as a formula.
- *       A text cell that starts with one is prefixed with an apostrophe, so it shows
- *       as text. Bank names are typed by administrators, so this is not theoretical.</li>
- *   <li><b>Quoting.</b> Every text cell is wrapped in double quotes and any double
- *       quote inside it doubled, so commas, quotes and line breaks stay in their cell.
- *       Numbers are written bare, so they stay numbers.</li>
- *   <li><b>Encoding.</b> UTF-8 with a byte-order mark, which is what makes Excel read
- *       it as UTF-8 rather than guessing; rows end in CRLF (RFC 4180).</li>
- * </ul>
- * Each file is one or more small titled tables separated by a blank row.
+ * The Admin Reports CSV downloads (Business Rule 23), built from the same objects the page shows.
+ * Formula injection defused with an apostrophe, text cells quoted, UTF-8 with a BOM and CRLF rows.
  */
 public final class ReportCsv {
 

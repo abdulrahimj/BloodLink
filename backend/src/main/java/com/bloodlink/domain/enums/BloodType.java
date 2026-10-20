@@ -3,9 +3,7 @@ package com.bloodlink.domain.enums;
 import java.util.stream.Stream;
 
 /**
- * The eight ABO/Rh blood groups. The database stores the clinical label
- * ("A+", "O-", ...) exactly as given in CLAUDE.md; {@code BloodTypeConverter}
- * maps between that label and this enum.
+ * The eight ABO/Rh blood groups, stored as their clinical label ("A+", "O-") via BloodTypeConverter.
  */
 public enum BloodType {
 
@@ -19,14 +17,8 @@ public enum BloodType {
     AB_NEGATIVE("AB-");
 
     /**
-     * Matches exactly the eight labels above, fully anchored (@Pattern requires a
-     * whole-string match). The single source for every request DTO's blood-type
-     * field ({@code @Pattern(regexp = BloodType.LABEL_PATTERN, ...)}), so that
-     * catching a garbage value early — with a clear, field-level 400 rather than
-     * BloodType.fromLabel's generic "Unknown blood type: …" message further down
-     * in the service — cannot silently fall out of step with the enum itself if a
-     * blood group were ever added or renamed. An annotation attribute must be a
-     * compile-time constant, which is exactly what this is.
+     * Matches exactly the eight labels above; the one pattern every DTO's blood-type @Pattern uses,
+     * so early field-level 400s can never drift from the enum.
      */
     public static final String LABEL_PATTERN = "A[+-]|B[+-]|AB[+-]|O[+-]";
 

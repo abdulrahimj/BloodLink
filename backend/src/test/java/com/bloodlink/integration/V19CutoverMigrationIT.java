@@ -27,18 +27,8 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 
 /**
- * V19, the cutover to batch-level stock, proven row by row on a database of its own.
- *
- * <h2>Why this test has its own database</h2>
- * It has to stop the schema at V17, write legacy blood_inventory rows the way the old
- * application did, and then run V18 and V19 for real: Flyway migrations commit, so
- * this cannot be a rolled-back test on the shared bloodlink_test fixture. Following
- * CLAUDE.md's convention for exactly that case (as PartialFulfilmentRaceIT does), it
- * creates {@code bloodlink_migration_test} before each test, builds it from scratch
- * with Flyway, and drops it afterwards. No Spring context is started at all: the
- * migration is the thing under test, so it is driven through Flyway directly.
- *
- * <pre>{@code .\mvnw.cmd test -Dtest=V19CutoverMigrationIT}</pre>
+ * V19's cutover proven row by row: stops at V17, writes legacy rows, then runs V18 and V19 for real,
+ * on its own bloodlink_migration_test (created and dropped per test). Run -Dtest=V19CutoverMigrationIT.
  */
 @ExtendWith(OutputCaptureExtension.class)
 class V19CutoverMigrationIT {

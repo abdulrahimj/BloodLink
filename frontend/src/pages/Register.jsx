@@ -1,29 +1,14 @@
 import React, { useState } from "react";
 import { registerDonor } from "../api/auth.js";
 
-/* ================================================================
-   BloodLink — Register (Voluntary Donor Sign-up)
-
-   Fields follow the User and Donor entities from the Chapter Three
-   ERD: full name, phone, email, date of birth, gender, blood group,
-   area and password.
-
-   Wired to POST /api/auth/register, which creates the User and its
-   linked Donor row in one transaction and signs the donor straight in.
-   The layout, styling and fields are the mockup's, unchanged; only the
-   submit behaviour is real. The selects gained `value` attributes so
-   their options map onto the backend enums — the visible option text is
-   untouched — and two on-brand states were added, an error banner and a
-   busy submit button, because a form with no feedback cannot be used.
-   ================================================================ */
+/* BloodLink — Register (voluntary donor sign-up), fields from the ERD's User and Donor; wired to
+   POST /api/auth/register with an error banner and busy button. Selects carry the backend enum values. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
 
 /**
- * Sentinel for the "I don't know yet" option. It needs a value distinct from the
- * empty-string placeholder, or the select could not tell the two apart and would
- * snap back to the disabled "Select" entry. Sent to the API as null.
+ * Sentinel for "I don't know yet", distinct from the empty placeholder; sent to the API as null.
  */
 const BLOOD_GROUP_UNKNOWN = "UNKNOWN";
 
@@ -59,9 +44,7 @@ export default function Register({ onSignedIn }) {
   }
 
   /**
-   * Checks the two things only the browser can know, before spending a round trip:
-   * that the passwords match, and that the consent box is ticked. Everything else
-   * (format, length, uniqueness) is validated server-side, which is the real gate.
+   * Checks only what the browser can know (passwords match, consent ticked); the server validates the rest.
    */
   function validateLocally() {
     const errors = {};
@@ -75,10 +58,8 @@ export default function Register({ onSignedIn }) {
   }
 
   /**
-   * Creates the donor account and hands the resulting session up to the app shell.
-   *
-   * The payload is mapped to the API's field names here rather than in the inputs,
-   * so the form keeps the mockup's naming.
+   * Creates the donor account and hands the session to the app shell;
+   * maps the form's names to the API's here.
    */
   async function handleSubmit(event) {
     event.preventDefault();
@@ -112,12 +93,8 @@ export default function Register({ onSignedIn }) {
       });
       onSignedIn?.(auth);
     } catch (err) {
-      // Covers a duplicate phone/email (409) and field validation failures (400);
-      // the backend's message is written for display, so it is shown verbatim —
-      // once. A single-field refusal (a malformed email or phone) carries the same
-      // sentence as its message and its field error, so the banner is skipped when
-      // the box already says it; a general one ("Please correct the highlighted
-      // fields.") matches no field and still shows at the top.
+      // Shows a duplicate (409) or validation failure (400) message verbatim, once:
+      // the banner is skipped when a field already shows the same sentence.
       const fieldMessages = Object.values(err.fieldErrors ?? {});
       setError(fieldMessages.includes(err.message) ? null : err.message);
       setFieldErrors(err.fieldErrors ?? {});

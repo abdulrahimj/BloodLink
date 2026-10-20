@@ -4,23 +4,8 @@ import BloodBankInventory from "./BloodBankInventory.jsx";
 import BloodBankDonors from "./BloodBankDonors.jsx";
 import { getBloodBanks } from "../api/bloodBanks.js";
 
-/* ================================================================
-   BloodLink — Blood Bank portal shell
-
-   Resolves which bank this session manages, then switches between the two
-   wired mockup screens (Dashboard / Blood Inventory) via their own sidebar
-   nav buttons — no URL routing needed for two views in one portal.
-
-   Bank resolution:
-     • BLOOD_BANK_STAFF with an assigned bank (user.bloodBankId) — go straight
-       in. This is the normal case and matches both mockups' assumption of a
-       single, fixed bank identity.
-     • ADMIN, or staff an administrator has not yet assigned to a bank (there
-       is no account-management UI yet to do that) — shown a small picker
-       first. This is intentionally a separate screen rather than an
-       in-header dropdown, so neither mockup's own layout has to change to
-       fit it.
-   ================================================================ */
+/* BloodLink — Blood Bank portal shell: resolves which bank this session manages (staff go straight in,
+   ADMIN or unassigned staff pick first), then switches its views with plain state. */
 
 export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
   const [bank, setBank] = useState(
@@ -53,12 +38,8 @@ export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
     );
   }
 
-  // Four views, three page components. "settings" (Business Rule 16) is shown
-  // by the Dashboard page, which swaps its main area for the shared Profile
-  // Settings screen and keeps its sidebar, header and live bell — rather than
-  // a fourth whole-page copy of that sidebar and its styles. Going from
-  // Dashboard to Settings and back keeps the same component mounted, so
-  // nothing reloads.
+  // Four views from three page components; Settings is shown inside the Dashboard page,
+  // keeping its sidebar and bell mounted.
   const shared = { bloodBankId: bank.id, user, onSignOut, activeView: view, onNavigate: setView, onUserUpdated };
   if (view === "inventory") return <BloodBankInventory {...shared} />;
   if (view === "donors") return <BloodBankDonors {...shared} />;
@@ -66,10 +47,7 @@ export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
 }
 
 /**
- * Interstitial shown only for ADMIN or an unassigned staff account. Deliberately
- * plain rather than styled to match either portal screen — it exists so those
- * two accounts can reach the (typically single-bank) portal at all, not as a
- * polished feature in its own right.
+ * Plain interstitial for ADMIN or unassigned staff to choose a bank, not a polished feature.
  */
 function BankPicker({ choices, error, onChoose, onSignOut }) {
   return (

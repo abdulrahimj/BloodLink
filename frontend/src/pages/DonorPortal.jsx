@@ -4,34 +4,8 @@ import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Donor Portal
-
-   Covers the donor use cases from Chapters One & Three:
-     • View donation history and eligibility status
-     • Respond to donation appeals from blood banks
-     • Download recognition certificate
-
-   Typography: Inter throughout — same as the Hospital Portal and
-   Admin Console, so all screens read as one product.
-
-   Wired to GET /api/donors/me and GET /api/donors/me/donations. Layout,
-   styling and structure are the mockup's, unchanged; the DONOR and
-   HISTORY fixtures are replaced with fetched data, and three small
-   additive states were introduced the same way Phase 3 did for the auth
-   screens — a loading placeholder, an error banner, and an ineligible
-   variant of the eligibility banner — all built from tokens already
-   declared in this file, never a new visual language.
-
-   Donation Appeals is now live. The panel is filled from this donor's own
-   DONATION_APPEAL notifications, which arrive over the WebSocket the moment a
-   blood bank sends one and are read back from GET /api/notifications on load
-   for any that came while the browser was closed. Per Business Rule 1 the
-   source named in an appeal is always a blood bank — hospitals request from
-   banks, they never reach a donor directly, and the backend has no path that
-   could produce one saying otherwise. The panel head and layout are the
-   mockup's, unchanged; only the empty fixture became real rows.
-   ================================================================ */
+/* BloodLink — Donor Portal: donation history, eligibility and live donation appeals from blood banks
+   (Business Rule 1), from GET /api/donors/me, /me/donations and the donor's notifications. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -41,9 +15,7 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** Parses a "YYYY-MM-DD" LocalDate string as a local calendar date, not UTC
- *  midnight — `new Date("YYYY-MM-DD")` would shift a day in negative-UTC-offset
- *  zones, which is exactly the kind of off-by-one a donation date can't afford. */
+/** Parses "YYYY-MM-DD" as a local date, since new Date("YYYY-MM-DD") would shift a day west of UTC. */
 function parseIsoDate(isoDate) {
   const [year, month, day] = isoDate.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -73,10 +45,7 @@ function formatHeaderDate(date) {
 }
 
 /**
- * "2 hrs ago" for a recent appeal, a plain date once it is old enough that a
- * relative phrase stops being informative. Takes an Instant (with a time), unlike
- * the LocalDate helpers above — an appeal sent this morning and one sent last week
- * need to be told apart, which a date alone cannot do.
+ * "2 hrs ago" for a recent appeal, a plain date once older; takes an Instant, unlike the date-only helpers above.
  */
 function formatAppealTime(instantIso) {
   const minutes = Math.floor((Date.now() - new Date(instantIso).getTime()) / 60000);
@@ -101,9 +70,7 @@ function initials(fullName) {
 }
 
 /**
- * The one blood-group fact worth badging on the dashboard. O- can go to any
- * patient; AB+ can receive from any donor. Every other group gets no tag,
- * matching how the mockup only ever showed the tag for its one fixture donor.
+ * The one blood-group fact worth a badge: O- is the universal donor, AB+ the universal recipient.
  */
 function bloodGroupTag(bloodType) {
   if (bloodType === "O-") return "Universal Donor";
@@ -112,9 +79,7 @@ function bloodGroupTag(bloodType) {
 }
 
 export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
-  // "dashboard" or "settings" — the Settings sidebar entry opens the shared
-  // Profile Settings screen in the main area, keeping this sidebar, header and
-  // bell (Business Rule 16). Plain state, as every other portal switches views.
+  // "dashboard" or "settings" (shared Profile Settings in the main area, Business Rule 16), as plain state.
   const [view, setView] = useState("dashboard");
   const [profile, setProfile] = useState(null);
   const [history, setHistory] = useState([]);
@@ -127,9 +92,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
   // socket per screen rather than one per feature.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications();
 
-  // A donor's appeals are exactly their DONATION_APPEAL notifications — the schema
-  // has no separate appeals table, and deliberately so (an appeal is an event, not
-  // a record). Capped at the same handful the panel's fixed height can show.
+  // A donor's appeals are their DONATION_APPEAL notifications (there is no appeals table),
+  // capped at what the panel shows.
   const appeals = notifications.filter((item) => item.type === "DONATION_APPEAL").slice(0, 4);
 
   useEffect(() => {
@@ -158,11 +122,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
     return () => { cancelled = true; };
   }, []);
 
-  // The session already has the name from login/register — shown immediately so the
-  // header never has to wait on this call just to greet the donor. Preferred over
-  // the dashboard's copy because it is the one Profile Settings updates the moment
-  // a new name is saved; the dashboard's was fetched once, on arrival. Both read
-  // the same column, so otherwise they never differ.
+  // The name from the session, shown at once and updated by Profile Settings; the profile's is the fallback.
   const displayName = user?.fullName ?? profile?.fullName ?? "";
   const firstName = displayName.split(" ")[0] || displayName;
 
@@ -548,9 +508,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     )}
                     {visibleHistory.map((h, i) => (
                       <div className="dn-item" key={i}>
-                        {/* Business Rule 4: the group tested at this donation, not the
-                            donor's profile value — the two can differ or the profile
-                            can be unset entirely. */}
+                        {/* The group tested at this donation (Business Rule 4), not the profile value. */}
                         <div className="dn-item-badge dn-item-badge--navy">{h.bloodType}</div>
                         <div className="dn-item-body">
                           <div className="dn-item-main">{formatFullDate(h.donationDate)}</div>
@@ -572,11 +530,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     <div className="dn-panel-title">Donation Appeals</div>
                     <div className="dn-panel-link">From Makeni blood banks</div>
                   </div>
-                  {/* Real appeals, pushed by a blood bank (Business Rule 1: never
-                      sourced from a hospital). The badge carries the donor's own
-                      group rather than one parsed out of the message text —
-                      the message is written for a human, not for a parser, and
-                      an appeal only ever reaches donors of the group it names. */}
+                  {/* Real appeals from blood banks (Business Rule 1); the badge shows the donor's own group,
+                      not one parsed from the message. */}
                   <div className="dn-list">
                     {appeals.length === 0 && (
                       <div className="dn-empty">
@@ -591,12 +546,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                           <div className="dn-item-main">{appeal.message}</div>
                           <div className="dn-item-sub">{formatAppealTime(appeal.createdAt)}</div>
                         </div>
-                        {/* The backend no longer sends appeals to a donor inside
-                            their 90-day recovery window (Business Rule 2), so this
-                            guard is not what keeps them out — it covers the case
-                            where an appeal arrived while eligible and the donor has
-                            since donated. The appeal stays in their list; the
-                            invitation to act on it does not. */}
+                        {/* Appeals no longer reach donors in recovery (Business Rule 2); this hides Respond
+                            if the donor has donated since an appeal arrived. */}
                         {isEligible && <button type="button" className="dn-help">Respond</button>}
                       </div>
                     ))}

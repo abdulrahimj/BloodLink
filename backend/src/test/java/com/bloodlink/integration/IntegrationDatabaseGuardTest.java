@@ -8,9 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
- * The guard that keeps every "test" profile start off bloodlink_dev, tested without
- * starting anything. It runs in the ordinary {@code mvnw test} (this is not an *IT
- * class), so the protection is checked even by a run that never touches a database.
+ * Tests the bloodlink_dev guard without starting anything; runs in the ordinary mvnw test.
  */
 class IntegrationDatabaseGuardTest {
 

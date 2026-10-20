@@ -46,12 +46,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * The three effects of recording a donation, and the rules that are easiest to
- * get wrong here: the stored blood group must be the one tested today rather than
- * the donor's profile value (Business Rule 4), and a donor still inside their
- * 90-day recovery window must be refused outright with nothing written (Business
- * Rule 2) — including on the boundary, where an off-by-one would let someone
- * donate a day early.
+ * Recording a donation's three effects; the tested group is stored, not the profile's (Business Rule 4),
+ * and a donor in recovery is refused with nothing written, boundary included (Business Rule 2).
  */
 @ExtendWith(MockitoExtension.class)
 class DonationServiceTest {
@@ -222,9 +218,7 @@ class DonationServiceTest {
     }
 
     /**
-     * An entered date outside today .. today + 365 is refused before anything is
-     * written — not the donation, not the donor's clock, not the stock — and before
-     * the donor's row is even locked.
+     * An expiry outside today to today + 365 is refused before anything is written or locked.
      */
     @Test
     void aRefusedExpiryDateWritesNothingAtAll() {
@@ -294,11 +288,8 @@ class DonationServiceTest {
     // ---------- who may record a donation (Stage 3b-2) ----------
 
     /**
-     * Recording a donation puts units on a shelf, so it asks the stock-change rule
-     * (ActingBankResolver.resolveForStockChange — no ADMIN branch, proven in
-     * ActingBankResolverTest) and never the older "acting for a named bank" one.
-     * When that rule refuses — an ADMIN, a hospital, a suspended account — nothing
-     * else happens: no donor is read or locked and nothing is written.
+     * Recording a donation asks resolveForStockChange (no ADMIN branch); when it refuses,
+     * no donor is read or locked and nothing is written.
      */
     @Test
     void aCallerTheStockChangeRuleRefusesCausesNoReadAndNoWrite() {

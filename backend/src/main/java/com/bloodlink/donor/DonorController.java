@@ -12,10 +12,7 @@ import com.bloodlink.donor.dto.DonorProfileResponse;
 import com.bloodlink.security.AuthenticatedUser;
 
 /**
- * The donor's own profile and history — nothing here takes an id parameter, because
- * every route is scoped to the caller by their token (SecurityConfig restricts
- * /api/donors/** to DONOR and ADMIN, but "me" always means the caller, never a
- * donor an ADMIN might otherwise try to look up by id).
+ * The donor's own profile and history; every route is scoped to the caller's token, so none takes an id.
  */
 @RestController
 @RequestMapping("/api/donors")

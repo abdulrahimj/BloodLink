@@ -13,9 +13,8 @@ public enum BatchSource {
     MANUAL,
 
     /**
-     * Converted from the old one-row-per-group blood_inventory at cutover (V19).
-     * Its expiry date is that row's merged "earliest of" date, so staff should
-     * check it against the bag labels.
+     * Converted from the old blood_inventory table by V19; its expiry is the old merged date,
+     * so staff should check it against the bag labels.
      */
     MIGRATED
 }

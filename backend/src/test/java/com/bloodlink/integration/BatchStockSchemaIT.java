@@ -54,23 +54,8 @@ import com.bloodlink.stock.FefoAllocator.Candidate;
 import jakarta.persistence.EntityManager;
 
 /**
- * The database half of the batch-stock tables (V18, Stage 1): every constraint and
- * trigger is exercised directly in SQL, the way a bug or a hand-typed psql
- * statement would reach it, so each rule is proven to hold in PostgreSQL itself
- * and not only in Java.
- *
- * Shares the bloodlink_test fixture database and its guarantee: {@code @Transactional},
- * so everything written here, including each refused statement, is rolled back at
- * the end of the test. Nothing in the application uses these tables yet; this
- * proves the schema the later stages will build on.
- *
- * <h2>How a refused statement is checked</h2>
- * A failed statement aborts a PostgreSQL transaction, and every later statement in
- * it would then fail too. {@link #assertRefused} wraps each one in a SAVEPOINT and
- * rolls back to it afterwards, so one test can check several refusals in a row.
- * Plain JDBC (a JdbcTemplate on the same DataSource, which joins the test's
- * transaction) is used for this rather than JPA, because Hibernate would mark the
- * whole transaction rollback-only on the first failure.
+ * V18's constraints and triggers exercised directly in SQL, proving they hold in PostgreSQL itself;
+ * assertRefused wraps each refused statement in a savepoint. @Transactional, rolled back.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -451,9 +436,7 @@ class BatchStockSchemaIT {
             "select indexdef from pg_indexes where indexname = 'idx_batches_fefo'", String.class);
         assertThat(fefo).contains("(blood_bank_id, blood_type, expiry_date, id)").contains("WHERE (units_remaining > 0)");
 
-        // The query the contribution code will run: lock one bank's usable batches of
-        // one group in issue order. With sequential scans switched off for this
-        // transaction only, the planner shows the partial index is usable for it.
+        // With sequential scans off for this transaction, the plan shows the lock query can use the partial index.
         jdbc.execute("set local enable_seqscan = off");
         String plan = String.join("\n", jdbc.queryForList("""
             explain select id from blood_inventory_batches
@@ -508,9 +491,7 @@ class BatchStockSchemaIT {
     // ---------- helpers ----------
 
     /**
-     * Runs one statement that must be refused, and checks the refusal names
-     * {@code expected} (a constraint name or trigger message). Wrapped in a
-     * savepoint so the transaction can carry on afterwards.
+     * Runs a statement that must be refused naming expected, inside a savepoint so the transaction continues.
      */
     private void assertRefused(String expected, String sql, Object... args) {
         jdbc.execute("savepoint expected_refusal");

@@ -41,21 +41,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.InvalidPhoneNumberException;
 
 /**
- * Registration rules that must hold regardless of the database: the role is never
- * client-controlled, the password is never stored in the clear, the Donor row is
- * always created alongside the User, and a duplicate is refused.
- *
- * Also covers the one rule login must add on top of a correct password: a
- * suspended account is refused even once the password has checked out, with a
- * message that — unlike a failed login — is allowed to say so plainly.
- *
- * And it covers the rule that binds the two halves of this class together: phone is
- * the login credential, matched exactly, so registration and login must normalise it
- * identically. {@link #aDonorWhoRegisteredLocallyCanSignInWithTheInternationalFormat}
- * is the one that would fail if those two ever drifted apart — the failure being a
- * real donor permanently locked out of an account they successfully created. The
- * format rule itself is tested on its own in {@code PhoneNumberTest}; what is tested
- * here is that both entry points actually apply it.
+ * Registration rules (role never client-chosen, password hashed, Donor row created, duplicates refused),
+ * login's suspension check, and that both normalise the phone identically.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -86,9 +73,7 @@ class AuthServiceTest {
         return request(bloodTypeLabel, "+232 76 000 001");
     }
 
-    /** The same registration, with the phone number written however the test needs
-     *  it — the point of several tests below is that the way it is typed does not
-     *  change what gets stored. */
+    /** The same registration with the phone typed however the test needs it. */
     private static RegisterRequest request(String bloodTypeLabel, String phone) {
         return withEmail(bloodTypeLabel, phone, "Aminata@Example.com");
     }
@@ -172,9 +157,7 @@ class AuthServiceTest {
 
     @Test
     void phoneIsNormalisedSoTheFormatItWasTypedInCannotLockTheDonorOut() {
-        // Typed the local way; stored the one way. Phone is the login credential and
-        // is matched exactly, so the format written here is the format that has to be
-        // reproduced at every future sign-in — which is why it is not left as typed.
+        // Typed the local way, stored in the one format every future sign-in must reproduce.
         newService().register(request("O+", "076 900 005"));
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
@@ -196,9 +179,7 @@ class AuthServiceTest {
     @Test
     void theDuplicateCheckRunsAgainstTheNormalisedNumberNotTheTypedOne() {
         AuthService service = newService();
-        // Already registered, in the stored form. Someone signing up with the same
-        // number typed the local way must still be caught as a duplicate — checking
-        // the raw string would let one person hold two accounts on one number.
+        // Already stored in normalised form, so the same number typed locally must still be a duplicate.
         when(userRepository.existsByPhone("+23276900005")).thenReturn(true);
 
         assertThatThrownBy(() -> service.register(request("O+", "076900005")))
@@ -311,9 +292,7 @@ class AuthServiceTest {
         return new LoginRequest("+232 76 000 001", "correct-horse-battery");
     }
 
-    /** Mocks the AuthenticationManager step so login() proceeds as if the
-     *  password were already verified — that verification is Spring Security's
-     *  job, not AuthService's, and is not what these tests are about. */
+    /** Mocks the AuthenticationManager so login() proceeds as if the password were verified (Spring Security's job). */
     private void stubSuccessfulAuthentication(User user) {
         AuthenticatedUser principal = AuthenticatedUser.from(user);
         when(authenticationManager.authenticate(any()))
@@ -364,9 +343,7 @@ class AuthServiceTest {
         stubSuccessfulAuthentication(authenticatedUser(AccountStatus.ACTIVE));
         service.login(new LoginRequest("+232 76 900 005", "correct-horse-battery"));
 
-        // 3. The number looked up is character-for-character the number stored at
-        //    registration. This is the whole rule in one assertion: if these two ever
-        //    disagree, a real donor is locked out of an account they created.
+        // 3. The number looked up matches the stored one exactly; if they differ, a donor is locked out.
         ArgumentCaptor<UsernamePasswordAuthenticationToken> attempted =
             ArgumentCaptor.forClass(UsernamePasswordAuthenticationToken.class);
         verify(authenticationManager).authenticate(attempted.capture());
@@ -381,9 +358,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> service.login(new LoginRequest("07690000a", "correct-horse-battery")))
             .isInstanceOf(InvalidPhoneNumberException.class);
 
-        // A 400 about the shape of the input, raised before any account is looked up,
-        // so it reveals nothing about which numbers are registered — and tells the
-        // person about the typo rather than blaming a password that was fine.
+        // A 400 about the input's shape, raised before any lookup, so it reveals nothing about registered numbers.
         verify(authenticationManager, never()).authenticate(any());
     }
 
@@ -392,10 +367,7 @@ class AuthServiceTest {
         AuthService service = newService();
         stubSuccessfulAuthentication(authenticatedUser(AccountStatus.SUSPENDED));
 
-        // The password was right — AuthenticationManager already said so — so this
-        // must be the specific, plainer exception, not the vague InvalidCredentials
-        // one a wrong password produces. See AccountSuspendedException for why
-        // being specific here does not leak anything a wrong-password attempt would.
+        // The password was right, so this must be AccountSuspendedException, not the vague InvalidCredentials one.
         assertThatThrownBy(() -> service.login(loginRequest()))
             .isInstanceOf(AccountSuspendedException.class)
             .hasMessageContaining("suspended");

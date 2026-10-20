@@ -9,12 +9,8 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
- * The one-time password a new staff account is created with (Business Rule 14).
- *
- * Two things are worth testing about a generated credential, and neither is its
- * exact value: that two accounts never share one, and that it can actually be
- * relayed by a person to another person without being misread — which is the whole
- * reason its alphabet is smaller than it could be.
+ * The one-time staff password (Business Rule 14): two accounts never share one,
+ * and it can be read aloud without being misread.
  */
 class TemporaryPasswordGeneratorTest {
 
@@ -27,10 +23,7 @@ class TemporaryPasswordGeneratorTest {
 
     @Test
     void everyPasswordIsDifferent() {
-        // The property that matters most: an administrator creating five accounts in
-        // a row must not hand out one password five times. A thousand draws with no
-        // repeat is not proof, but a generator with a fixed or near-fixed value
-        // cannot survive it.
+        // A thousand draws with no repeat: a fixed or near-fixed generator could not pass.
         Set<String> seen = new HashSet<>();
         IntStream.range(0, 1_000).forEach(i -> seen.add(TemporaryPasswordGenerator.generate()));
 
@@ -39,9 +32,7 @@ class TemporaryPasswordGeneratorTest {
 
     @Test
     void charactersThatAreMisreadWhenSpokenOrCopiedAreNeverUsed() {
-        // This password gets read over a phone or written on a slip of paper. A
-        // capital O next to a zero costs a failed sign-in and a call back to the
-        // administrator, so neither appears — nor I, l or 1.
+        // It is read aloud or written down, so the look-alikes O, 0, I, l and 1 never appear.
         String everything = IntStream.range(0, 500)
             .mapToObj(i -> TemporaryPasswordGenerator.generate())
             .reduce("", String::concat);
@@ -51,9 +42,7 @@ class TemporaryPasswordGeneratorTest {
 
     @Test
     void onlyLettersAndDigitsAreUsed() {
-        // No punctuation: what is lost in alphabet size is bought back with length,
-        // and a password containing a character someone has to describe out loud
-        // ("underscore, then...") is a password that arrives wrong.
+        // No punctuation, since a character that has to be described out loud arrives wrong.
         String everything = IntStream.range(0, 200)
             .mapToObj(i -> TemporaryPasswordGenerator.generate())
             .reduce("", String::concat);

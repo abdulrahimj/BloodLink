@@ -37,20 +37,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Account management for the Admin Console: searching, filtering and paging the
- * accounts of all four roles, creating staff and administrator accounts, editing another account's phone
- * and facility, and activating or suspending one.
- *
- * Every one of those changes is recorded in the audit log (Business Rule 17), inside
- * the same transaction as the change itself — so the log can never claim something
- * happened that was rolled back, or miss something that was not. Reads are not
- * recorded.
- *
- * Enforcement of what a suspension actually means — refused at the next login,
- * and refused immediately for any request made with a token already issued — is
- * not here. It lives in AuthService (login) and JwtAuthenticationFilter (every
- * other request), because those are the places that decide whether a caller gets
- * in at all; this class only flips the flag they both read.
+ * Admin Console account management: search/filter/page accounts, create staff and admins, edit, suspend.
+ * Every change is audit-logged in the same transaction (Business Rule 17); suspension is enforced at login and per request.
  */
 @Service
 public class AdminUserService {
@@ -83,11 +71,8 @@ public class AdminUserService {
     }
 
     /**
-     * The sort choices the User Accounts table offers, mapped to the entity property
-     * each one orders by. This map is the whole whitelist: a value not in it is refused
-     * (400 naming "sort"), so no text from a request ever reaches the ORDER BY.
-     * Role and status sort by their stored names (ADMIN before DONOR; ACTIVE before
-     * SUSPENDED).
+     * The User Accounts sort choices mapped to entity properties; this map is the whole whitelist, so no request text
+     * reaches ORDER BY. Role and status sort by their stored names.
      */
     static final Map<String, String> SORT_PROPERTIES = Map.of(
         "name", "fullName",
@@ -97,18 +82,8 @@ public class AdminUserService {
     );
 
     /**
-     * One page of accounts for the User Accounts table, searched, filtered and sorted
-     * in the database (see UserRepository.searchAccounts).
-     *
-     * The controller has already checked every value against its fixed list; the
-     * checks here repeat that for the two that decide the ORDER BY, so this method is
-     * safe even if called from somewhere else. {@code id} is always the last sort key,
-     * so two accounts with the same name (or role, date, status) keep the same order
-     * from one page request to the next and never appear on two pages or none.
-     *
-     * The search text becomes two patterns: name/email (lower-cased) and phone (with
-     * a local "0…" turned into "+232…", Business Rule 13). Both escape % and _ so they
-     * are matched literally. Blank text means no search.
+     * One page of accounts searched in the database (UserRepository.searchAccounts); sort is re-checked against the
+     * whitelist and id is always the last key so pages are stable. Search text is matched literally (% and _ escaped).
      */
     @Transactional(readOnly = true)
     public AdminUserPageResponse searchUsers(
@@ -145,35 +120,8 @@ public class AdminUserService {
     }
 
     /**
-     * Creates a HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN account — Business Rule 14.
-     *
-     * This is the path CLAUDE.md always described as "created by an administrator":
-     * until now those rows had to be inserted into the database by hand, which meant
-     * hashing a password by hand too (and getting it wrong once, silently, in a way
-     * that only showed up as a login that would not work).
-     *
-     * Four things happen here that the caller cannot be trusted to have done, in this
-     * order, so that the cheapest and most specific failures come first:
-     *   1. DONOR is refused. Donors self-register (Business Rule 8), and that path also
-     *      creates the linked Donor row — blood group, date of birth, address — which
-     *      this endpoint has no fields for. A DONOR User with no Donor row would break
-     *      every donor screen, so it is refused rather than half-created.
-     *   2. The facility link is checked against the role: required for the two staff
-     *      roles, forbidden for an administrator. An administrator belongs to no
-     *      facility, and a staff account with no facility can see nothing (see the
-     *      comments on User.bloodBank and User.hospital), so both mistakes create an
-     *      account that does not work.
-     *   3. The phone is normalised through Business Rule 13's shared function, so an
-     *      account created here is stored in exactly the format login compares
-     *      against — the one thing hand-written inserts kept getting wrong.
-     *   4. A password is generated and hashed. The administrator never chooses it and
-     *      the plaintext is returned exactly once, in this method's response.
-     *
-     * Wholly transactional: an account that exists but has no usable password, or a
-     * generated password returned for a row that was never written, would both be
-     * worse than a failed request. The ACCOUNT_CREATED audit entry is written in the
-     * same transaction, naming {@code principal} as the administrator who did it —
-     * and never mentioning the generated password.
+     * Creates a HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN account (Business Rule 14): refuses DONOR, checks the facility,
+     * normalises the phone and generates a password, all in one transaction with its ACCOUNT_CREATED audit entry.
      */
     @Transactional
     public CreatedAccountResponse createStaffAccount(CreateStaffAccountPayload payload, AuthenticatedUser principal) {
@@ -185,9 +133,7 @@ public class AdminUserService {
             );
         }
 
-        // Normalised before the duplicate check, so a number typed the local way is
-        // still recognised as one already registered internationally — the same order
-        // AuthService.register uses, for the same reason (Business Rule 13).
+        // Normalised before the duplicate check so a number typed either way is recognised (Business Rule 13).
         String phone = PhoneNumber.normalize(payload.phone());
         String email = payload.email().trim().toLowerCase();
 
@@ -210,9 +156,7 @@ public class AdminUserService {
         user.setStatus(AccountStatus.ACTIVE);
         assignFacility(user, role, payload.bloodBankId(), payload.hospitalId());
 
-        // Generated here and never held anywhere else: the User row gets the BCrypt
-        // hash (salted and deliberately slow, so the stored value is not reversible),
-        // and the plaintext leaves this method only inside the response below.
+        // Only the BCrypt hash is stored; the plaintext leaves this method only inside the response below.
         String temporaryPassword = TemporaryPasswordGenerator.generate();
         user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
 
@@ -227,30 +171,8 @@ public class AdminUserService {
     }
 
     /**
-     * Changes another account's phone and facility — Business Rule 17.
-     *
-     * The rules, in the order they are checked:
-     *   1. Not your own account. Business Rule 16 already keeps every account holder,
-     *      administrators included, from changing their own phone; letting an
-     *      administrator do it here instead would be the same thing through a side
-     *      door. Another administrator can make the change, and the log shows who.
-     *   2. Nothing but phone and facility. Role in particular is refused with its
-     *      own message — changing it is deliberately out of scope (see
-     *      EditAccountPayload) — and anything else (name, email, status) generically.
-     *   3. The phone is normalised (Business Rule 13) and must not belong to anyone
-     *      else. Keeping the account's own number is not a clash with itself.
-     *   4. The facility follows the same required/forbidden rule as account creation
-     *      (Business Rule 14), judged against the role the account already has:
-     *      staff need theirs, donors and administrators have none.
-     *
-     * If none of that changes anything — the form was saved as it was loaded — the
-     * account is returned untouched and nothing is recorded: the log is a record of
-     * changes, and a save that changed nothing is not one.
-     *
-     * A moved staff member's server-side access follows the new facility on their
-     * very next request (ActingBankResolver and RequestService read it from the
-     * database each time). What their browser shows may lag until they sign in again,
-     * since the portal remembers the facility it was given at login.
+     * Changes another account's phone and facility (Business Rule 17): not your own, nothing but phone and facility,
+     * phone normalised and unique, facility by the account's role. A save that changes nothing is not logged.
      */
     @Transactional
     public AdminUserResponse editAccount(UUID targetUserId, EditAccountPayload payload, AuthenticatedUser principal) {
@@ -281,9 +203,8 @@ public class AdminUserService {
         }
         String newFacility = facilityName(user);
         if (!Objects.equals(oldFacility, newFacility)) {
-            // Worded for the three shapes a facility change can take. The first and
-            // last only arise for accounts inserted by hand before Business Rule 14,
-            // which could be left with no facility, or one their role cannot have.
+            // Worded for the three shapes a facility change can take; the first and last only arise for hand-inserted
+            // accounts from before Business Rule 14.
             String kind = user.getRole() == Role.HOSPITAL_STAFF ? "Hospital" : "Blood bank";
             if (oldFacility == null) {
                 changes.add(kind + " set to " + newFacility + ".");
@@ -302,10 +223,8 @@ public class AdminUserService {
     }
 
     /**
-     * Refuses anything in an edit request besides phone and facility — role with its
-     * own explanation, since it is the field an administrator is most likely to
-     * expect to be here. Reports one field, the first alphabetically after role, so
-     * the same request always gets the same answer.
+     * Refuses anything besides phone and facility, with role getting its own explanation;
+     * reports the first field alphabetically after role so the answer is always the same.
      */
     private static void rejectUnrecognised(Map<String, Object> unrecognised) {
         if (unrecognised == null || unrecognised.isEmpty()) {
@@ -335,21 +254,8 @@ public class AdminUserService {
     }
 
     /**
-     * Attaches the facility a role requires, and refuses the combinations that
-     * cannot be right — Business Rule 14's rule, shared by account creation and
-     * editing (Business Rule 17) so the two cannot drift apart. On an edit, the role
-     * is the one the account already has.
-     *
-     * Each branch rejects both mistakes it can make — the missing link and the one
-     * that does not belong — rather than only the missing one. Silently ignoring a
-     * bloodBankId sent for an administrator would accept a request whose author
-     * clearly believed something untrue about the account.
-     *
-     * The error names the offending field (bloodBankId or hospitalId), so a form can
-     * mark it. A facility id that matches no row is a 404 rather than a field error:
-     * the request is well-formed and the console populated that dropdown from this
-     * same system's own reference list, so the honest answer is that the thing it
-     * named does not exist.
+     * Attaches the facility a role requires and refuses a missing or unexpected one (400 naming the field), shared by
+     * creation and editing (Business Rules 14, 17). A facility id matching no row is a 404.
      */
     private void assignFacility(User user, Role role, UUID bloodBankId, UUID hospitalId) {
         switch (role) {
@@ -383,10 +289,7 @@ public class AdminUserService {
                 user.setBloodBank(bank);
                 user.setHospital(null);
             }
-            // An administrator's authority is citywide (SecurityConfig gates
-            // /api/admin/** on the role alone, with no facility scoping), and a donor
-            // gives blood at any bank — so for either, a facility is not a harmless
-            // extra but a misunderstanding of the account, and would mean nothing.
+            // Administrators are citywide and donors give at any bank, so a facility for either is refused.
             case ADMIN, DONOR -> {
                 String account = role == Role.ADMIN ? "An administrator account" : "A donor account";
                 if (bloodBankId != null) {
@@ -402,22 +305,8 @@ public class AdminUserService {
     }
 
     /**
-     * Sets one account's status.
-     *
-     * An administrator may not suspend their own account. A self-suspend would sign
-     * that operator out immediately and, if theirs was the only active admin account,
-     * leave nobody able to sign in and undo it through this API at all — recovering
-     * from that means editing the database by hand, which is exactly what
-     * {@link #createStaffAccount} now exists to stop being necessary (creating a
-     * second administrator is a way out of this, but only for someone who thought to
-     * do it first). Suspending a *different* administrator carries no such risk — the
-     * caller acting on it remains active and can reverse it — so only the
-     * self-suspend case is refused, not "the last active admin" in general.
-     *
-     * An actual change of status is recorded in the audit log as ACCOUNT_SUSPENDED
-     * or ACCOUNT_REACTIVATED (Business Rule 17). Setting an account to the status it
-     * already has stays the harmless no-op it always was, and records nothing: the
-     * log is of things that happened, and nothing did.
+     * Sets one account's status; an administrator may not suspend their own account, which could lock everyone out.
+     * A real change is logged as ACCOUNT_SUSPENDED or ACCOUNT_REACTIVATED; setting the same status records nothing.
      */
     @Transactional
     public AdminUserResponse updateStatus(UUID targetUserId, AccountStatus newStatus, AuthenticatedUser principal) {

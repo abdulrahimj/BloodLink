@@ -18,14 +18,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import com.bloodlink.security.JwtSecretPolicy.Verdict;
 
 /**
- * The decision behind Business Rule 15, tested exhaustively without starting
- * anything: which secrets and which profiles may run, and which must not.
- *
- * {@code JwtSecretStartupTest} proves the same rule end to end, through a real
- * Spring Boot start. This class exists for the cases too numerous to start an
- * application for each, and for the one check no startup test would ever notice:
- * that the placeholder this code looks for is still, character for character, the
- * one the committed configuration files actually contain.
+ * Business Rule 15's decision tested exhaustively without starting anything (JwtSecretStartupTest does it end to end),
+ * plus that the placeholder still matches the committed configuration files exactly.
  */
 class JwtSecretPolicyTest {
 
@@ -84,9 +78,7 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderIsRefusedUnderTheTestProfile() {
-        // "test" has its own test-only secret in src/test/resources rather than an
-        // exemption — that file is never in the jar, so a server started with this
-        // profile name by mistake would otherwise run on the public placeholder.
+        // "test" has its own test-only secret rather than an exemption, since its file is never in the jar.
         assertThatThrownBy(() -> JwtSecretPolicy.evaluate(PLACEHOLDER, profiles("test")))
             .isInstanceOf(InsecureJwtSecretException.class);
     }
@@ -208,9 +200,7 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderItselfIsLongEnoughSoLocalDevelopmentKeepsStarting() {
-        // The length rule runs before the placeholder rule, under every profile. Were
-        // the placeholder ever shortened below the minimum, `mvnw spring-boot:run`
-        // with no secret set would stop starting on every developer's machine.
+        // The length rule runs first everywhere, so a placeholder shortened below the minimum would break local starts.
         assertThat(PLACEHOLDER.getBytes(StandardCharsets.UTF_8).length)
             .isGreaterThanOrEqualTo(JwtSecretPolicy.MIN_SECRET_BYTES);
     }
@@ -235,10 +225,8 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderMatchesTheDefaultInTheCommittedPropertiesTemplate() throws IOException {
-        // If someone edits the default in application.properties.example and not
-        // the constant, this check would silently stop recognising the placeholder
-        // — every start would look like "a real secret" and pass. This test is
-        // what turns that silent failure into a failed build.
+        // If the default in application.properties.example drifts from the constant, the check would silently stop
+        // recognising it; this fails the build instead.
         String template;
         try (InputStream in = getClass().getResourceAsStream("/application.properties.example")) {
             assertThat(in).as("application.properties.example on the classpath").isNotNull();
@@ -255,9 +243,7 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderMatchesTheValueInTheCommittedEnvExample() throws IOException {
-        // The same drift, for the file docker-compose users copy. Read from the
-        // repository root: Maven runs tests with the backend module as the working
-        // directory, and .env.example sits one level above it.
+        // The same drift check for .env.example at the repository root (one level above the backend module).
         Path envExample = Path.of("..", ".env.example");
         assertThat(envExample).as(".env.example at the repository root").exists();
 

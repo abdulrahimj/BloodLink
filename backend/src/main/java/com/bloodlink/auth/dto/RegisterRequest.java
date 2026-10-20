@@ -12,15 +12,8 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * Payload for POST /api/auth/register — a voluntary donor signing themselves up.
- *
- * Fields correspond one-to-one with the inputs on Register.jsx. Only donors
- * self-register; staff and administrator accounts are created by an administrator,
- * so no role field is accepted here (accepting one would let anyone mint an admin).
- *
- * bloodType is a String rather than the BloodType enum because the wire format is the
- * clinical label ("A+", "O-"), matching what the database stores; the service converts
- * it. It is nullable for the "I don't know yet" option — see V2__auth_constraints.sql.
+ * Payload for POST /api/auth/register, a donor signing up; no role field, so nobody can mint an admin.
+ * bloodType is the clinical label ("A+"), nullable for "I don't know yet".
  */
 public record RegisterRequest(
 
@@ -33,12 +26,8 @@ public record RegisterRequest(
     String phone,
 
     /**
-     * Optional (Business Rule 18): null or blank means the donor has no email.
-     * The format check is not an annotation here: blank has to be accepted and
-     * converted to null, and Bean Validation's @Email is too loose (it accepts
-     * "name@gmail"), so AuthService applies EmailAddress.normalizeOptional, which
-     * does both and reports a bad address on this field. Only the length is bounded
-     * here, at the column width, so an oversized value is refused before anything else.
+     * Optional (Business Rule 18): blank means no email; AuthService checks the format (EmailAddress.normalizeOptional)
+     * because @Email is too loose. Only the length is bounded here.
      */
     @Size(max = 255, message = "Email address must be 255 characters or fewer")
     String email,
@@ -51,11 +40,8 @@ public record RegisterRequest(
     Gender gender,
 
     /**
-     * Nullable by design: "I don't know yet". When given, bounded to the shape a
-     * real label can take ("A+", "AB-") — the service still resolves the exact
-     * value via BloodType.fromLabel (whose failure is also a 400), but catching an
-     * obviously-wrong value here means a garbage string gets a field-level message
-     * pointing at "bloodType" specifically, rather than a generic one.
+     * Nullable for "I don't know yet"; when given, must look like a real label so a garbage value
+     * gets a field-level 400 on bloodType (the service still resolves it with BloodType.fromLabel).
      */
     @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\", or leave blank")
     String bloodType,

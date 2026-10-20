@@ -24,15 +24,8 @@ import com.bloodlink.stock.FefoAllocator.Candidate;
 import com.bloodlink.stock.FefoAllocator.InsufficientUsableStockException;
 
 /**
- * Batch-level stock, read and issued — the one place the rest of the application
- * asks how much usable stock a bank holds, and the one place units leave a shelf.
- *
- * Every figure here counts USABLE stock only, as StockPolicy defines it: units in
- * batches whose expiry date is today or later (UTC). Units in expired batches are
- * reported separately and never counted as available. Because the Inventory screen,
- * the dashboard, hospital availability, low-stock alerts, appeals, request alerts
- * and the Admin Reports all read their stock from here (or from the same repository
- * queries, given the same "today"), they cannot disagree about what is on the shelf.
+ * Batch-level stock, read and issued: the one place usable stock is counted and units leave a shelf,
+ * so every screen, alert and report agrees. Expired units are reported separately.
  */
 @Service
 public class BatchStockService {
@@ -41,9 +34,7 @@ public class BatchStockService {
     private final ContributionAllocationRepository allocationRepository;
     private final StockPolicy stockPolicy;
 
-    // Public, not package-private, so a test in another package can exercise the real
-    // rules over mocked repositories rather than stubbing this service away (the same
-    // choice AppealCooldownPolicy makes).
+    // Public so tests in other packages can exercise the real rules over mocked repositories.
     public BatchStockService(
         BloodInventoryBatchRepository batchRepository,
         ContributionAllocationRepository allocationRepository,
@@ -55,18 +46,8 @@ public class BatchStockService {
     }
 
     /**
-     * One blood group's stock at one bank. A group never stocked is all zeros with
-     * null dates, which the Inventory screen shows as "Never stocked".
-     *
-     * @param usableUnits          units in batches not yet expired: what can be issued
-     * @param expiringSoonUnits    of those, the units expiring within 28 days
-     * @param expiredUnits         units still on the shelf in expired batches, awaiting
-     *                             discard; never part of usableUnits
-     * @param batchCount           batches with any units left, expired ones included
-     * @param earliestUsableExpiry the soonest expiry among usable batches with units
-     *                             left, or null when there are none
-     * @param lastUpdated          the most recent change to any of the group's batches,
-     *                             or null if the group has never been stocked
+     * One group's stock at one bank (all zeros and null dates if never stocked): usable, expiring-soon (28 days)
+     * and expired units, live batch count, earliest usable expiry, last update.
      */
     public record GroupStock(
         BloodType bloodType,
@@ -156,19 +137,8 @@ public class BatchStockService {
     // ---------- issuing ----------
 
     /**
-     * Takes {@code units} usable units of one group off one bank's shelf, first
-     * expiry first out, and returns what was taken from which batch.
-     *
-     * Must run inside the caller's transaction ({@code MANDATORY}): the caller has
-     * already locked the request row, the batches are locked here, and the
-     * deduction, the contribution row and its allocations must all commit or roll
-     * back together. The batches are locked in issue order (earliest expiry, then
-     * id) by {@link BloodInventoryBatchRepository#lockUsableBatchesInIssueOrder};
-     * {@link FefoAllocator} decides the split; the deductions are made on the locked,
-     * managed entities and written when the transaction flushes.
-     *
-     * @throws InsufficientStockException if the usable units do not cover it, in
-     *         which case nothing is deducted
+     * Takes units off one bank's usable batches of a group, first expiry first out, in the caller's transaction
+     * (MANDATORY); batches locked in issue order. Throws InsufficientStockException with nothing deducted.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Issue issue(UUID bloodBankId, BloodType bloodType, int units) {
@@ -203,10 +173,8 @@ public class BatchStockService {
     }
 
     /**
-     * Records which batches a contribution's units came from: one allocation row per
-     * batch drawn on. Refuses, before writing anything, if the draws do not add up
-     * to the contribution's units, so a contribution can never claim more or fewer
-     * units than left the shelves.
+     * Records one allocation row per batch a contribution drew on; refuses before writing
+     * if they do not add up to the contribution's units.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordAllocations(BloodRequestContribution contribution, Issue issue) {

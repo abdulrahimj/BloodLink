@@ -6,18 +6,8 @@ import java.util.UUID;
 import com.bloodlink.domain.Donor;
 
 /**
- * One row of a blood bank's donor roster — GET /api/donors/roster (Business
- * Rule 21).
- *
- * Deliberately narrow, the same principle {@link DonorLookupResponse} already
- * states for the Record Donation lookup: this is a bank employee looking at
- * someone else's details, so the row carries only what the screen needs and
- * nothing a donor would reasonably expect to stay private from staff who have
- * never drawn their blood. No address, no email, no date of birth.
- *
- * {@code lastDonationDate} is {@code Donor.lastDonationDate} — any bank, not
- * only this one, which is why the Donors page labels the column accordingly
- * rather than implying it is specific to this facility.
+ * One row of a bank's donor roster (Business Rule 21), deliberately narrow: no address, email or date of birth.
+ * lastDonationDate is from any bank, and the page labels it so.
  */
 public record DonorRosterEntryResponse(
     UUID donorId,
@@ -26,10 +16,7 @@ public record DonorRosterEntryResponse(
      *  means this is not necessarily what any one donation recorded). */
     String bloodType,
     String phone,
-    /** Most recent donation on record, at any bank; null if that is also null
-     *  on the donor's own profile (should not happen for a row in this list,
-     *  since being in it means a donation exists, but the field is read
-     *  straight off the entity rather than assumed). */
+    /** Most recent donation at any bank; null only if the profile's is (not expected for a roster row). */
     LocalDate lastDonationDate,
     BankDonorEligibility eligibility,
     /** Null when already eligible — the date eligibility began or begins
@@ -40,10 +27,8 @@ public record DonorRosterEntryResponse(
 ) {
 
     /**
-     * Builds one row from a loaded Donor entity and its donationsHere count,
-     * computed separately by the caller (DonorRosterService) over the whole
-     * page at once. Must run inside the transaction that loaded {@code donor}:
-     * {@code donor.getUser()} is a lazy association.
+     * Builds one row from a Donor and its separately computed donationsHere count;
+     * must run in the loading transaction, as donor.getUser() is lazy.
      */
     public static DonorRosterEntryResponse from(Donor donor, long donationsHere) {
         return new DonorRosterEntryResponse(

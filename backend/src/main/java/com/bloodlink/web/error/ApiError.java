@@ -6,12 +6,8 @@ import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * The single error shape every failed request returns, so the frontend has exactly
- * one thing to parse. `message` is always safe to show a user directly.
- *
- * `fieldErrors` is present only for validation failures, mapping field name to
- * message, which lets a form highlight the offending input rather than showing a
- * generic banner.
+ * The single error shape every failed request returns; message is always safe to show.
+ * fieldErrors (validation only) maps field to message so forms can highlight inputs.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ApiError(

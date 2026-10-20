@@ -10,12 +10,8 @@ import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 
 /**
- * One user account as the Admin Console's "User Accounts" table sees it.
- *
- * Both the id and the name are carried for the linked facility, the same pattern
- * BloodRequestResponse already uses for hospital and fulfilling-bank: the table
- * displays a name, but a future facility-scoped action would need the id, and
- * returning both spares the frontend a lookup against a separate reference list.
+ * One user account as the Admin Console's User Accounts table sees it.
+ * Carries both id and name of the linked facility, sparing the frontend a lookup.
  */
 public record AdminUserResponse(
     UUID id,
@@ -35,10 +31,8 @@ public record AdminUserResponse(
 ) {
 
     /**
-     * Flattens the entity for the wire. Safe to call inside a transaction only —
-     * bloodBank and hospital are both lazy associations, and this touches them
-     * (open-in-view is false, so a detached entity would fail here). Callers are
-     * expected to have loaded them already, e.g. via a fetch join.
+     * Flattens the entity for the wire; touches the lazy bank and hospital associations,
+     * so call it inside a transaction (open-in-view is off), ideally after a fetch join.
      */
     public static AdminUserResponse from(User user) {
         BloodBank bank = user.getBloodBank();

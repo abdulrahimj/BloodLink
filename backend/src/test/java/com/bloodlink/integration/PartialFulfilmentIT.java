@@ -50,37 +50,8 @@ import com.bloodlink.request.dto.RequestActionPayload;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Partial, multi-bank fulfilment end to end — Business Rule 20.
- *
- * An integration test rather than more unit tests because the behaviour that
- * matters here only exists against a real database: which requests a bank sees is a
- * JPQL query over three tables, the running total is a SQL aggregate, and the
- * status a request ends up in is the product of both. A mock can be told the
- * answer; only a real query can be wrong about it.
- *
- * What is covered, in the order the methods appear:
- * <ul>
- *   <li>Two banks each contributing part of one request until the total is met, with
- *       the hospital seeing where each unit came from.</li>
- *   <li>A bank's own queue: it keeps a request it partly contributed to (it may
- *       contribute again), and never sees one another bank completed without it.</li>
- *   <li>A partially fulfilled request staying open after every other bank declines
- *       the remainder — Business Rule 20's deliberate difference from Rule 11.</li>
- *   <li>The two one-way doors: a bank that contributed cannot decline, and a bank
- *       that declined cannot contribute.</li>
- *   <li>The REQUEST_PROGRESS notification that keeps the other banks from covering a
- *       gap that has already shrunk.</li>
- * </ul>
- *
- * (The race itself — two banks contributing at the same instant — cannot be tested
- * from inside one transaction, and has its own class, PartialFulfilmentRaceIT,
- * against its own throwaway database.)
- *
- * <h2>Running this test</h2>
- * <pre>{@code .\mvnw.cmd test -Dtest=PartialFulfilmentIT}</pre>
- * Shares the {@code bloodlink_test} fixture database with the other integration
- * tests, and its guarantee: {@code @Transactional}, so every row written here is
- * rolled back and re-running is always safe.
+ * Partial, multi-bank fulfilment end to end (Business Rule 20): shared filling, bank queues, no auto-close after
+ * declines, the one-way doors, REQUEST_PROGRESS. Rolled back; the race is in PartialFulfilmentRaceIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -104,10 +75,7 @@ class PartialFulfilmentIT {
     // ---------- two banks filling one request ----------
 
     /**
-     * The case the whole feature exists for: a request for 4 units that neither bank
-     * can cover alone, filled by both together. Under the old model the first bank to
-     * approve claimed it exclusively and could not fulfil it, and the second bank
-     * never saw it again.
+     * The case the feature exists for: a 4-unit request neither bank can cover alone, filled by both together.
      */
     @Test
     void twoBanksEachContributingPartOfARequestTogetherFulfilIt() throws Exception {
@@ -213,9 +181,7 @@ class PartialFulfilmentIT {
     // ---------- declines against a request that has already received units ----------
 
     /**
-     * Business Rule 20's deliberate difference from Business Rule 11: a request with
-     * real progress on it never closes by decline. Stock that could complete it may
-     * arrive tomorrow, and closing it would make the ward start again for nothing.
+     * A request with real progress never closes by decline (Business Rule 20's difference from Rule 11).
      */
     @Test
     void aPartiallyFulfilledRequestStaysOpenEvenAfterEveryOtherBankDeclinesTheRemainder() throws Exception {
@@ -225,9 +191,7 @@ class PartialFulfilmentIT {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("PARTIALLY_FULFILLED"));
 
-        // Every bank that could still help declines the remaining 2 units. With the
-        // contributing bank locked out of declining (below), that is every other bank
-        // in the deployment.
+        // Every other bank declines the remaining 2 units (the contributor itself cannot decline).
         for (String token : declineTokensOtherThan(fixture)) {
             mockMvc.perform(patch("/api/requests/{id}", fixture.requestId)
                     .header("Authorization", bearer(token))
@@ -306,13 +270,8 @@ class PartialFulfilmentIT {
     // ---------- fixture and helpers ----------
 
     /**
-     * One hospital request against two stocked banks, with a signed-in staff account
-     * for each side — the arrangement every test here needs.
-     *
-     * The two banks are the seeded ones; their stock is added through the real
-     * endpoint, so the figures these tests assert against are the ones the
-     * application itself would report. Requests are for {@link #GROUP}, which the
-     * seeded data does not use.
+     * One request against the two seeded banks, stock added through the real endpoint,
+     * and a signed-in account for each side; requests use GROUP, unused by the seed.
      */
     private final class Fixture {
         private final BloodBank bankA;

@@ -16,16 +16,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import jakarta.validation.Valid;
 
 /**
- * Adding blood banks and hospitals — Business Rule 19.
- *
- * Only POST lives here. Listing stays on the existing public-to-any-signed-in-role
- * GET /api/blood-banks and GET /api/hospitals, which the Admin Console's Blood
- * Banks and Hospitals pages read just as every picker in the app already does; a
- * second, admin-only listing would be a copy of the same data. There is no PATCH
- * or DELETE: editing or removing a facility is deliberately out of scope.
- *
- * No role check in this class: SecurityConfig gates all of /api/admin/** on ADMIN,
- * so any other token is refused with a 403 in the filter chain before reaching it.
+ * Adding blood banks and hospitals (Business Rule 19): POST only; listing stays on the public GETs, no edit or delete.
+ * No role check here: SecurityConfig restricts /api/admin/** to ADMIN.
  */
 @RestController
 @RequestMapping("/api/admin")

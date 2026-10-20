@@ -17,9 +17,8 @@ import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Read side of the donor's own profile: dashboard summary and donation history.
- * Everything here is scoped to the caller's own donor row — there is no path in
- * this class that accepts or resolves a different donor's id.
+ * Read side of the donor's own profile: dashboard summary and donation history,
+ * always scoped to the caller's own donor row.
  */
 @Service
 public class DonorService {
@@ -37,11 +36,8 @@ public class DonorService {
     }
 
     /**
-     * Assembles the Donor Portal dashboard for the signed-in user.
-     *
-     * Eligibility is delegated to Donor.getEligibilityStatus() so this stays the one
-     * place that rule is evaluated (Business Rule 2); everything else here is
-     * aggregated from the donor's Donation history.
+     * Assembles the Donor Portal dashboard; eligibility comes from Donor.getEligibilityStatus() (Business Rule 2),
+     * the rest from the donation history.
      */
     @Transactional(readOnly = true)
     public DonorProfileResponse getMyProfile(UUID userId) {
@@ -88,10 +84,8 @@ public class DonorService {
     }
 
     /**
-     * Resolves the Donor row behind an authenticated user.
-     * Throws rather than returning null/Optional so both endpoints get one
-     * consistent 404 when the caller has no donor profile — an ADMIN token reaching
-     * a donor-only endpoint's URL pattern (permitted by role, but has no such row).
+     * The Donor row behind an authenticated user; throws so a caller with no donor profile
+     * (e.g. an ADMIN) gets one consistent 404.
      */
     private Donor findDonorForUser(UUID userId) {
         return donorRepository.findByUserId(userId)

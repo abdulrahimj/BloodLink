@@ -12,14 +12,8 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
 
 /**
- * The principal placed in the SecurityContext for an authenticated request.
- *
- * Spring's own UserDetails only carries a username string; this project needs the
- * user's UUID on every request (to scope a donor to their own records, or staff to
- * their own blood bank), so the id is carried here instead of being looked up again.
- *
- * The single authority is "ROLE_" + the Role enum name, which is what lets
- * hasRole('DONOR') and friends work in SecurityConfig without further mapping.
+ * The SecurityContext principal: carries the user's UUID (needed on every request) as well as the role,
+ * whose single authority "ROLE_" + name makes hasRole() work.
  */
 public class AuthenticatedUser implements UserDetails {
 

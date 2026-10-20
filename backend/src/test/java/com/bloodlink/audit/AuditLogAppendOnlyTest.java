@@ -16,15 +16,8 @@ import com.bloodlink.domain.AuditLog;
 import com.bloodlink.repository.AuditLogRepository;
 
 /**
- * The code-level half of Business Rule 17's "append-only": nothing in Java offers a
- * way to change or remove an audit entry. (The database-level half — V12's
- * triggers — and the HTTP-level half are proven in AdminEditAndAuditLogIT.)
- *
- * These look like tests of how the code is written rather than what it does, and
- * they are, on purpose. The easiest way to break an append-only log is not a bug —
- * it is someone switching the repository to JpaRepository "for consistency" and
- * inheriting deleteAll() without noticing. These fail the build the moment that
- * happens, with a message saying why it matters.
+ * The code-level half of Business Rule 17's append-only log: nothing in Java can change or remove an entry.
+ * Deliberately structural, so switching to JpaRepository fails the build with a reason.
  */
 class AuditLogAppendOnlyTest {
 
@@ -48,13 +41,8 @@ class AuditLogAppendOnlyTest {
     }
 
     /**
-     * The newest-first page query (Business Rule 17's pagination) must keep its
-     * {@code createdAt desc, id desc} tie-breaker. Two entries can share a
-     * timestamp; without the secondary key on id, their relative order would be
-     * free to flip between one page request and the next — a row could then show
-     * up on neither page, or on both. Checking the annotation's text, the same
-     * spirit as the tests above, catches that the moment someone "simplifies" the
-     * ordering rather than only once a flaky page-boundary test happens to notice.
+     * The newest-first page query must keep its createdAt desc, id desc tie-breaker,
+     * or rows sharing a timestamp could be skipped or repeated across pages.
      */
     @Test
     void theNewestFirstPageQueryKeepsTheIdTieBreaker() throws NoSuchMethodException {

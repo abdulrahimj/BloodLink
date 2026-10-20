@@ -1,13 +1,5 @@
-/* ================================================================
-   BloodLink — Audit Log paging arithmetic
-
-   Thin re-export of the generic paging functions in lib/pagination.js, kept
-   under this module's original names so nothing that already imports from
-   here — AdminConsole.jsx's AuditLogView, and this file's own test — had to
-   change when those functions were generalised for reuse on the blood bank's
-   Donors page (Business Rule 21). If this file disappeared entirely, nothing
-   would be lost: every name below is exactly pagination.js's own export.
-   ================================================================ */
+/* BloodLink — Audit Log paging: a thin re-export of lib/pagination.js under this module's original names,
+   so existing imports didn't have to change. */
 
 export {
   DEFAULT_PAGE_SIZES as AUDIT_LOG_PAGE_SIZES,

@@ -16,10 +16,7 @@ import com.bloodlink.stock.FefoAllocator.Candidate;
 import com.bloodlink.stock.FefoAllocator.InsufficientUsableStockException;
 
 /**
- * First expiry, first out: which batches a contribution takes its units from.
- * Pure logic, no database. The database side of the same order (PostgreSQL's
- * uuid ordering agreeing with {@link FefoAllocator#ISSUE_ORDER}) is proven in
- * BatchStockSchemaIT.
+ * First expiry, first out, as pure logic; the matching database order is proven in BatchStockSchemaIT.
  */
 class FefoAllocatorTest {
 
@@ -59,10 +56,7 @@ class FefoAllocatorTest {
 
     @Test
     void theIdTieBreakUsesPostgresUnsignedOrderNotJavasSignedOne() {
-        // 80000000-... has its top bit set. Java's UUID.compareTo reads that as a
-        // negative number and puts it first; PostgreSQL compares bytes unsigned and
-        // puts it last. The allocator must agree with the database, which is the
-        // order the rows are locked in.
+        // 80000000-... has its top bit set: Java's compareTo puts it first, PostgreSQL last; the allocator follows PostgreSQL.
         UUID low = UUID.fromString("00000000-0000-0000-0000-000000000001");
         UUID high = UUID.fromString("80000000-0000-0000-0000-000000000000");
         assertThat(high.compareTo(low)).as("Java's own signed comparison").isNegative();

@@ -23,12 +23,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import jakarta.validation.Valid;
 
 /**
- * Blood requests — the hospital-to-blood-bank sequence in Figure 3.5.
- *
- * SecurityConfig limits this whole path to HOSPITAL_STAFF, BLOOD_BANK_STAFF and
- * ADMIN. Which of those may do what, and which rows each of them sees, is decided
- * in RequestService: a URL rule can match a role, but it cannot tell whether the
- * request being acted on belongs to the caller's own facility.
+ * Blood requests, hospital to blood bank (Figure 3.5); SecurityConfig admits hospital staff, bank staff and ADMIN,
+ * and RequestService decides what each may do and see.
  */
 @RestController
 @RequestMapping("/api/requests")
@@ -41,11 +37,8 @@ public class RequestController {
     }
 
     /**
-     * "Submit Blood Request". The new request's hospital is the caller's own — the
-     * body has no hospital id to supply one.
-     *
-     * 201 with the created request, so the tracking list can show it immediately
-     * without a follow-up GET.
+     * "Submit Blood Request" for the caller's own hospital (the body has no hospital id);
+     * 201 with the created request.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -57,13 +50,8 @@ public class RequestController {
     }
 
     /**
-     * The request feed for whoever is asking — a hospital's own requests, or a blood
-     * bank's actionable scope. Newest first.
-     *
-     * {@code bloodBankId} is optional and only meaningful to an ADMIN, or to bank
-     * staff not yet assigned to a bank: it picks which bank's feed to look at, the
-     * same way the Blood Bank portal's picker already works for inventory. Assigned
-     * staff are always scoped to their own bank regardless of what is passed.
+     * The request feed for the caller, newest first: a hospital's own requests or a bank's actionable scope.
+     * bloodBankId only matters for an ADMIN or unassigned staff; assigned staff always see their own bank.
      */
     @GetMapping
     public List<BloodRequestResponse> list(
@@ -74,18 +62,8 @@ public class RequestController {
     }
 
     /**
-     * Contribute units towards a request, or decline it (Business Rule 20).
-     *
-     * PATCH rather than PUT because this changes one aspect of the request (how much
-     * of it is covered) and never replaces it: the hospital's blood group, units and
-     * urgency are not editable once submitted.
-     *
-     * A contribution is deliberately not a POST to a /contributions sub-resource,
-     * even though it does create one. The two actions a bank can take are two
-     * answers to the same question — "can you help with this?" — taken from the same
-     * row of the same panel, and splitting them across two endpoints would mean the
-     * dashboard's single handler had to know which shape each one needed. What comes
-     * back is the request, in the shape the panel renders, either way.
+     * Contribute units to a request, or decline it (Business Rule 20); PATCH, as the request itself is not replaced.
+     * One endpoint for both answers, returning the request in the shape the panel renders.
      */
     @PatchMapping("/{requestId}")
     public BloodRequestResponse act(

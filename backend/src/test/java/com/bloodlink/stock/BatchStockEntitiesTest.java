@@ -26,11 +26,8 @@ import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.ContributionAllocationRepository;
 
 /**
- * The Java half of the batch tables' rules (the database half is BatchStockSchemaIT):
- * a batch's identity has no setters, units cannot be taken below zero, write-off
- * notes follow the same rules as V18's CHECKs, and the two ledgers have no way to
- * change or remove an entry — the same code-level checks AuditLogAppendOnlyTest
- * makes for the audit log.
+ * The Java half of the batch tables' rules (database half: BatchStockSchemaIT): fixed identity, no negative units,
+ * note rules matching V18, and append-only ledgers.
  */
 class BatchStockEntitiesTest {
 

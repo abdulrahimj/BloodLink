@@ -15,14 +15,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Answers "authenticated, but not allowed here" with a JSON 403 in the same shape as
- * every other error — a donor calling an administrator endpoint, for instance.
- *
- * Needed because the URL rules in SecurityConfig are enforced inside the security
- * filter chain, which sits in front of the DispatcherServlet. GlobalExceptionHandler
- * never sees those denials, so without this the SPA would get Spring's default error
- * body, which carries no `message` field for the UI to show. (The advice's own
- * AccessDeniedException handler still covers method-level checks, which do reach it.)
+ * Answers "authenticated, but not allowed" with a JSON 403 in the usual error shape,
+ * since URL-rule denials never reach GlobalExceptionHandler.
  */
 @Component
 public class RestAccessDeniedHandler implements AccessDeniedHandler {

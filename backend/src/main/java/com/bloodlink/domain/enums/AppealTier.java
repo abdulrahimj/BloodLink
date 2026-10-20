@@ -4,32 +4,8 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * How short of a blood group a bank was when it sent a donation appeal, and what
- * that implies about when it may send another (CLAUDE.md Business Rule 12).
- *
- * <h2>Why these thresholds are not {@link StockStatus}'s</h2>
- * They look similar and are deliberately not the same numbers. StockStatus is a
- * *display* rule (Business Rule 3): below 15 Critical, below 40 Low, otherwise
- * Sufficient — what the badge in the table says. This is an *action* rule: an
- * appeal may only be sent below 30. The gap is real and intentional — a group
- * holding 30-39 units shows a Low badge but cannot be appealed for, because
- * asking donors to come in for stock that is merely off its target spends
- * goodwill the bank will need at 12 units. Keeping the two sets of numbers in
- * separate types is what stops a later change to one silently moving the other.
- *
- * <h2>The two tiers</h2>
- * <ul>
- *   <li>{@code CRITICAL} — fewer than 15 units at send time. Short cooldown (5
- *       hours), because a bank this low may legitimately need to ask again
- *       quickly, and recovers as soon as stock reaches 15.</li>
- *   <li>{@code LOW} — 15 to 29 units at send time. Long cooldown (24 hours), and
- *       recovers at 30, where there is no longer a shortage to appeal about.</li>
- * </ul>
- *
- * Each tier's recovery threshold is the top of its own band, which is the same
- * thing as "the threshold that triggered it": a CRITICAL appeal was sent because
- * stock was under 15, so reaching 15 is the shortage ending; a LOW appeal was
- * sent because stock was under 30, so reaching 30 is.
+ * How short a bank was when it appealed, and what that means for the next appeal (Business Rule 12): CRITICAL under 15
+ * (5h, clears at 15), LOW 15–29 (24h, clears at 30). Deliberately separate from StockStatus's badge thresholds.
  */
 public enum AppealTier {
 
@@ -51,14 +27,8 @@ public enum AppealTier {
     }
 
     /**
-     * The tier an appeal sent at this stock level would be recorded as, or null if
-     * no appeal may be sent at all because there is no shortage.
-     *
-     * Null rather than a fourth "NONE" constant: a tier is something a *sent*
-     * appeal has, and a stock level with no shortage produces no appeal to give a
-     * tier to. A NONE constant would have to be excluded by hand everywhere a
-     * stored tier is read back, which is exactly the kind of check that gets
-     * forgotten once.
+     * The tier an appeal sent at this stock level would get, or null when there is no shortage
+     * (no NONE constant, since only a sent appeal has a tier).
      */
     public static AppealTier forUnits(int unitsAvailable) {
         if (unitsAvailable < CRITICAL_BELOW) {
@@ -76,30 +46,16 @@ public enum AppealTier {
     }
 
     /**
-     * Whether stock has climbed back over the threshold that triggered this tier's
-     * appeal — 15 for CRITICAL, 30 for LOW.
-     *
-     * This is what clears a cooldown: it exists to stop a bank appealing
-     * repeatedly about the same unresolved shortage, so once that shortage is over
-     * the cooldown has nothing left to protect against and its row is deleted
-     * (see {@code AppealCooldownPolicy.clearIfRecovered}).
-     *
-     * Asked at the moment stock rises, not re-asked on every read — so a group
-     * that recovers and then relapses counts as a new shortage, free to appeal
-     * again rather than serving out the remains of a timer belonging to an appeal
-     * that already did its job.
+     * Whether stock is back over this tier's trigger threshold (15 CRITICAL, 30 LOW), which clears the cooldown.
+     * Asked when stock rises, so a later relapse counts as a new shortage.
      */
     public boolean hasRecoveredAt(int unitsAvailable) {
         return unitsAvailable >= recoveryThreshold;
     }
 
     /**
-     * Whether this tier's cooldown timer has run out for an appeal sent at
-     * {@code lastSentAt}.
-     *
-     * The boundary is inclusive of the window — at exactly 5 hours a CRITICAL
-     * cooldown is still in force, and it lifts after that. "No more than 5 hours
-     * elapsed" is the rule as written, so 5 hours exactly is still "no more than".
+     * Whether this tier's cooldown has run out for an appeal sent at lastSentAt;
+     * exactly 5 (or 24) hours is still within the window.
      */
     public boolean hasExpiredBy(Instant lastSentAt, Instant now) {
         return Duration.between(lastSentAt, now).compareTo(cooldownWindow) > 0;

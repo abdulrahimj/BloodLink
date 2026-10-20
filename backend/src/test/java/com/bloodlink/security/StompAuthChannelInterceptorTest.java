@@ -24,10 +24,7 @@ import com.bloodlink.repository.UserRepository;
 import io.jsonwebtoken.Claims;
 
 /**
- * Covers the same suspension gate as JwtAuthenticationFilterTest, at the point a
- * WebSocket session is opened rather than an HTTP request is served — a new
- * CONNECT with a suspended account's token must be refused for the same reason a
- * new REST call with it is.
+ * The same suspension gate as JwtAuthenticationFilterTest, at WebSocket CONNECT.
  */
 @ExtendWith(MockitoExtension.class)
 class StompAuthChannelInterceptorTest {
@@ -52,11 +49,7 @@ class StompAuthChannelInterceptorTest {
     private Message<byte[]> connectFrameWithBearerToken() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setNativeHeader("Authorization", "Bearer " + TOKEN);
-        // Without this, building the message freezes the accessor, and preSend's
-        // accessor.setUser(...) — the whole point of a successful CONNECT — throws
-        // "Already immutable" instead of exercising anything. Real inbound STOMP
-        // frames are built the same way for exactly this reason: the accessor has
-        // to stay writable until a handler further down the chain has named a user.
+        // Keeps the accessor mutable so preSend's setUser works, as real inbound STOMP frames do.
         accessor.setLeaveMutable(true);
         return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
     }

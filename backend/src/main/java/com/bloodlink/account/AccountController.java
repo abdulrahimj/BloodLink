@@ -16,13 +16,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import jakarta.validation.Valid;
 
 /**
- * The signed-in user's own account — Business Rule 16. Behind every role's Profile
- * Settings screen.
- *
- * "/me" rather than "/{id}": the account acted on is always the caller's, read from
- * their token, never from the URL. There is nothing to scope or check because there
- * is no way to name anybody else's account here at all. Open to every signed-in
- * role (SecurityConfig), since every role has a name, an email and a password.
+ * The signed-in user's own account (Business Rule 16), behind every role's Profile Settings screen.
+ * "/me", not "/{id}": the account is always the caller's, taken from the token, so nobody else's can be named.
  */
 @RestController
 @RequestMapping("/api/users/me")
@@ -50,12 +45,8 @@ public class AccountController {
     }
 
     /**
-     * Changes the caller's password, given their current one.
-     *
-     * 204 No Content on success: there is nothing new to return, and in particular
-     * never the password in any form. A wrong current password is a 401 keyed to the
-     * currentPassword field — see IncorrectCurrentPasswordException for why the field
-     * matters as much as the status.
+     * Changes the caller's password given their current one; 204 on success, never echoing the password.
+     * A wrong current password is a 401 keyed to the currentPassword field (see IncorrectCurrentPasswordException).
      */
     @PatchMapping("/password")
     public ResponseEntity<Void> changePassword(

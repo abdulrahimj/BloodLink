@@ -16,21 +16,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.ConflictException;
 
 /**
- * Adding blood banks and hospitals from the Admin Console — Business Rule 19.
- *
- * Create-only, deliberately. Editing or removing an existing facility would mean
- * deciding what happens to the staff, stock, requests and donations tied to it,
- * which is a separate decision for later; nothing here touches an existing row.
- *
- * <h2>What a new blood bank does not need</h2>
- * No stock batches are written. InventoryService.listInventory already reports all
- * eight blood groups for every bank, filling any group with no batch as zero units
- * (and so Critical, Business Rule 3); the first "Add New Batch" or recorded donation
- * creates the first real batch. A batch of zero units cannot exist anyway (V18), and
- * would need an expiry date that does not exist for stock that does not exist.
- *
- * Every creation is recorded in the audit log in the same transaction
- * (Business Rule 17's pattern), naming the administrator who did it.
+ * Create-only facilities from the Admin Console (Business Rule 19); existing rows are never touched.
+ * A new bank needs no stock rows (missing groups read as 0), and each creation is audit-logged in the same transaction.
  */
 @Service
 public class AdminFacilityService {
@@ -50,12 +37,8 @@ public class AdminFacilityService {
     }
 
     /**
-     * Creates a blood bank, refusing a name another blood bank already has (409).
-     *
-     * The name check is case-insensitive, matching V14's unique index on
-     * lower(name). The pre-flight check gives the clear message; if two
-     * administrators race past it, the index refuses the second insert and that is
-     * translated into the same message rather than the generic conflict text.
+     * Creates a blood bank, refusing a name already used (409), compared case-insensitively like V14's index.
+     * If two administrators race past the check, the index violation is translated into the same message.
      */
     @Transactional
     public BloodBankResponse createBloodBank(CreateFacilityPayload payload, AuthenticatedUser principal) {
@@ -84,9 +67,8 @@ public class AdminFacilityService {
         return new BloodBankResponse(saved.getId(), saved.getName(), saved.getLocation(), saved.getContactPhone());
     }
 
-    /** Creates a hospital — the same rules as {@link #createBloodBank}, against the
-     *  hospitals table. A hospital and a blood bank may share a name (Holy Spirit
-     *  has both); uniqueness is within a type, not across them. */
+    /** Creates a hospital with the same rules as createBloodBank; a hospital may share a name with a blood bank,
+     * since uniqueness is within a type only. */
     @Transactional
     public HospitalResponse createHospital(CreateFacilityPayload payload, AuthenticatedUser principal) {
         String name = normaliseName(payload.name());
@@ -113,10 +95,7 @@ public class AdminFacilityService {
     }
 
     /**
-     * Trims the name and collapses runs of whitespace to one space, so
-     * "Holy  Spirit Blood Bank " is stored — and compared — as the name it
-     * obviously is. Without this, an extra space would slip a duplicate past the
-     * case-insensitive check and the index alike.
+     * Trims and collapses runs of whitespace, so an extra space cannot slip a duplicate name past the checks.
      */
     static String normaliseName(String raw) {
         return raw.trim().replaceAll("\\s+", " ");

@@ -25,11 +25,7 @@ import com.bloodlink.repository.UserRepository;
 import io.jsonwebtoken.Claims;
 
 /**
- * The one place a suspension actually bites for a request made with a token
- * issued before it happened. AuthService refuses a suspended account only at the
- * moment of login; every request in between is this filter's decision, so a gap
- * here would mean "suspended" only ever meant "cannot get a new token" — exactly
- * what the business requirement says a suspension must not be.
+ * Where a suspension bites for a token issued before it: every request after login is this filter's decision.
  */
 @ExtendWith(MockitoExtension.class)
 class JwtAuthenticationFilterTest {
@@ -48,10 +44,7 @@ class JwtAuthenticationFilterTest {
         Claims claims = mock(Claims.class);
         when(jwtService.parseClaims(TOKEN)).thenReturn(claims);
         when(jwtService.extractUserId(claims)).thenReturn(USER_ID);
-        // Lenient: the filter only reaches extractRole once accountIsActive has
-        // already returned true, so the suspended/missing-account tests below
-        // never call it — that is the behaviour under test in those cases, not
-        // an oversight this stub needs to paper over.
+        // Lenient: extractRole is only reached after accountIsActive is true, so the suspended tests never call it.
         lenient().when(jwtService.extractRole(claims)).thenReturn(Role.DONOR.name());
     }
 
@@ -89,11 +82,7 @@ class JwtAuthenticationFilterTest {
 
         runFilterWithBearerToken();
 
-        // Left unauthenticated, not rejected outright — the request still reaches
-        // the servlet chain (a public endpoint would still be served); it is
-        // SecurityConfig's role rules that turn "no authentication" into a 401
-        // for anything protected. This filter's only job is to refuse to vouch
-        // for a suspended account.
+        // Left unauthenticated, not rejected: SecurityConfig turns that into a 401 for protected endpoints.
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 

@@ -48,20 +48,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Stage 3b-2 (Business Rule 8): an ADMIN has no way to add or remove blood units.
- * Stage 3b closed Add New Batch and write-offs (BatchWriteOffIT); this closes the
- * other two paths that move stock — Record Donation, which creates a batch, and
- * CONTRIBUTE, which takes units off batches — through the real HTTP endpoints and a
- * real database.
- *
- * For each: an ADMIN is refused (403) with nothing written anywhere — no donation,
- * no batch, no contribution, no change to the donor or the request, no audit entry;
- * the bank's own staff still succeed; hospital staff are still refused; and staff of
- * another bank cannot touch this bank's stock by naming it (they always act as their
- * own bank). What an ADMIN keeps is checked too: declining a request on a named
- * bank's behalf, which moves no blood.
- *
- * Shares bloodlink_test and its guarantee: {@code @Transactional}, all rolled back.
+ * Stage 3b-2 (Business Rule 8): an ADMIN cannot record a donation or CONTRIBUTE (403, nothing written),
+ * while bank staff still can and an ADMIN may still decline. @Transactional, rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -184,9 +172,8 @@ class AdminStockLockoutIT {
         UUID requestId = raiseRequest(4);
 
         contribute(hospitalToken, requestId, bank.getId(), 4).andExpect(status().isForbidden());
-        // Another bank's staff naming this bank contribute from their OWN shelf — which
-        // is empty here, so they are refused for want of stock — and this bank's
-        // units never move.
+        // Another bank's staff naming this bank contribute from their own empty shelf, so are refused;
+        // this bank's units never move.
         contribute(otherStaffToken, requestId, bank.getId(), 4).andExpect(status().isConflict());
         flush();
 
@@ -343,9 +330,7 @@ class AdminStockLockoutIT {
         return "Bearer " + token;
     }
 
-    /** Distinct local-format numbers within a run — see AdminAccountCreationIT. A
-     *  prefix of its own (079) so they cannot meet BatchStockCutoverIT's (077) or
-     *  BatchWriteOffIT's (078). */
+    /** Distinct local-format numbers (see AdminAccountCreationIT), with prefix 079 to avoid the other ITs' numbers. */
     private String uniqueLocalPhone() {
         long value = (PHONE_RUN_BASE + PHONE_SEQUENCE.incrementAndGet()) % 1_000_000L;
         return "079" + String.format("%06d", value);

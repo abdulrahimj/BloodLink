@@ -7,34 +7,8 @@ import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Hospital Portal
-
-   Covers the hospital-staff use cases from Chapters One & Three:
-     • Submit Blood Request  (blood group, units, urgency, ward)
-     • Track Request Status  (Pending / Approved / Fulfilled / Rejected)
-     • Check live blood availability across Makeni blood banks
-
-   The hospital half of Figure 3.5. Wired to:
-     POST /api/requests            — the form
-     GET  /api/requests            — the tracking list, scoped server-side to
-                                     this hospital's own requests
-     GET  /api/blood-banks + /api/inventory/{id}  — live availability
-
-   Layout, styling and copy are the mockup's, unchanged. The AVAILABILITY and
-   REQUESTS fixtures are replaced with fetched data, the stat cards are derived
-   from the real request list, and a loading/error/submitting set of states was
-   added using the same idiom (and the same tokens) as the other wired portals.
-
-   The screen is live. A WebSocket session (see realtime/useNotifications) feeds
-   the bell in the header, and the one type a hospital receives —
-   REQUEST_STATUS_CHANGE — is precisely the news this screen exists to show: a
-   request the clerk raised has been approved, rejected or fulfilled by a blood
-   bank. That is a decision taken on another screen in another building, so
-   without the push it would sit unnoticed until someone thought to refresh.
-   Arrival triggers a reload rather than patching the row from the message text:
-   the notification is what says something changed, never what the new state is.
-   ================================================================ */
+/* BloodLink — Hospital Portal (the hospital half of Figure 3.5): submit requests, track their progress,
+   and view citywide availability. A REQUEST_STATUS_CHANGE push triggers a reload, never a patch. */
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
 
@@ -58,17 +32,8 @@ const DOT_CLASS = { SUFFICIENT: "ok", LOW: "low", CRITICAL: "critical" };
 const STATUS_RANK = { SUFFICIENT: 0, LOW: 1, CRITICAL: 2 };
 
 /**
- * Folds every bank's per-group stock into the one citywide row this panel shows.
- *
- * Units are simply summed — that is a real total of the blood available in Makeni.
- * The status dot is the *best* status any single bank reports for that group,
- * rather than a status recomputed from the sum, because Business Rule 3's
- * thresholds are defined per blood bank and applying them to a citywide total
- * would be reading them as something they are not. Best-of is also the question
- * the hospital is actually asking: a request is filled by one bank, so what
- * matters is whether some bank's stock of that group is healthy. Two banks
- * sitting at "Low" therefore still read Low here, even though their combined
- * units would clear the Sufficient threshold on their own.
+ * Folds every bank's stock into one citywide row: units summed, the status dot is the best single bank's status,
+ * since Business Rule 3's thresholds are per bank.
  */
 function citywideAvailability(inventoriesByBank) {
   return BLOOD_GROUPS.map((group) => {
@@ -87,10 +52,8 @@ function citywideAvailability(inventoriesByBank) {
 }
 
 export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpdated }) {
-  // "dashboard" or "settings" — the Settings sidebar entry opens the shared
-  // Profile Settings screen in this page's main area, keeping its sidebar, header
-  // and live bell (Business Rule 16). Leaving and returning keeps the request
-  // form's half-typed contents, since this component stays mounted throughout.
+  // "dashboard" or "settings" (Business Rule 16); the form's half-typed contents survive,
+  // as this component stays mounted.
   const [view, setView] = useState("dashboard");
   const [group, setGroup] = useState("O-");
   const [units, setUnits] = useState(2);
@@ -108,13 +71,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   const [today] = useState(() => new Date());
 
   /**
-   * Availability needs one call per bank on top of the bank listing, so it is
-   * loaded once here rather than refreshed after every submission — submitting a
-   * request does not change stock (only a bank fulfilling it does), so there
-   * would be nothing new to show.
-   *
-   * A bank fulfilling one is exactly the case that clause names, and it now has a
-   * trigger: see refresh below, which a REQUEST_STATUS_CHANGE calls.
+   * Loads the request list and per-bank availability once; submitting doesn't change stock,
+   * and a bank's contribution triggers refresh below.
    */
   const load = useCallback(async () => {
     const [myRequests, banks] = await Promise.all([getRequests(), getBloodBanks()]);
@@ -125,17 +83,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   }, []);
 
   /**
-   * Reloads and applies, without touching the page-level loading or error state.
-   *
-   * This reload is something the screen did on its own rather than something the
-   * clerk asked for, so it must not blank a populated desk to "Loading…", and must
-   * not replace it with an error banner if one background refresh fails. Either
-   * would be far more disruptive than briefly showing a status a few seconds out
-   * of date. Same reasoning, and same shape, as the Blood Bank Dashboard's.
-   *
-   * A half-typed request in the form is untouched — none of the form's state is
-   * written here, so a notification arriving mid-typing cannot clear the ward
-   * field or reset the blood group under the clerk's hands.
+   * Reloads without touching the page-level loading or error state, and never touches the form,
+   * so a push can't clear what the clerk is typing.
    */
   const refresh = useCallback(async () => {
     try {
@@ -148,13 +97,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   }, [load]);
 
   /**
-   * The header bell, plus the live trigger for the refresh above.
-   *
-   * Every type this account can receive is acted on, which is why there is no
-   * type check here as there is on the Blood Bank Dashboard: a hospital is only
-   * ever sent REQUEST_STATUS_CHANGE, and that always makes both the tracking list
-   * and — when the change was a fulfilment — the citywide availability panel
-   * stale at once. Reloading both is the honest response to either.
+   * The header bell plus the live refresh; a hospital only receives REQUEST_STATUS_CHANGE,
+   * which can stale both panels, so every arrival reloads.
    */
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: () => refresh(),
@@ -180,10 +124,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   }, [load]);
 
   /**
-   * The four stat cards, derived from the request list already in hand rather
-   * than fetched separately — the list is this hospital's whole history and is
-   * small enough to count over, so a dedicated summary endpoint would be a round
-   * trip that told us nothing new.
+   * The four stat cards, counted from the request list already loaded.
    */
   const stats = useMemo(() => {
     const now = new Date();
@@ -197,9 +138,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
       if (created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth()) {
         thisMonth += 1;
       }
-      // "Pending" is anything still waiting on units, which since Business Rule 20
-      // includes a request that is part way there: some blood has arrived, but the
-      // ward is still short and still waiting.
+      // "Pending" is anything still waiting on units, including a request part way there (Business Rule 20).
       if (r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED") pending += 1;
       // Units actually received, not units requested — a partially filled request
       // contributes exactly what arrived, which is the figure a ward can plan with.
@@ -578,9 +517,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
             {/* ---- stat cards ---- */}
             <div className="hp-stats">
               <Stat tone="navy" icon={<FileIcon />} figure={stats.thisMonth} label="Total Requests" note="This month" />
-              {/* "Awaiting units" rather than "Pending Approval": since Business
-                  Rule 20 nothing is approved, and a request part way through is
-                  still one this hospital is waiting on. */}
+              {/* "Awaiting units": since Business Rule 20 nothing is approved, and a partial request is still awaited. */}
               <Stat tone="amber" icon={<HourglassIcon />} figure={stats.pending} label="Awaiting Units" note="Not yet complete" />
               <Stat tone="green" icon={<CheckIcon />} figure={stats.unitsReceived} label="Units Received" note="Across all requests" />
               <Stat tone="red" icon={<AlertIcon />} figure={stats.openEmergencies} label="Emergency Cases" note="Highest priority" />
@@ -684,12 +621,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
                             {r.lastContributedByBloodBankName ?? "Awaiting a blood bank"} · {formatRelativeTime(r.createdAt)}
                             {r.patientReference ? ` · ${r.patientReference}` : ""}
                           </div>
-                          {/* Where the blood actually came from, and how much is still
-                              coming (Business Rule 20). A request may be filled by
-                              several banks, so the ward is told each one by name — "2
-                              of 4 units received, from Makeni Regional Blood Bank" —
-                              rather than a single fulfilled/not-fulfilled state it
-                              cannot plan around. */}
+                          {/* Where the blood came from and how much is still coming (Business Rule 20),
+                              naming each contributing bank. */}
                           {r.unitsContributed > 0 && (
                             <div className="hp-item-progress">
                               {r.unitsContributed} of {r.unitsRequested} units received

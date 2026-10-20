@@ -40,32 +40,8 @@ import com.bloodlink.repository.UserRepository;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Business Rule 16 end to end: every role managing its own account through the
- * real endpoints, filter chain, JSON mapper, BCrypt encoder and database.
- *
- * <h2>What only this class can prove</h2>
- * <ul>
- *   <li><b>A password change really changes the password.</b> Not "the service set
- *       a hash" — the old password stops signing in and the new one starts, over
- *       POST /api/auth/login, exactly as the account holder will find out.</li>
- *   <li><b>A refused change really changes nothing.</b> After a wrong current
- *       password, the old password still signs in.</li>
- *   <li><b>{@code "phone"} in a request body is refused, not dropped.</b> The payload
- *       records catch unrecognised properties so they can be refused; whether Spring
- *       Boot's own JSON mapper actually routes them there, rather than quietly
- *       discarding them, is something only a real request can show.</li>
- *   <li><b>The 401 for a wrong current password names the field.</b> The frontend
- *       relies on that field to tell it apart from an expired session.</li>
- * </ul>
- *
- * Request bodies are written as raw JSON on purpose: the point of several tests is
- * a property the payload types do not declare, which serialising one of them could
- * never produce.
- *
- * Shares the bloodlink_test fixture database with the other integration tests and
- * the same guarantee — {@code @Transactional}, so every row written here is rolled
- * back — and is run the same way:
- * <pre>{@code .\mvnw.cmd test -Dtest=AccountSettingsIT}</pre>
+ * Business Rule 16 end to end: password changes really take effect at login, refused ones change nothing,
+ * "phone" is refused not dropped, and the 401 names its field. Rolled back; run -Dtest=AccountSettingsIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

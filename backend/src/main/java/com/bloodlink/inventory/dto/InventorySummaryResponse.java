@@ -4,9 +4,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Backs the stat cards and charts on the Blood Inventory detail page. Every unit
- * figure counts usable stock only (Business Rule 24); expired units are reported
- * on their own, in {@code expiredUnits}.
+ * Backs the Blood Inventory detail page's stat cards and charts; every unit figure is usable stock only
+ * (Business Rule 24), with expired units in expiredUnits.
  */
 public record InventorySummaryResponse(
     UUID bloodBankId,

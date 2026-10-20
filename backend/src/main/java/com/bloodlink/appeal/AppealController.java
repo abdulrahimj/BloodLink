@@ -21,18 +21,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 
 /**
- * "Send donation appeal" — the blood bank / lab staff use case from CLAUDE.md.
- *
- * SecurityConfig already restricts /api/appeals/** to BLOOD_BANK_STAFF and ADMIN,
- * and AppealService narrows an ADMIN to a named bank and bank staff to their own.
- * There is no GET here and no route by which a hospital or a donor could send one:
- * under Business Rule 1 an appeal has exactly one kind of author.
- *
- * There is no route that lists, amends or withdraws an appeal, because an appeal is
- * an event rather than a record: once sent it lives as Notification rows in each
- * recipient's bell, and the schema deliberately has no appeals table. The one GET
- * here is not an exception to that — it reads the *donor register*, not past
- * appeals, and answers a question about an appeal that has not happened yet.
+ * "Send donation appeal" for bank staff (and ADMIN for a named bank); no hospital or donor route (Business Rule 1).
+ * No list/amend/withdraw: an appeal is an event stored only as Notification rows; the one GET previews reach.
  */
 @RestController
 @RequestMapping("/api/appeals")
@@ -45,24 +35,11 @@ public class AppealController {
     }
 
     /**
-     * How far an appeal for one group would reach, without sending it — the figures
-     * behind the "Send Appeal" confirmation on the Blood Inventory screen.
-     *
-     * {@code bloodType} is the clinical label ("A+", "O-"), which the client must
-     * URL-encode: a literal "+" in a query string decodes as a space, so an
-     * un-encoded "A+" would arrive as "A " and be rejected as an unknown group.
-     * encodeURIComponent turns it into "A%2B", which decodes back correctly.
+     * How far an appeal for one group would reach, without sending it: the figures behind the Send Appeal confirmation.
+     * bloodType is the clinical label, which the client must URL-encode ("A+" becomes "A%2B").
      */
-    // Deliberately no @Validated on this class. Spring MVC has validated
-    // constraint-annotated @RequestParam/@PathVariable values natively since
-    // 6.1 — no class-level marker needed, since spring-boot-starter-validation
-    // already supplies the Validator bean that mechanism looks for — and it is
-    // what GlobalExceptionHandler.handleParameterValidation expects. Adding
-    // @Validated here would not add coverage: it would redirect the very same
-    // constraints through Spring's older, general-purpose AOP-based method
-    // validation instead, which throws a plain jakarta.validation.
-    // ConstraintViolationException that reached this project's catch-all
-    // handler as an opaque 500 until this was caught and fixed here.
+    // Deliberately no @Validated: Spring MVC validates @RequestParam constraints natively, as the handler expects.
+    // @Validated would route them through AOP method validation instead, whose exception surfaced as an opaque 500.
     @GetMapping("/reach")
     public AppealReachResponse reach(
         @RequestParam
@@ -74,11 +51,8 @@ public class AppealController {
     }
 
     /**
-     * Appeals to every eligible donor recorded with the named blood group.
-     *
-     * 201 with a receipt naming the sending bank and how many donors were written
-     * to, so the panel that sent it can confirm what actually happened rather than
-     * assuming the click worked.
+     * Appeals to every eligible donor of the named blood group; 201 with a receipt naming the bank
+     * and how many donors were written to.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

@@ -26,12 +26,8 @@ import com.bloodlink.admin.dto.AdminUserPageResponse;
 import com.bloodlink.web.error.GlobalExceptionHandler;
 
 /**
- * Query-parameter validation on {@code GET /api/admin/users} — defaults, the size
- * cap, and the fixed lists for role, status, sort and direction — in the same
- * standalone-MockMvc style as DonorRosterControllerTest: no Spring context and no
- * database, but the real {@code @RequestParam} constraints and the real error
- * handler. Who may call it at all (ADMIN only) is SecurityConfig's job and is proven
- * end to end in AdminUserSearchIT.
+ * Query-parameter validation on GET /api/admin/users in standalone MockMvc (real constraints and error handler).
+ * Access control is proven in AdminUserSearchIT.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminUserControllerTest {

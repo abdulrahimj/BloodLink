@@ -22,20 +22,11 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 
 /**
- * Issues and verifies the stateless access tokens used across the API.
- *
- * The token is the only thing the server knows about a caller between requests —
- * there is no session — so it carries everything the security layer needs to
- * rebuild an Authentication: the user id (subject), their role, and their name.
- * Role travels inside the signed payload rather than being re-read from the
- * database on every request, which keeps request handling to a single round trip;
- * the trade-off is that a role change only takes effect once the token expires.
+ * Issues and verifies the stateless tokens: subject (user id), role and name, so no session is needed.
+ * A role change takes effect only when the token expires.
  */
 @Service
-// Never lazily created, even if spring.main.lazy-initialization is ever switched on
-// for faster startup. The secret check in the constructor is only a startup check
-// if this bean is built at startup; lazily, it would first run on the first login
-// attempt, long after a deployment had been declared healthy.
+// Never lazily created, so the secret check in the constructor always runs at startup.
 @Lazy(false)
 public class JwtService {
 
@@ -51,11 +42,8 @@ public class JwtService {
     private static final int BANNER_WIDTH = 72;
 
     /**
-     * Printed at WARN when the public placeholder is in use on a local-only profile.
-     * Framed and upper-case on purpose: it has to survive being scrolled past in a
-     * startup log full of Flyway and Hibernate lines, which is exactly what a quiet
-     * one-line warning would not. It prints before the database pool opens, so it
-     * sits near the top of the log rather than buried under the migration output.
+     * Printed at WARN when the placeholder is used on a local profile, framed and upper-case
+     * so it stands out near the top of the startup log.
      */
     private static final String PLACEHOLDER_WARNING = banner(
         "INSECURE JWT SECRET - LOCAL DEVELOPMENT ONLY",
@@ -70,9 +58,7 @@ public class JwtService {
     );
 
     /**
-     * Frames lines of text in asterisks, padding each to the same width so the
-     * right-hand border lines up. Computed rather than hand-typed: a hand-aligned
-     * frame goes ragged the first time anyone edits a word inside it.
+     * Frames lines in asterisks, padding each so the right border lines up.
      */
     private static String banner(String... lines) {
         String border = "*".repeat(BANNER_WIDTH);
@@ -88,25 +74,8 @@ public class JwtService {
     private final long expiryMillis;
 
     /**
-     * Builds the signing key — after deciding whether the secret is safe to build it
-     * from (Business Rule 15, {@link JwtSecretPolicy}).
-     *
-     * The check lives here, in the one place the secret is turned into a key, rather
-     * than in a separate startup hook. That way no path can sign a token with the
-     * placeholder on a real deployment: if this constructor refuses, there is no
-     * JwtService, so there is no application.
-     *
-     * JwtSecretPolicy stops the start, with InsecureJwtSecretException presented by
-     * InsecureJwtSecretFailureAnalyzer, when the secret is:
-     *   1. empty, or shorter than HMAC-SHA256's 256-bit (32-byte) minimum, under any
-     *      profile; or
-     *   2. the public placeholder under a profile that is not local-only.
-     * Keys.hmacShaKeyFor would also refuse a short key, but only with a stack trace;
-     * the policy checks first so the refusal reads as a plain explanation.
-     *
-     * The key is the secret's UTF-8 bytes, used as they are: a Base64 secret is not
-     * decoded first. Changing that would change the key for an unchanged secret and
-     * sign every user out, for no gain (64 Base64 characters are 64 key bytes).
+     * Builds the signing key after JwtSecretPolicy approves the secret (Business Rule 15), so no path can sign
+     * with the placeholder in production. The key is the secret's raw UTF-8 bytes (Base64 is not decoded).
      */
     JwtService(
         @Value("${bloodlink.jwt.secret}") String secret,
@@ -139,9 +108,8 @@ public class JwtService {
     }
 
     /**
-     * Verifies the signature and expiry of an incoming token and returns its claims.
-     * Any tampering, wrong signing key, or expiry surfaces as JwtException, which the
-     * filter treats as "not authenticated" rather than as a server error.
+     * Verifies an incoming token's signature and expiry and returns its claims;
+     * any problem is a JwtException, treated as not authenticated.
      */
     public Claims parseClaims(String token) throws JwtException {
         return Jwts.parser()

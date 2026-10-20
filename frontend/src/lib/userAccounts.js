@@ -1,16 +1,7 @@
-/* ================================================================
-   BloodLink — Admin Console User Accounts: search, filters, sort, paging
+/* BloodLink — Admin Console User Accounts: search, filters, sort and paging as plain functions tested by npm test,
+   shaped like donorRoster.js. Paging arithmetic is in lib/pagination.js. */
 
-   Plain functions, kept out of AdminConsole.jsx so they can be tested without a
-   browser (`npm test` runs userAccounts.test.js). The same shape as donorRoster.js:
-   one state object, one "change something" function that returns to page 0, and
-   builders for the request and the empty-state wording. The generic paging
-   arithmetic (Previous/Next, clamping, "Showing 1-13 of N") is lib/pagination.js.
-   ================================================================ */
-
-/** Page sizes offered. Only ones that fit a 768px-tall laptop screen with no
- *  scrolling inside the table; the server allows up to 100, but bigger sizes
- *  would bring the scrollbar back, so they are not offered here. */
+/** Page sizes that fit a 768px-tall screen without scrolling the table (the server allows up to 100). */
 export const USER_ACCOUNT_PAGE_SIZES = [10, 13];
 
 /** The sort choices, in the order the dropdown shows them. Values are exactly the
@@ -35,9 +26,7 @@ export function initialUserAccountsState() {
 }
 
 /**
- * Applies a change to the search, a filter, the sort, the direction or the page size,
- * and returns to page 0. Everything not named in `changes` is kept — changing the role
- * filter keeps the search text and the sort, and so on.
+ * Applies a change to search, filter, sort, direction or page size and returns to page 0, keeping everything else.
  */
 export function applyUserAccountsChange(state, changes) {
   return { ...state, ...changes, page: 0 };
@@ -78,9 +67,7 @@ export function clearUserAccountFilters(state) {
 }
 
 /**
- * The empty-table message, or null when there are rows. "No users match your search
- * or filters" whenever something is narrowing the list, so an administrator is never
- * told there are no accounts at all when there are just none matching.
+ * The empty-table message or null; says "No users match your search or filters" whenever something narrows the list.
  */
 export function describeUserAccountsEmptyState(totalElements, state) {
   if (totalElements > 0) return null;
@@ -90,11 +77,8 @@ export function describeUserAccountsEmptyState(totalElements, state) {
 }
 
 /**
- * The state to fetch after a new account is created. Normally unchanged — the table
- * reloads the page it is on. If a filter would hide the new account (Donor chosen and
- * an Administrator just created, or Suspended chosen when every new account starts
- * Active), that filter switches to show it, as the console did before paging, so the
- * administrator does not mistake its absence for a failure.
+ * The state to fetch after creating an account: unchanged, unless a filter would hide the new account,
+ * in which case that filter switches to show it.
  */
 export function stateAfterAccountCreated(state, account) {
   const changes = {};

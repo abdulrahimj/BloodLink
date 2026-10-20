@@ -28,9 +28,8 @@ public class AuthController {
     }
 
     /**
-     * Creates a voluntary donor account (User + linked Donor) and returns a token.
-     * 201, because a new resource is created; the body is the same shape as login's
-     * so the frontend can share one success path.
+     * Creates a donor account (User + linked Donor) and returns a token;
+     * 201, with the same body shape as login.
      */
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {

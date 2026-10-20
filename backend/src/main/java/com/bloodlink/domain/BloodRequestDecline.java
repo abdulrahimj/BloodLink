@@ -19,27 +19,14 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One blood bank's decision to decline one hospital request.
- *
- * This is the per-bank response table Business Rule 11 anticipated. Before it,
- * rejection was recorded only in {@link BloodRequest#getStatus()}, a single
- * shared field — so one bank declining closed the request for every bank, even
- * one that had the stock to fulfil it. A decline is now recorded here instead,
- * per (request, bank) pair, and the request's own status is left alone until
- * every blood bank has declined it.
- *
- * There is deliberately no reason field. Nothing in the agreed schema or the
- * existing screens captures or displays one, and inventing a column the Reject
- * dialog never fills in would leave a permanently-empty value that looks like
- * missing data rather than an absent feature.
+ * One bank's decline of one request (Business Rule 11, V9); the request's status changes only once every bank declines.
+ * Deliberately no reason field, since nothing captures or shows one.
  */
 @Entity
 @Table(
     name = "blood_request_declines",
-    // Mirrors the database constraint from V9 rather than replacing it — the
-    // database is the real guard (two operators clicking Reject at the same
-    // instant are two transactions, which no in-JVM check can see across).
-    // Declaring it here keeps Hibernate's schema validation aware of it.
+    // Mirrors V9's database constraint, the real guard against two simultaneous declines;
+    // declared so Hibernate's schema validation knows it.
     uniqueConstraints = @UniqueConstraint(
         name = "uq_decline_request_bank",
         columnNames = {"blood_request_id", "blood_bank_id"}

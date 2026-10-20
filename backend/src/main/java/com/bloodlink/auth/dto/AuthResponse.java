@@ -6,11 +6,8 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
 
 /**
- * Returned by both register and login, so the frontend can treat the two identically:
- * store the token, then route on the role.
- *
- * The user summary is included to spare the SPA an immediate follow-up "who am I?"
- * call just to render the sidebar. It deliberately carries no password hash.
+ * Returned by both register and login, so the frontend stores the token and routes on role the same way.
+ * Includes a user summary to spare a "who am I?" call; never a password hash.
  */
 public record AuthResponse(
     String token,
@@ -26,14 +23,10 @@ public record AuthResponse(
         String email,
         String phone,
         Role role,
-        /** Null for every role except BLOOD_BANK_STAFF, and even then only once an
-         *  administrator has assigned one (see V5__add_staff_blood_bank_link.sql).
-         *  Lets the Blood Bank portal jump straight to the right bank without a
-         *  separate "who am I" call. */
+        /** Null except for BLOOD_BANK_STAFF with an assigned bank;
+         * lets the Blood Bank portal open on the right bank straight away. */
         UUID bloodBankId,
-        /** The same, for HOSPITAL_STAFF (see V7__blood_request_module.sql). Lets the
-         *  Hospital Portal open straight onto that hospital's own request desk
-         *  instead of asking which hospital this is. */
+        /** The same for HOSPITAL_STAFF, so the Hospital Portal opens on that hospital's own requests. */
         UUID hospitalId
     ) {
         static UserSummary from(User user) {

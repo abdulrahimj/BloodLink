@@ -53,48 +53,23 @@ public class AuthService {
     }
 
     /**
-     * Registers a voluntary donor and signs them straight in.
-     *
-     * Writes two rows that must both exist or neither: the User (credentials and role)
-     * and the linked Donor profile (clinical and demographic details). They are a
-     * 1–1 pair, and a User with role DONOR but no Donor row would break every donor
-     * screen, so the whole method is one transaction.
-     *
-     * The role is hard-coded to DONOR rather than taken from the request — this is a
-     * public, unauthenticated endpoint, so honouring a client-supplied role would let
-     * anyone create an administrator. Staff accounts are created by an administrator.
-     *
-     * A token is issued on success so the new donor lands on their dashboard instead
-     * of being bounced to the login screen to re-enter what they just typed.
-     *
-     * Phone and email are both normalised before anything is checked or written, for
-     * the same reason: each is a unique identifier compared by exact string equality,
-     * so the stored spelling decides whether a later match succeeds. Phone goes through
-     * {@link PhoneNumber#normalize} — the same call login makes, so the value written
-     * here is character-for-character the value login will compare against, whichever
-     * of the two accepted formats was typed in. Email is optional for a donor (Business
-     * Rule 18) and goes through {@link EmailAddress#normalizeOptional}: blank becomes
-     * no email at all, anything else is lower-cased and must look like a real address.
+     * Registers a donor and signs them in: User and Donor rows in one transaction, role always DONOR.
+     * Phone via PhoneNumber.normalize (as login does), optional email via EmailAddress.normalizeOptional, before checks.
      */
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         // Also the format gate: an unusable number is a 400 naming the phone field,
         // raised before any row is written, rather than an account nobody can sign into.
         String phone = PhoneNumber.normalize(request.phone());
-        // Optional (Business Rule 18): null when the donor left it blank; otherwise
-        // trimmed, lower-cased and format-checked — a malformed address is a 400 on
-        // the email field, raised here before anything is written.
+        // Optional (Business Rule 18): null when blank, else trimmed, lower-cased and format-checked (400 on email).
         String email = EmailAddress.normalizeOptional(request.email());
 
-        // Checked up front so a duplicate returns an actionable 409 naming the field,
-        // rather than a constraint violation surfacing from the database as a 500.
-        // The unique constraints remain the real guarantee under concurrent signups.
+        // Checked up front so a duplicate is an actionable 409 rather than a 500;
+        // the unique constraints remain the real guarantee under concurrency.
         if (userRepository.existsByPhone(phone)) {
             throw new ConflictException("An account already exists for this phone number.");
         }
-        // Only an address that exists can clash. No email is never a conflict — not
-        // even with another donor who also has none — so the check is skipped rather
-        // than asking the database whether a NULL is "taken".
+        // Only an address that exists can clash; no email is never a conflict, so the check is skipped.
         if (email != null && userRepository.existsByEmail(email)) {
             throw new ConflictException("This email is already registered");
         }
@@ -124,28 +99,8 @@ public class AuthService {
     }
 
     /**
-     * Verifies phone + password and returns a signed token.
-     *
-     * The phone is normalised first, through the very same {@link PhoneNumber#normalize}
-     * call registration made before storing it. That is what lets a donor who signed up
-     * typing {@code 076900005} sign in later typing {@code +232 76 900 005}: both become
-     * {@code +23276900005}, and the lookup that follows is comparing one spelling against
-     * one spelling. Normalising here rather than inside AuthenticatedUserService keeps it
-     * on the path the user's own input takes, and does it once.
-     *
-     * The password comparison is delegated to Spring Security's AuthenticationManager
-     * (DaoAuthenticationProvider + BCrypt) rather than done by hand, so it benefits
-     * from the framework's constant-time comparison and its protection against timing
-     * differences between "no such user" and "wrong password".
-     *
-     * The suspension check happens after that authentication succeeds, and
-     * deliberately not before it: checking status first would mean a caller who
-     * does not even know the password can tell a suspended account from an active
-     * one purely by which error comes back, which is exactly the kind of account
-     * enumeration InvalidCredentialsException's single vague message exists to
-     * prevent. Once the password is proven correct, there is nothing left to
-     * protect by staying vague, so AccountSuspendedException is free to say
-     * plainly what happened.
+     * Verifies phone and password and returns a token; the phone is normalised exactly as registration stored it.
+     * Status is checked only after the password is proven, so a suspended account cannot be detected without it.
      */
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
@@ -178,9 +133,8 @@ public class AuthService {
     }
 
     /**
-     * Maps the wire label ("A+", "O-") to the BloodType enum.
-     * Absent or blank means the donor chose "I don't know yet" — stored as null and
-     * established later from a tested Donation (Business Rule 4).
+     * Maps the wire label ("A+") to BloodType; blank means "I don't know yet", stored as null
+     * until a tested donation establishes it (Business Rule 4).
      */
     private BloodType parseBloodType(String label) {
         if (label == null || label.isBlank()) {

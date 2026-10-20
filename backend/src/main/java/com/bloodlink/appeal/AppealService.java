@@ -19,26 +19,8 @@ import com.bloodlink.stock.BatchStockService;
 import com.bloodlink.web.error.ConflictException;
 
 /**
- * Donation appeals: a blood bank telling donors of one group that it needs them.
- *
- * This is the blood bank's counterpart to the hospital's blood request. A hospital
- * short of blood asks the banks (RequestService); a bank short of blood asks the
- * donors, here. Business Rule 1 is that those are the only two directions — an
- * appeal never originates from a hospital, and a donor's screen must never show one
- * that appears to.
- *
- * The class is thin on purpose. Which bank is acting is
- * {@link ActingBankResolver}'s answer, who hears about it is
- * {@link NotificationService}'s — including the Business Rule 2 gate that keeps an
- * appeal away from donors still inside their recovery window — and whether the bank
- * may ask at all right now is {@link AppealCooldownPolicy}'s (Business Rule 12).
- * What is left here is the steps between them: validating the blood group,
- * refusing a send the cooldown forbids, and reporting how far the appeal reached.
- *
- * Those last two gates answer different questions and neither replaces the other.
- * The cooldown decides whether this bank may send an appeal for this group at this
- * moment; Business Rule 2 decides which donors it is safe to put that appeal in
- * front of. Adding the first changed nothing about the second.
+ * Donation appeals: a blood bank asking donors of one group to come in (Business Rule 1: never a hospital).
+ * Thin on purpose: ActingBankResolver picks the bank, AppealCooldownPolicy allows it, NotificationService picks donors.
  */
 @Service
 public class AppealService {
@@ -61,13 +43,8 @@ public class AppealService {
     }
 
     /**
-     * How far an appeal for one blood group would reach, sending nothing.
-     *
-     * Deliberately takes no blood bank. Donors are not attached to a bank in this
-     * schema, so the eligible audience for a group is the same figure whichever bank
-     * asks; requiring one would be friction that changes no answer. Who may ask at
-     * all is still settled — SecurityConfig limits /api/appeals/** to bank staff and
-     * administrators, and this returns counts, never a donor's identity.
+     * How far an appeal for one group would reach, sending nothing; no bank is needed, as donors aren't tied to banks.
+     * Returns counts only, never a donor's identity.
      */
     @Transactional(readOnly = true)
     public AppealReachResponse previewReach(String bloodTypeLabel) {
@@ -79,20 +56,8 @@ public class AppealService {
     }
 
     /**
-     * Sends one appeal and reports how many donors it was written to.
-     *
-     * The whole thing is one transaction so the appeal is all-or-nothing: either
-     * every matching donor has a notification waiting or none does. A half-sent
-     * appeal would be worse than a failed one, because the staff member would be
-     * told it went out and have no way of knowing which donors were missed. The
-     * cooldown row is written inside that same transaction, so a failed send never
-     * leaves a cooldown blocking the retry it did not earn.
-     *
-     * Business Rule 12's cooldown is enforced here as well as on the button,
-     * because a disabled button is a courtesy and not a control — "role-gated UI
-     * must also be role-gated server-side" (CLAUDE.md) applies just as much to a
-     * rate limit as to a role. Without this check the whole feature would be one
-     * curl away from doing nothing at all.
+     * Sends one appeal in one transaction: every matching donor is notified or none is, with the cooldown row.
+     * Business Rule 12's cooldown is enforced here too, because a disabled button is a courtesy, not a control.
      */
     @Transactional
     public DonationAppealResponse sendAppeal(DonationAppealPayload payload, AuthenticatedUser principal) {
@@ -100,14 +65,11 @@ public class AppealService {
         // Propagates IllegalArgumentException for an unrecognised label -> 400.
         BloodType bloodType = BloodType.fromLabel(payload.bloodType().trim());
 
-        // One instant for the whole operation: the same value decides whether the
-        // existing cooldown has expired and stamps the new one, so a send can never
-        // be judged against one clock reading and recorded against a later one.
+        // One instant for the whole operation, so the cooldown check and the new stamp share one clock reading.
         Instant now = Instant.now();
 
-        // Usable units only (Business Rule 24): expired batches are not stock, so a
-        // bank whose shelf holds 35 units of which 10 have expired is short, and may
-        // appeal. A group never stocked is 0 units, the worst possible shortage.
+        // Usable units only (Business Rule 24): expired batches are not stock, so 35 units with 10 expired is short;
+        // a group never stocked is 0 units.
         int unitsAvailable = batchStockService.usableUnits(bank.getId(), bloodType);
 
         AppealAvailability availability =
@@ -116,17 +78,12 @@ public class AppealService {
             throw refusedAppeal(availability, bloodType, unitsAvailable);
         }
 
-        // Reach carries two figures: who was written to, and who was held back by
-        // Business Rule 2's recovery window. Both are passed on rather than only the
-        // first, so a small reach can be read correctly by whoever sent the appeal.
-        // That gate is untouched by the cooldown above: one decides whether the bank
-        // may ask at all, the other decides which donors it is safe to ask.
+        // Reach carries who was notified and who was held back by Business Rule 2's recovery window,
+        // so a small reach can be read correctly; that gate is separate from the cooldown.
         NotificationService.AppealReach reach =
             notificationService.sendDonationAppeal(bank, bloodType, blankToNull(payload.note()));
 
-        // Recorded only after the send has succeeded, and with units as they were at
-        // send time — that figure fixes this cooldown's length and the level stock
-        // must reach to clear it.
+        // Recorded only after the send succeeded, with units at send time, which fix the cooldown's terms.
         cooldownPolicy.recordSent(bank, bloodType, unitsAvailable, now);
 
         return new DonationAppealResponse(
@@ -135,9 +92,8 @@ public class AppealService {
         );
     }
 
-    /** 409 with the actual figures behind the refusal, so the operator can see why
-     *  their click was turned down rather than only that it was — the same shape
-     *  RequestService uses for its own conflicts. */
+    /** 409 with the figures behind the refusal, so the operator sees why it was refused,
+     * the same shape RequestService uses. */
     private ConflictException refusedAppeal(
         AppealAvailability availability, BloodType bloodType, int unitsAvailable
     ) {
@@ -151,9 +107,7 @@ public class AppealService {
                     + "Please wait before sending another, or send again once stock has recovered.")
                     .formatted(bloodType.getLabel())
             );
-            // Not a refusal at all; only ever reached if a new state is added above
-            // without being handled here, which the build catches rather than
-            // letting a refused send fall through as a success.
+            // Not a refusal; reached only if a new state is added above without being handled here.
             case AVAILABLE -> throw new IllegalStateException("An available appeal was refused.");
         };
     }

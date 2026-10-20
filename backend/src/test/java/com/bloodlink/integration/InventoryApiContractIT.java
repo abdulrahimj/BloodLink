@@ -44,14 +44,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Pins the JSON the Hospital Dashboard and the Blood Bank screens already read from
- * the inventory endpoints, so batch-level stock (Business Rule 24) cannot quietly
- * break them: the same field names, with the same JSON types, as before the cutover.
- * New fields may be added after them; none of the old ones may be renamed, retyped
- * or dropped. Read here as a HOSPITAL_STAFF caller, since that is the screen that
- * gets no frontend change in this stage.
- *
- * Shares bloodlink_test and its guarantee: {@code @Transactional}, all rolled back.
+ * Pins the inventory JSON the Hospital Dashboard and Blood Bank screens read (names and types),
+ * so batch-level stock cannot break them. Read as HOSPITAL_STAFF; rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

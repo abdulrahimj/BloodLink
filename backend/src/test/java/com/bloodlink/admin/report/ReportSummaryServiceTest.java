@@ -39,11 +39,8 @@ import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
 
 /**
- * The arithmetic ReportSummaryService does on top of the aggregate queries (Business
- * Rule 23): zero-filling, Business Rule 3's thresholds at their exact edges, the
- * "No data" fulfilment rate, the eligibility cutoff it passes to the database, and
- * that no response shape has anywhere to put a donor's personal details. The queries
- * themselves run for real in ReportsIT.
+ * ReportSummaryService's own arithmetic (Business Rule 23): zero-filling, threshold edges, "No data" rate,
+ * eligibility cutoff and no personal-data fields. The queries run for real in ReportsIT.
  */
 @ExtendWith(MockitoExtension.class)
 class ReportSummaryServiceTest {
@@ -79,9 +76,7 @@ class ReportSummaryServiceTest {
     }
 
     /**
-     * Each bank's eight groups are judged one by one with StockStatus, the same rule
-     * its own Inventory page applies, on the usable units the database summed per
-     * (bank, group). The thresholds are StockStatus's own, not written again here.
+     * Each bank's groups are judged with StockStatus's own thresholds on the usable units summed per (bank, group).
      */
     @Test
     void eachBanksGroupsAreJudgedWithStockStatusAndMissingGroupsAreCritical() {
@@ -104,9 +99,8 @@ class ReportSummaryServiceTest {
     }
 
     /**
-     * Business Rules 23 and 24: expired units are reported on their own and are NOT
-     * part of the total or of "expiring soon". Expiring soon is usable units within
-     * StockPolicy's 28-day window, so the expired 5 can never be inside the 19.
+     * Expired units are reported separately, never in the total or "expiring soon"
+     * (usable units within 28 days) (Business Rules 23, 24).
      */
     @Test
     void expiredUnitsAreReportedSeparatelyAndExpiringSoonIsUsableStockWithinTwentyEightDays() {

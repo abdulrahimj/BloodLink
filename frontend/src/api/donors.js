@@ -1,10 +1,5 @@
-/* ================================================================
-   BloodLink — donor calls
-
-   Wraps the donor's own-profile endpoints. Both are scoped server-side to
-   whichever account owns the JWT (see AuthenticatedUser on the backend),
-   so there is no donor id to pass here — only "me".
-   ================================================================ */
+/* BloodLink — donor calls: the donor's own-profile endpoints, scoped server-side to the JWT's account,
+   so there is no donor id to pass. */
 
 import { apiRequest } from './client.js';
 
@@ -19,18 +14,8 @@ export function getMyDonationHistory() {
 }
 
 /**
- * GET /api/donors/roster — one page of the signed-in blood bank staff
- * member's own donor roster: donors with at least one donation at that bank
- * (Business Rule 21). Restricted server-side to BLOOD_BANK_STAFF and ADMIN.
- *
- * `params` is whatever frontend/src/lib/donorRoster.js's
- * buildDonorRosterParams produced — page, size, sort, and only the filters
- * actually in use. `bloodBankId` is additional and meaningful only for an
- * ADMIN, who belongs to no bank and must name one; bank staff act as their
- * own bank and the server ignores it for them.
- *
- * Resolves to { content, page, size, totalElements, totalPages }, the same
- * page envelope shape the Audit Log uses.
+ * GET /api/donors/roster: one page of this bank's donor roster (Business Rule 21), params from buildDonorRosterParams;
+ * bloodBankId only matters for an ADMIN. Resolves to the usual page envelope.
  */
 export function getDonorRoster(params, bloodBankId = null) {
   const query = new URLSearchParams(
@@ -41,10 +26,8 @@ export function getDonorRoster(params, bloodBankId = null) {
 }
 
 /**
- * GET /api/donors/roster/{donorId}/donations — that donor's donation history
- * at this bank only, newest first, most recent 50. 404 (ApiError.status) if
- * this donor has no donation at this bank — including when the donor id does
- * not exist at all; the two cases answer identically on purpose.
+ * GET /api/donors/roster/{donorId}/donations: that donor's history at this bank, newest first, 50 max;
+ * 404 for no donation here or an unknown id alike.
  */
 export function getDonorHistoryAtBank(donorId, bloodBankId = null) {
   const query = bloodBankId ? `?bloodBankId=${encodeURIComponent(bloodBankId)}` : '';

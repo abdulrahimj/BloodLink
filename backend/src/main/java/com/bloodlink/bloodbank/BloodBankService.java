@@ -17,10 +17,8 @@ import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Blood bank reference data, and the stat-card figures behind the Dashboard home
- * screen — this bank's own inventory and donation totals, plus the count of
- * requests it could act on (see the repository methods this pulls from for what
- * "this bank's" means in each case).
+ * Blood bank reference data and the Dashboard stat cards: this bank's inventory and donation totals,
+ * plus the count of requests it could act on.
  */
 @Service
 public class BloodBankService {
@@ -66,10 +64,8 @@ public class BloodBankService {
             bloodBankId, thisMonth.atDay(1), thisMonth.atEndOfMonth()
         );
         long registeredDonors = donationRepository.countDistinctDonorsByBloodBankId(bloodBankId);
-        // Counted over the same scope the requests panel lists, so "2 Open Requests"
-        // always matches the rows the operator can see and act on. Since Business
-        // Rule 20 that includes partially fulfilled ones: units are still needed, and
-        // this bank can still supply them.
+        // Counted over the same scope the requests panel lists, so the card matches the rows,
+        // including partially fulfilled requests (Business Rule 20).
         long openRequests = bloodRequestRepository.countOpenForBank(bloodBankId);
 
         return new DashboardResponse(

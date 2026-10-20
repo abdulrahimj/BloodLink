@@ -11,12 +11,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import com.bloodlink.web.error.InvalidFieldException;
 
 /**
- * The shape a donor's email must have — Business Rule 18.
- *
- * Grouped as blank (means "no email"), accepted, and refused. Each refused case is
- * a typo someone actually makes at a registration desk, not a curiosity of the email
- * standard: the point is to catch "name@gmail" before it is stored, not to be a
- * complete parser.
+ * A donor's email format (Business Rule 18), grouped as blank (no email), accepted and refused;
+ * each refused case is a real registration-desk typo.
  */
 class EmailAddressTest {
 

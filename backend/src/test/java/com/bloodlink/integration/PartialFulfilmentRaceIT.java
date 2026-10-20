@@ -62,32 +62,8 @@ import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
 
 /**
- * The race at the centre of Business Rule 20: two blood banks contributing to the
- * same request at the same instant must never be able to over-fulfil it.
- *
- * <h2>Why this test has its own database</h2>
- * Every other integration test in this project is {@code @Transactional} and rolls
- * back — which is exactly what makes re-running them safe, and is the guarantee
- * CLAUDE.md's convention protects. This one cannot be: two transactions racing for
- * a row lock have to be two *real* transactions, committing against rows the other
- * one can see, and a test that never commits can produce neither. Rather than break
- * that guarantee on the shared {@code bloodlink_test} fixture, this class follows
- * the convention's other branch — "create a throwaway database for the run" — and
- * does it automatically: the database below is created before the Spring context
- * starts, built from scratch by Flyway, and dropped when the class finishes. It
- * cannot damage anything, and nothing is left behind to clean up.
- *
- * <h2>What is proven</h2>
- * Both threads call the real {@code RequestService.act}, each in its own
- * transaction, released together by a barrier so they collide on purpose. The
- * pessimistic write lock on the request row (BloodRequestRepository.findByIdForUpdate)
- * is the only thing standing between them and a hospital being sent more blood than
- * it asked for, out of two banks' shelves.
- *
- * Since batch-level stock the batch locks are proven here too, including a write-off
- * (Stage 3) racing a contribution for the same batch.
- *
- * <pre>{@code .\mvnw.cmd test -Dtest=PartialFulfilmentRaceIT}</pre>
+ * Business Rule 20's race: two banks contributing at the same instant must never over-fulfil a request.
+ * Needs real commits, so it creates and drops its own throwaway database. Run -Dtest=PartialFulfilmentRaceIT.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -116,9 +92,7 @@ class PartialFulfilmentRaceIT {
     // ---------- the throwaway database ----------
 
     /**
-     * Creates the database and points this context's datasource at it, before the
-     * context — and therefore Flyway — starts. Dropped first in case an earlier
-     * crashed run left one behind, so re-running is always safe.
+     * Creates the throwaway database (dropping any leftover first) and points the datasource at it before Flyway runs.
      */
     @DynamicPropertySource
     static void useAThrowawayDatabase(DynamicPropertyRegistry registry) throws Exception {
@@ -134,9 +108,7 @@ class PartialFulfilmentRaceIT {
         runOnServer("drop database if exists " + DATABASE + " with (force)");
     }
 
-    /** Runs one statement against the server's own {@code postgres} database, using
-     *  the credentials the test profile already declares — so there is no second
-     *  copy of them here to drift. */
+    /** Runs one statement against the server's postgres database with the test profile's own credentials. */
     private static void runOnServer(String sql) throws Exception {
         Properties properties = testProperties();
         try (Connection connection = DriverManager.getConnection(
@@ -166,12 +138,7 @@ class PartialFulfilmentRaceIT {
     // ---------- the race ----------
 
     /**
-     * Two banks, each holding enough to cover the whole request, both contributing
-     * the full amount at the same moment.
-     *
-     * Exactly one contribution can be accepted. Without the row lock both would read
-     * "4 needed", both would deduct 4 units of real blood, and the hospital would be
-     * sent 8 units for a request for 4 — the failure this rule exists to prevent.
+     * Two banks each contributing the full amount at once: exactly one is accepted, never 8 units for a request for 4.
      */
     @Test
     void twoBanksContributingTheWholeAmountAtOnceCannotBothSucceed() throws Exception {
@@ -181,9 +148,7 @@ class PartialFulfilmentRaceIT {
 
         assertThat(outcomes).filteredOn(Outcome::succeeded).hasSize(1);
         assertThat(outcomes).filteredOn(outcome -> !outcome.succeeded()).singleElement()
-            // The loser is told why, in words an operator can act on. Which of the
-            // two guards catches it depends on how far the winner had got when the
-            // lock was released — both are the same refusal, and both are correct.
+            // The loser is told why; which guard catches it depends on timing, and both are correct.
             .satisfies(outcome -> assertThat(outcome.failure())
                 .containsAnyOf("cannot take more units", "covered in full"));
 
@@ -193,12 +158,7 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * The same collision, but where both banks genuinely have something to give: a
-     * request for 6 units, each bank offering 4.
-     *
-     * Both contributions are accepted — this is cooperative fulfilment working — but
-     * the second is capped at the 2 units still outstanding rather than taking the 4
-     * it offered. The total contributed is exactly 6, never 8.
+     * Both banks can help (6 needed, 4 each): both accepted, the second capped at the 2 left, so 6 total, never 8.
      */
     @Test
     void whenBothBanksCanHelpTheSecondContributionIsCappedAtWhatIsLeft() throws Exception {
@@ -237,10 +197,7 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * One bank's contribution, in its own thread and therefore its own transaction —
-     * which is the whole point: the transaction boundary is RequestService's own
-     * {@code @Transactional}, entered through the Spring proxy exactly as a real HTTP
-     * request would enter it.
+     * One bank's contribution in its own thread and transaction, entered through the Spring proxy like a real request.
      */
     private Callable<Outcome> contributionTask(Fixture fixture, User staff, int units, CyclicBarrier barrier) {
         AuthenticatedUser principal = new AuthenticatedUser(
@@ -263,9 +220,7 @@ class PartialFulfilmentRaceIT {
     /** Whether one racing contribution was accepted, and why not if it was not. */
     private record Outcome(boolean succeeded, String failure) {}
 
-    /** The figure the whole rule comes down to: the units a request has received can
-     *  never exceed the units it asked for — and when they meet it exactly, the
-     *  request is closed rather than left looking open. */
+    /** Units received can never exceed units asked for, and a request met exactly is closed. */
     private void assertTotalContributedIsExactly(Fixture fixture, int expected) {
         assertThat(contributionRepository.sumUnitsForRequest(fixture.requestId)).isEqualTo(expected);
         var request = bloodRequestRepository.findById(fixture.requestId).orElseThrow();
@@ -274,14 +229,8 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * How many units each bank actually lost, measured against what it held once the
-     * fixture was set up.
-     *
-     * Deltas rather than absolute figures because this class does not roll back —
-     * that is the whole point of it — so each test starts with whatever the previous
-     * one left on the shelf. Asserting "5 units remain" would pass once and then
-     * break the moment another test ran first, which is exactly the kind of
-     * order-dependent test that is worse than no test.
+     * Units each bank actually lost since the fixture was set up, as deltas
+     * because this class never rolls back.
      */
     private List<Integer> unitsTakenFromEachBank(Fixture fixture) {
         return List.of(
@@ -301,11 +250,8 @@ class PartialFulfilmentRaceIT {
     // ---------- batch-level stock: the FEFO lock under contention (Business Rule 24) ----------
 
     /**
-     * One bank, two different requests, stock split over two batches (3 + 3), both
-     * contributions of 4 at the same instant. The request locks do not serialise them
-     * (they are different requests); the batch locks must. Exactly one succeeds,
-     * taking the earlier batch whole and 1 unit of the later one; the other is
-     * refused, having waited and re-read the 2 units that are genuinely left.
+     * One bank, two requests, stock in two batches (3 + 3), two simultaneous contributions of 4:
+     * the batch locks serialise them, so exactly one succeeds.
      */
     @Test
     void oneBankTwoRequestsStockInTwoBatchesExactlyOneContributionSucceeds() throws Exception {
@@ -332,12 +278,8 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * Eight threads, eight requests of 1 unit each, 5 units over three batches (2, 2, 1).
-     * Exactly 5 succeed and 3 are refused, the shelf ends at exactly 0, and every
-     * thread finishes within the timeout: the batches are always locked in the same
-     * order (earliest expiry, then id), so no two transactions can each hold a batch
-     * the other is waiting for. PostgreSQL would abort one with "deadlock detected"
-     * if they could; none is.
+     * Eight 1-unit contributions over 5 units in three batches: exactly 5 succeed, the shelf ends at 0,
+     * and nothing deadlocks, since batches are always locked in the same order.
      */
     @Test
     void eightThreadsTakingOneUnitEachFromFiveUnitsOverThreeBatchesExactlyFiveSucceedAndNoneDeadlocks() throws Exception {
@@ -370,11 +312,8 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * A contribution arrives while another transaction holds the batch's lock (here,
-     * writing 3 of its 5 units off). It must wait, not fail and not deadlock, and then
-     * see the 2 units that are really left: asked for 4, it is refused. Had it used
-     * the 5 it would have read before the lock was released, 4 units would have left
-     * a shelf holding 2.
+     * A contribution arriving while a write-off holds the batch lock waits, then sees the 2 units really left
+     * and is refused for 4.
      */
     @Test
     void aContributionRacingABatchLockWaitsForItAndSeesTheUnitsActuallyLeft() throws Exception {
@@ -418,15 +357,8 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * A write-off (Stage 3) and a contribution reaching for the same batch at the same
-     * instant: 5 units on the shelf, the contribution wanting 4 and the write-off 3.
-     * Both cannot fit, so exactly one may succeed — whichever takes the batch's lock
-     * first — and the other must wait, re-read the units really left, and be refused.
-     * Without the lock both would read 5 and 7 units would leave a shelf holding 5;
-     * the database's CHECK would then refuse one of them only as a failed commit.
-     *
-     * Five rounds, each on a fresh bank, so the race is run more than once and the
-     * assertions hold whichever side wins it.
+     * A write-off and a contribution racing for one 5-unit batch: exactly one succeeds, the other re-reads and is refused.
+     * Five rounds on fresh banks so it holds whichever side wins.
      */
     @Test
     void aWriteOffAndAContributionRacingForOneBatchNeverTakeMoreUnitsThanItHolds() throws Exception {
@@ -525,9 +457,7 @@ class PartialFulfilmentRaceIT {
     }
 
     /**
-     * A blood bank of its own, created and committed for one test, with one staff
-     * member, and requests raised against it by a hospital. Its own bank, so the
-     * figures each race test checks are exact even though this class never rolls back.
+     * A committed blood bank of its own for one test, with a staff member and hospital requests, so figures are exact.
      */
     private final class Shelf {
         private final BloodBank bank;
@@ -568,12 +498,7 @@ class PartialFulfilmentRaceIT {
     // ---------- fixture ----------
 
     /**
-     * Two stocked banks and one hospital request, all committed before the race
-     * starts — the threads have to be able to see them.
-     *
-     * Everything is written through the real services and repositories, each of
-     * which commits on its own; nothing here is left open in an enclosing
-     * transaction, because an uncommitted row is invisible to the racing threads.
+     * Two stocked banks and one request, all committed before the race so the threads can see them.
      */
     private final class Fixture {
         private final BloodBank bankA;
@@ -632,9 +557,7 @@ class PartialFulfilmentRaceIT {
         return userRepository.save(user);
     }
 
-    /** These accounts never sign in — this test calls the services directly rather
-     *  than over HTTP — so the stored hash only has to be a non-null value of the
-     *  right shape, not a password anybody could use. */
+    /** These accounts never sign in, so the hash only needs the right shape. */
     private static final String UNUSABLE_PASSWORD_HASH =
         "$2a$10$notusedfornotusedfornotusedfornotusedfornotusedfor12";
 

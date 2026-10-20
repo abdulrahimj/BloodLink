@@ -25,15 +25,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Business Rule 8, restated as behaviour: which bank is the caller acting as, for
- * every one of the three services (RequestService, AppealService, DonationService)
- * that ask this class the question rather than deciding it themselves.
- *
- * Each of those services already exercises this indirectly through its own tests —
- * RequestServiceTest in particular builds a real resolver, not a mock, over its
- * own mocked repositories — but a rule shared by three call sites deserves one
- * test file that answers for it directly, rather than three that each happen to
- * cover the same ground by accident.
+ * Business Rule 8 as behaviour: which bank the caller acts as, for the services that ask this class
+ * (RequestService, AppealService, DonationService), tested directly in one place.
  */
 @ExtendWith(MockitoExtension.class)
 class ActingBankResolverTest {

@@ -22,14 +22,8 @@ import com.bloodlink.repository.DonationRepository.MonthlyDonationCount;
 import com.bloodlink.repository.UserRepository;
 
 /**
- * The two aggregate reports behind the Admin Console's charts: donation volume
- * over time, and how blood requests have been resolved.
- *
- * Both are read-only, citywide, and answer a question no single dashboard
- * elsewhere in the system asks — the Blood Bank Dashboard cares about one bank's
- * donations, the Hospital Portal about one hospital's requests; only an
- * administrator needs the total across every facility, which is what makes this
- * its own service rather than a method bolted onto BloodBankService.
+ * The two citywide aggregates behind the Admin Console's charts: donation volume over time and request outcomes.
+ * Its own service because only an administrator needs totals across every facility.
  */
 @Service
 public class AdminReportService {
@@ -52,15 +46,8 @@ public class AdminReportService {
     }
 
     /**
-     * Donation counts for the six most recent calendar months, current month
-     * included, oldest first.
-     *
-     * Every month in the window appears exactly once even if no donation was
-     * recorded in it — the same "always present, zero when there is nothing"
-     * rule InventoryService applies to a blood group no bank has ever stocked.
-     * Without it, a quiet month would not shrink the bar to zero; it would
-     * delete the month from the chart entirely, which reads as missing data
-     * rather than as the true, uneventful answer.
+     * Donation counts for the six most recent calendar months, oldest first, current month included.
+     * Every month appears, zero when empty, so a quiet month shows as zero rather than vanishing from the chart.
      */
     @Transactional(readOnly = true)
     public List<MonthlyDonationTotal> donationTrends() {
@@ -85,13 +72,8 @@ public class AdminReportService {
     }
 
     /**
-     * How every blood request raised, citywide, across every hospital and
-     * blood bank, has been resolved — or has not yet.
-     *
-     * Zero-filled the same way: a status nobody has reached yet (REJECTED, on a
-     * deployment where nothing has ever been turned down) must still appear as
-     * zero rather than be absent, or the donut and its legend would have fewer
-     * than four slices and the percentages would not visibly account for 100%.
+     * How every request citywide has been resolved, with every status zero-filled
+     * so the donut always has all four slices and accounts for 100%.
      */
     @Transactional(readOnly = true)
     public RequestOutcomeResponse requestOutcomes() {
@@ -102,9 +84,7 @@ public class AdminReportService {
             ));
 
         long pending = counts.getOrDefault(RequestStatus.PENDING, 0L);
-        // The slice APPROVED used to occupy. A request "part way there" is the
-        // honest middle state now that several banks can fill one request
-        // (Business Rule 20); APPROVED, a claim with no units behind it, is gone.
+        // The slice APPROVED used to occupy: "part way there" now several banks can fill a request (Business Rule 20).
         long partiallyFulfilled = counts.getOrDefault(RequestStatus.PARTIALLY_FULFILLED, 0L);
         long fulfilled = counts.getOrDefault(RequestStatus.FULFILLED, 0L);
         long rejected = counts.getOrDefault(RequestStatus.REJECTED, 0L);
@@ -114,11 +94,8 @@ public class AdminReportService {
     }
 
     /**
-     * How many accounts exist, in total and per role, counted in one grouped query.
-     *
-     * Zero-filled like the two reports above: a role with no accounts is reported as
-     * zero rather than left out, so the console's cards and role buttons always have a
-     * number to show.
+     * Account counts in total and per role from one grouped query, zero-filled
+     * so the console's cards and role buttons always have a number.
      */
     @Transactional(readOnly = true)
     public UserCountsResponse userCounts() {

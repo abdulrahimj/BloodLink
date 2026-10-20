@@ -32,16 +32,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.GlobalExceptionHandler;
 
 /**
- * Query-parameter validation on {@code GET /api/donors/roster} (Business Rule
- * 21), the same standalone-MockMvc style as {@code AuditLogControllerTest} —
- * fast, no Spring context, no database, while still exercising the real
- * {@code @RequestParam} constraint annotations (Spring MVC's native method
- * validation is active in a standalone builder by default).
- *
- * Search behaviour (how a typed phone or name becomes a repository filter) and
- * the donationsHere/eligibility mapping are covered in DonorRosterServiceTest;
- * this class only has to prove the controller refuses what it should and
- * passes everything else through unchanged.
+ * Query-parameter validation on GET /api/donors/roster (Business Rule 21) in standalone MockMvc.
+ * Search and mapping behaviour are tested in DonorRosterServiceTest.
  */
 @ExtendWith(MockitoExtension.class)
 class DonorRosterControllerTest {
@@ -52,29 +44,21 @@ class DonorRosterControllerTest {
 
     @BeforeEach
     void setUp() {
-        // A standalone builder registers none of Spring Security's own argument
-        // resolvers by default (those come from the full web security
-        // auto-configuration a real request goes through) — without this,
-        // @AuthenticationPrincipal would not resolve at all.
+        // Standalone MockMvc has no Spring Security resolvers, so @AuthenticationPrincipal needs this to resolve.
         mockMvc = MockMvcBuilders.standaloneSetup(new DonorRosterController(donorRosterService))
             .setControllerAdvice(new GlobalExceptionHandler())
             .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
             .build();
 
-        // @AuthenticationPrincipal resolves from the security context in a real
-        // request; standalone MockMvc has no filter chain to populate it, so a
-        // principal is placed here directly — the controller's own role gate is
-        // SecurityConfig's job (proved end to end in the integration test), not
-        // this class's.
+        // No filter chain in standalone MockMvc, so the principal is placed in the context directly;
+        // role gating is proven in the integration test.
         AuthenticatedUser principal = new AuthenticatedUser(
             UUID.randomUUID(), "+23276900001", "hash", Role.BLOOD_BANK_STAFF);
         SecurityContextHolder.setContext(new SecurityContextImpl(
             new UsernamePasswordAuthenticationToken(principal, null, List.of(new SimpleGrantedAuthority("ROLE_BLOOD_BANK_STAFF")))));
     }
 
-    /** SecurityContextHolder is a thread-local shared across this JVM's test
-     *  run; left set, it would leak into whichever test happens to share the
-     *  thread next. */
+    /** SecurityContextHolder is thread-local; clear it so it doesn't leak into the next test. */
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();

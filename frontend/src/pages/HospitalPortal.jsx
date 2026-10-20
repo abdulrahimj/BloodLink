@@ -2,27 +2,8 @@ import React, { useEffect, useState } from "react";
 import HospitalDashboard from "./HospitalDashboard.jsx";
 import { getHospitals } from "../api/hospitals.js";
 
-/* ================================================================
-   BloodLink — Hospital portal shell
-
-   Resolves which hospital this session speaks for, then hands off to the
-   wired request desk. The exact counterpart of BloodBankPortal, and
-   deliberately the same shape — the two roles have the same problem
-   (which facility am I?) and solving it two different ways would make
-   both harder to follow.
-
-   Hospital resolution:
-     • HOSPITAL_STAFF with an assigned hospital (user.hospitalId) — straight
-       in. The normal case, and what the mockup assumes: one fixed hospital
-       identity in the header.
-     • ADMIN, or staff an administrator has not yet assigned to a hospital
-       (there is still no account-management UI to do that) — a small picker
-       first, so those accounts can reach the screen at all.
-
-   The picker is a convenience for looking around, not a grant: submitting a
-   request is refused server-side for anyone whose own User row has no
-   hospital, whatever they pick here (see RequestService.createRequest).
-   ================================================================ */
+/* BloodLink — Hospital portal shell: resolves the hospital (staff go straight in, ADMIN or unassigned staff pick),
+   mirroring BloodBankPortal. The picker grants nothing: requests still need the caller's own hospital. */
 
 export default function HospitalPortal({ user, onSignOut, onUserUpdated }) {
   const [hospital, setHospital] = useState(
@@ -33,10 +14,7 @@ export default function HospitalPortal({ user, onSignOut, onUserUpdated }) {
   const [pickerError, setPickerError] = useState(null);
 
   /**
-   * Two jobs in one effect: fetch the picker's options when the hospital is
-   * unresolved, and fill in the name when it is. An assigned staff member knows
-   * their hospital's id from their token but not its name, and the header has to
-   * show a name — this is the only place that can supply one.
+   * Fetches the picker's options when no hospital is resolved, or the hospital's name when one is.
    */
   useEffect(() => {
     let cancelled = false;
@@ -75,10 +53,7 @@ export default function HospitalPortal({ user, onSignOut, onUserUpdated }) {
 }
 
 /**
- * Interstitial shown only for ADMIN or an unassigned staff account. Deliberately
- * plain rather than styled to match the portal screen — it exists so those
- * accounts can reach the (typically single-hospital) portal at all, not as a
- * polished feature in its own right. Mirrors BankPicker in BloodBankPortal.jsx.
+ * Plain interstitial for ADMIN or unassigned staff to choose a hospital; mirrors BankPicker.
  */
 function HospitalPicker({ choices, error, onChoose, onSignOut }) {
   return (

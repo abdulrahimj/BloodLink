@@ -64,24 +64,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The cutover to batch-level stock (Business Rule 24), end to end through the real
- * HTTP endpoints and a real database: usable stock everywhere, expired batches shown
- * but never counted or issued, first-expiry-first-out issuing with allocations, the
- * batch views and who may see them, and the entered-expiry rules.
- *
- * <h2>Time</h2>
- * A {@link MutableClock} replaces the application clock, so "day 3" of a scenario is
- * reached by moving the clock rather than by waiting. Only StockPolicy reads that
- * clock, which is exactly the point: every stock figure must change together when
- * the date does.
- *
- * <h2>Data</h2>
- * Each test works on a blood bank it creates for itself, so the figures it checks are
- * exact. Shares bloodlink_test and its guarantee: {@code @Transactional}, all rolled
- * back.
- *
- * Hibernate's SQL is logged for this class (logging.level.org.hibernate.SQL=DEBUG) so
- * one test can read back the exact statement the batch lock runs.
+ * The batch-stock cutover end to end (Business Rule 24): usable stock everywhere, FEFO with allocations,
+ * batch views and entered-expiry rules. A MutableClock moves the date; SQL logged to read back the lock.
  */
 @SpringBootTest(properties = "logging.level.org.hibernate.SQL=DEBUG")
 @AutoConfigureMockMvc
@@ -132,9 +116,7 @@ class BatchStockCutoverIT {
     // ---------- the scenario that motivated the redesign ----------
 
     /**
-     * 10 units expiring in 2 days and 30 expiring in 40 days. The old one-row table
-     * stored 40 units expiring in 2 days, called all 40 "expiring soon", and on day 3
-     * still offered all 40 to hospitals. Batches keep the two apart.
+     * 10 units expiring in 2 days and 30 in 40 days stay separate batches, so on day 3 only the 30 count.
      */
     @Test
     void tenUnitsExpiringInTwoDaysAndThirtyInFortyAreTwoBatchesAndOnDayThreeOnlyTheThirtyCount() throws Exception {
@@ -246,14 +228,8 @@ class BatchStockCutoverIT {
 
         assertLedgersBalance();
 
-        // The batch lock, as Hibernate really sends it: the ORDER BY the design fixed
-        // (earliest expiry, then id), with a row lock taken in that order. PostgreSQL
-        // sorts before it locks, so the lock order is the ORDER BY. Hibernate maps
-        // PESSIMISTIC_WRITE to FOR NO KEY UPDATE on PostgreSQL: exclusive against every
-        // other contributor exactly as FOR UPDATE would be (both conflict with
-        // themselves and each other); it only lets a foreign-key check from another
-        // transaction through, which needs no waiting here. The request-row lock is the
-        // same mode.
+        // The batch lock as Hibernate sends it: ordered by expiry then id, locked FOR NO KEY UPDATE in that order
+        // (exclusive against other contributors, like the request lock).
         String lockSql = output.getOut().lines()
             .filter(line -> line.contains("from blood_inventory_batches") && line.contains(" for "))
             .findFirst()
@@ -268,9 +244,7 @@ class BatchStockCutoverIT {
     // ---------- one definition of usable stock ----------
 
     /**
-     * The same shelf, read six ways. Every screen and rule must see the same usable
-     * figure: the Inventory table, the hospital's availability view, the Dashboard,
-     * the Admin Reports, the request-alert query and the appeal rule.
+     * The same shelf read six ways: every screen and rule must see the same usable figure.
      */
     @Test
     void everyScreenAndRuleSeesTheSameUsableStock() throws Exception {

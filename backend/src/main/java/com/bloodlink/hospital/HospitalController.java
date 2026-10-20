@@ -11,15 +11,8 @@ import com.bloodlink.hospital.dto.HospitalResponse;
 import com.bloodlink.repository.HospitalRepository;
 
 /**
- * The hospital reference list — seeded by V6, never self-registering, and added to
- * only by an administrator (AdminFacilityController, Business Rule 19).
- *
- * Deliberately a controller with no service behind it: unlike blood banks there is
- * no aggregate view or business rule attached to a hospital yet — this is a plain
- * projection of two seeded rows, and inventing a HospitalService to pass it through
- * would add a layer with nothing in it. Open to any signed-in role (SecurityConfig),
- * because the Hospital Portal's bank-unassigned fallback picker and any future
- * admin screen both need to know what hospitals exist.
+ * The hospital reference list, readable by any signed-in role; added to only by an administrator (Business Rule 19).
+ * No service behind it: there is no business logic to put there.
  */
 @RestController
 @RequestMapping("/api/hospitals")

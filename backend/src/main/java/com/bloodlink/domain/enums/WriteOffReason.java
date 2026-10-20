@@ -43,10 +43,8 @@ public enum WriteOffReason {
     }
 
     /**
-     * The reason with exactly this name ("EXPIRED", "DAMAGED", ...), or empty for
-     * anything else — a lower-case spelling included, so a value is never guessed at.
-     * Lets the write-off endpoint refuse an unknown reason with a 400 on its own
-     * field, rather than the generic "could not be read" a failed enum binding gives.
+     * The reason with exactly this name, or empty (lower case included), so the write-off endpoint
+     * can refuse an unknown reason with a 400 on its own field.
      */
     public static Optional<WriteOffReason> fromName(String name) {
         return Arrays.stream(values()).filter(reason -> reason.name().equals(name)).findFirst();

@@ -1,10 +1,5 @@
-/* ================================================================
-   BloodLink — inventory calls
-
-   Per-bank, per-blood-group stock. Reading works for any signed-in role;
-   addBatch is rejected server-side (403) for anyone but BLOOD_BANK_STAFF on
-   their own bank, or ADMIN on any bank — see InventoryService.
-   ================================================================ */
+/* BloodLink — inventory calls: per-bank, per-group stock, readable by any signed-in role;
+   adding stock is refused (403) to anyone but that bank's own staff. */
 
 import { apiRequest } from './client.js';
 
@@ -19,11 +14,8 @@ export function getInventorySummary(bloodBankId) {
 }
 
 /**
- * PATCH /api/inventory/{bloodBankId}/{bloodType} — "Add New Batch".
- *
- * bloodType ("A+", "O-", ...) is URL-encoded because a literal "+" in a path
- * segment risks being read back as an encoded space; the backend expects
- * exactly this encoding (see InventoryController).
+ * PATCH /api/inventory/{bloodBankId}/{bloodType}: "Add New Batch";
+ * bloodType is URL-encoded so "+" survives in the path.
  */
 export function addInventoryBatch(bloodBankId, bloodType, { unitsToAdd, expiryDate }) {
   const encodedType = encodeURIComponent(bloodType);

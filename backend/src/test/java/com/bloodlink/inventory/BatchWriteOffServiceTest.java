@@ -56,15 +56,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * The write-off's rules (Business Rule 24, Stage 3) over mocked repositories: who may
- * write off which batch, what is refused and why, that an expired batch may be
- * written off, and that a write-off writes its row, its audit entry and its
- * low-stock alert with one instant from the application clock.
- *
- * The access rule is the real one — a real InventoryService, as in
- * InventoryServiceTest — so these tests check the rule the endpoint actually applies,
- * not a stub of it. The locking itself needs a real database: BatchWriteOffIT and
- * PartialFulfilmentRaceIT.
+ * The write-off's rules over mocked repositories (Business Rule 24): access, refusals, expired batches,
+ * and row, audit and alert sharing one clock instant. Locking is proven in BatchWriteOffIT and PartialFulfilmentRaceIT.
  */
 @ExtendWith(MockitoExtension.class)
 class BatchWriteOffServiceTest {
@@ -175,10 +168,7 @@ class BatchWriteOffServiceTest {
     // ---------- refused ----------
 
     /**
-     * Stage 3b: an administrator reads stock but changes none of it. Refused on the
-     * role alone — before the bank is looked up or any batch locked — so nothing is
-     * read, deducted, recorded or audited. (Until Stage 3b this test asserted the
-     * opposite: that an ADMIN could write off any bank's batch.)
+     * Stage 3b: an administrator is refused on the role alone, before any lookup or lock, so nothing is written.
      */
     @Test
     void anAdministratorIsRefusedAndNothingIsWritten() {

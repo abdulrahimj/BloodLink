@@ -1,12 +1,8 @@
 package com.bloodlink.admin.dto;
 
 /**
- * How many accounts exist, in total and per role — {@code GET /api/admin/reports/users}.
- *
- * Feeds the Admin Console's "Total Users" and "Registered Donors" cards and the counts
- * shown on the User Accounts role buttons. These used to be counted in the browser
- * over a download of every account; now the database counts them and nothing has to
- * load every account. Every role is always present, as zero when it has no accounts.
+ * Account counts in total and per role (GET /api/admin/reports/users), counted by the database and zero-filled.
+ * Feeds the console's Total Users and Registered Donors cards and the role buttons.
  */
 public record UserCountsResponse(
     long total,

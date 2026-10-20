@@ -7,51 +7,8 @@ import { describeAppealReach, donorCount } from "../lib/appealReach.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Blood Bank: Blood Inventory (detail view)
-
-   Second view of the blood bank portal: stock composition by group,
-   expiry exposure, and a per-group inventory table.
-
-   Figures match BloodBankDashboard.jsx (405 units total, 30 expiring)
-   so the two views of the same facility agree.
-
-   Wired to GET /api/inventory/{bloodBankId}, GET .../summary, and
-   PATCH /api/inventory/{bloodBankId}/{bloodType} ("Add New Batch"). Layout,
-   styling and structure are the mockup's, unchanged; the STOCK/COMPOSITION
-   fixtures are replaced with fetched data, the two charts are redrawn from
-   the same live numbers using their existing SVG generators, and "Add New
-   Batch" opens a small form — the mockup's own button did nothing, so this
-   is new UI, built from the file's own tokens (same navy/red/shadow/radius),
-   not a deviation from an existing design.
-
-   The header carries the same live notification bell as the Dashboard, so an
-   alert is not missed purely because a staff member happened to be on this
-   screen rather than that one — the two are views of one portal and a bank has
-   one set of alerts, not one per page.
-
-   A LOW_STOCK_ALERT also refreshes the figures. It means this bank's stock has
-   just moved (a fulfilment on the Dashboard, or another staff member issuing
-   units), and a bell reading "O- has fallen to 37 units" beside a table still
-   showing 45 would be worse than no bell at all. A NEW_REQUEST does not: a
-   raised request changes nothing about stock until a bank fulfils it, and
-   reloading the charts underneath someone reading them earns nothing.
-
-   Each inventory row carries a "Send Appeal" action — the blood bank's answer
-   to its own shortage, and the counterpart of the hospital's blood request.
-   It appears only on rows the table already marks Low or Critical: appealing
-   for a group that is Sufficient spends donor goodwill on blood nobody needs,
-   and the register only tolerates so many asks before people stop reading them.
-
-   Confirming is one lightweight step, not the Dashboard's full Reject dialog.
-   The two are weighed differently on purpose: declining a request cannot be
-   undone and drops it out of this bank's queue for good, so it earns a warning
-   block and a deliberate pause. Sending an appeal asks some donors to consider coming
-   in — its worst outcome is a wasted message, and the honest way to say that is
-   a small confirmation, not borrowed alarm. What it does show is the number of
-   donors who will actually be contacted, because that is the one fact a staff
-   member cannot see from the button and would otherwise learn only afterwards.
-   ================================================================ */
+/* BloodLink — Blood Bank: Blood Inventory (detail view): stock by group, expiry exposure, the per-group table,
+   Add New Batch, Record Donation and Send Appeal on Low/Critical rows, with the live bell. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -63,47 +20,27 @@ function titleCase(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-/** Which statuses justify asking donors to come in. Sufficient does not: an
- *  appeal for blood the bank already has spends goodwill it will need later.
- *
- *  This decides whether the row shows an appeal button at all. Whether that
- *  button can be *pressed* is a separate question, answered by the server —
- *  see canSendAppeal. The two use different thresholds on purpose: a group at
- *  35 units is Low here, and still not short enough to appeal for. */
+/** Statuses that show an appeal button at all (Low, Critical); whether it can be pressed
+ * is the server's answer (canSendAppeal). */
 function needsDonors(status) {
   return status === "LOW" || status === "CRITICAL";
 }
 
 /**
- * Whether this row's Send Appeal button is live.
- *
- * Read from the server's own answer rather than worked out here, because it
- * depends on when this bank last appealed for this group — state no amount of
- * looking at the stock figure can reveal. Computing it in the browser is exactly
- * the bug this feature exists to fix: a button that reflected only the numbers
- * on screen looked identical whether an appeal had gone out ten minutes ago or
- * never.
+ * Whether the Send Appeal button is live, from the server, since it depends on the bank's last appeal for the group.
  */
 function canSendAppeal(item) {
   return item.appealAvailability === "AVAILABLE";
 }
 
 /**
- * What the button says.
- *
- * "Appeal Sent." on a cooling-down row is deliberately a statement rather than a
- * greyed "Send Appeal": it tells the operator their own earlier click worked,
- * which is the question someone looking at a disabled button actually has. A row
- * that is simply not short enough keeps the normal label, because nothing has
- * happened there to report.
+ * "Appeal Sent." on a cooling-down row tells the operator their earlier click worked; otherwise "Send Appeal".
  */
 function appealButtonText(item) {
   return item.appealAvailability === "COOLING_DOWN" ? "Appeal Sent." : "Send Appeal";
 }
 
-/** The same distinction for screen readers, spelled out — a disabled control
- *  still needs to say why it is disabled, and "Appeal Sent." alone does not
- *  carry that without the visual context of the row it sits in. */
+/** The same distinction spelled out for screen readers, saying why the button is disabled. */
 function appealButtonLabel(item) {
   if (item.appealAvailability === "COOLING_DOWN") {
     return `An appeal for ${item.bloodType} was sent recently — not available yet`;
@@ -122,27 +59,18 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const [today] = useState(() => new Date());
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [donationModalOpen, setDonationModalOpen] = useState(false);
-  // Kept separate from appealNotice rather than sharing one banner: the two
-  // report different actions, and a donation receipt overwriting an appeal
-  // receipt the operator has not read yet would lose the more consequential of
-  // the two messages.
+  // Separate from appealNotice, so a donation receipt never overwrites an unread appeal receipt.
   const [donationNotice, setDonationNotice] = useState(null);
 
-  // The appeal awaiting confirmation, or null when no dialog is open. Holds the
-  // group, its fetched reach (null until it arrives), any failure, and whether
-  // the send is in flight — one object rather than four useStates, so the dialog
-  // can never be half-open with another group's numbers in it.
+  // The appeal awaiting confirmation (null when closed): group, fetched reach, failure and in-flight flag
+  // in one object so the dialog can't mix groups.
   const [appeal, setAppeal] = useState(null);
   // What the last appeal did, shown in the header until the next one. Cleared on
   // a reload so a stale "Appeal sent" is not left sitting over refreshed figures.
   const [appealNotice, setAppealNotice] = useState(null);
 
-  // Guards setState after unmount — shared between the mount-time fetch and the
-  // manual reload after "Add New Batch" succeeds. Reset to true on every mount,
-  // not just initialised once: React 18 StrictMode mounts, unmounts, and
-  // re-mounts each component once in development, and without the reset here
-  // the cleanup from that first simulated unmount would permanently disable
-  // every future load() — the real mount would still see mountedRef as false.
+  // Guards setState after unmount for both fetches; reset on every mount because StrictMode's
+  // simulated unmount would otherwise disable load() for good.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -173,13 +101,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   }, [bloodBankId]);
 
   /**
-   * Re-fetches without the loading placeholder or the error banner.
-   *
-   * load() above sets loading true, which blanks the whole screen — right when a
-   * staff member asks for the data, wrong when the screen decides to refresh
-   * itself. A live alert must not make the charts someone is reading disappear,
-   * and a failed background fetch must not replace them with an error; leaving
-   * figures a few seconds stale is the smaller harm in both cases.
+   * Re-fetches without the loading placeholder or error banner, so a background refresh
+   * never blanks or replaces figures someone is reading.
    */
   async function refreshQuietly() {
     try {
@@ -195,9 +118,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
     }
   }
 
-  // The header bell — the same one the Dashboard shows, fed by the same session.
-  // Only a stock alert refreshes this screen; see the note at the top of the file
-  // for why a new request deliberately does not.
+  // The header bell, same session as the Dashboard; only a stock alert refreshes this screen (see the file header).
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
       if (notification.type === "LOW_STOCK_ALERT") refreshQuietly();
@@ -210,21 +131,14 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const unitsIssued = summary?.unitsIssuedThisMonth ?? 0;
   const composition = summary?.composition ?? [];
 
-  /** Re-fetches after a successful "Add New Batch" so every card/chart/row
-   *  reflects the write immediately, rather than patching local state by hand
-   *  and risking it drifting from what the server actually stored. */
+  /** Re-fetches after "Add New Batch" so every card, chart and row shows what the server stored. */
   async function handleBatchAdded() {
     setBatchModalOpen(false);
     await load();
   }
 
   /**
-   * After a donation is recorded, reload for the same reason a batch does — the
-   * units are now in stock and every card, chart and row moves with them.
-   *
-   * The receipt's own figure is what the notice quotes rather than anything read
-   * back afterwards: it is the number the server returned from the write itself,
-   * so it cannot disagree with what was actually stored.
+   * Reloads after a donation is recorded, as for a batch; the notice quotes the receipt's own figure from the write.
    */
   async function handleDonationRecorded(receipt) {
     setDonationModalOpen(false);
@@ -237,14 +151,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   }
 
   /**
-   * Opens the appeal confirmation for one blood group and fetches its reach.
-   *
-   * The dialog opens straight away, before the count arrives, rather than after:
-   * a button that appears to do nothing for a moment reads as broken, and the
-   * dialog has something honest to show meanwhile ("Checking how many donors…").
-   * The confirm button stays disabled until the number is in — nobody should be
-   * able to send an appeal without seeing who it reaches, which is the whole
-   * reason this step exists.
+   * Opens the appeal confirmation at once and fetches its reach; confirm stays disabled
+   * until the count arrives, so nobody sends blind.
    */
   function openAppeal(bloodType) {
     setAppeal({ bloodType, reach: null, error: null, sending: false });
@@ -252,10 +160,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
     getAppealReach(bloodType)
       .then((reach) => {
         if (!mountedRef.current) return;
-        // Guard against a stale response: a staff member can close this dialog
-        // and open another group's before the first request comes back, and
-        // showing O-'s count under an A+ heading would be a lie the operator
-        // has no way of catching.
+        // Ignore a stale response for a different group, so one group's count never shows under another's heading.
         setAppeal((current) =>
           current && current.bloodType === bloodType ? { ...current, reach } : current);
       })
@@ -267,16 +172,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   }
 
   /**
-   * Sends the appeal the dialog is showing.
-   *
-   * bloodBankId is passed for the ADMIN case, where the backend needs telling
-   * which bank is appealing; for BLOOD_BANK_STAFF it is ignored server-side in
-   * favour of their own assigned bank, so sending it is harmless.
-   *
-   * On success the dialog closes and a notice reports what actually happened,
-   * using the figures from the response rather than the preview's — they should
-   * agree, and if a donor's eligibility changed in between, the receipt is the
-   * one that tells the truth.
+   * Sends the shown appeal (bloodBankId only matters for an ADMIN); on success the notice uses
+   * the response's figures, which are the truth.
    */
   async function confirmAppeal() {
     const { bloodType } = appeal;
@@ -291,22 +188,13 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           ? `No appeal was delivered — no eligible ${bloodType} donor is on the register right now.`
           : `Appeal sent — ${donorCount(receipt.donorsNotified)} of ${bloodType} notified.`
       );
-      // Re-read so this row's button becomes "Appeal Sent." straight away
-      // (Business Rule 12). Without this the cooldown would only appear on the
-      // next reload, which is precisely the stale-button problem the cooldown
-      // was added to fix — the operator would be left able to click again on a
-      // send the server would now refuse. Quietly, not load(): blanking a screen
-      // someone has just acted on, to show them the result of their own action,
-      // would lose the notice set above.
+      // Re-read quietly so this row's button shows "Appeal Sent." at once (Business Rule 12)
+      // without blanking the screen or losing the notice.
       refreshQuietly();
     } catch (err) {
       if (!mountedRef.current) return;
       setAppeal((current) => (current ? { ...current, sending: false, error: err.message } : current));
-      // Also re-read on failure. A 409 here usually means this screen's copy of
-      // the row is out of date — another staff member at the same bank already
-      // appealed, or stock moved past the threshold — so the honest response is
-      // to show the state that refused the send, not leave the button inviting
-      // a second attempt that will fail the same way.
+      // Also re-read on failure: a 409 usually means this row is out of date, so show the state that refused it.
       refreshQuietly();
     }
   }
@@ -614,21 +502,14 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           </div>
           <div className="bi-top-right">
             <div className="bi-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            {/* Between the date and the primary action, so the bell sits in the
-                same place relative to the date as it does on the other three
-                screens, and "Add New Batch" stays the rightmost thing in the
-                header where this page's own work begins. */}
+            {/* Placed like the bell on the other screens, keeping "Add New Batch" rightmost in the header. */}
             <NotificationBell
               notifications={notifications}
               unreadCount={unreadCount}
               connected={connected}
               onMarkAllRead={markAllRead}
             />
-            {/* Recording a donation and adding a batch are the two ways units
-                enter this bank, so they sit together. Outlined rather than
-                filled: both add stock, but "Add New Batch" was this page's
-                established primary action and two solid red buttons would read
-                as a choice between equals. */}
+            {/* Record Donation sits beside Add New Batch (both add stock), outlined so Add New Batch stays primary. */}
             <button type="button" className="bi-donatebtn" disabled={loading}
                     onClick={() => setDonationModalOpen(true)}>
               <DropletOutlineIcon /> Record Donation
@@ -639,9 +520,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           </div>
         </div>
 
-        {/* Sits above the panels rather than inside the dialog, because the dialog
-            is gone by the time this appears — the confirmation is over and what is
-            left is a receipt for something that already happened. */}
+        {/* Shown above the panels, since the dialog is gone: this is a receipt for what already happened. */}
         {appealNotice && (
           <div className="bi-notice" role="status">
             {appealNotice}
@@ -732,26 +611,14 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
                         <td><span className={`bi-badge bi-b-${s.status.toLowerCase()}`}>{titleCase(s.status)}</span></td>
                         <td className="bi-muted">{s.lastUpdated ? formatDateTime(s.lastUpdated) : "Never stocked"}</td>
                         <td>
-                          {/* Left empty rather than showing a greyed-out button on a
-                              Sufficient row. Five disabled buttons in an eight-row
-                              table is noise, and the Status cell immediately to the
-                              left already says why there is nothing to do here.
-                              Rows that are Low or Critical always show the button,
-                              disabled when the server says it cannot be sent —
-                              there, the button is the only thing that can explain
-                              why (Business Rule 12). */}
+                          {/* Sufficient rows get no button (the Status cell says why); Low and Critical rows always
+                              show it, disabled when the server says it can't be sent. */}
                           {needsDonors(s.status) && (
                             <button
                               type="button"
                               className="bi-appealbtn"
-                              // Never derived from the stock figure in this row on
-                              // its own: whether an appeal may be sent also depends
-                              // on when this bank last sent one, which only the
-                              // server knows. It arrives with each row and is
-                              // re-derived on every reload — including the reloads
-                              // after adding a batch, recording a donation, or
-                              // sending an appeal — so the button reflects the
-                              // state now rather than at the last page load.
+                              // Never derived from this row's stock alone: it depends on the last appeal, which only
+                              // the server knows, and is refreshed on every reload.
                               disabled={!canSendAppeal(s)}
                               onClick={() => openAppeal(s.bloodType)}
                               aria-label={appealButtonLabel(s)}
@@ -798,30 +665,14 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
 }
 
 /**
- * The one step between "Send Appeal" and the appeal going out.
- *
- * Its whole job is to answer the question the button cannot: how many donors will
- * this actually reach? An appeal cannot be recalled, and one sent into an empty
- * audience looks exactly like one that worked, so a staff member who only learns
- * the number afterwards has learned it too late to act on.
- *
- * The count comes from GET /api/appeals/reach, which applies the same Business
- * Rule 2 filter the send does and is computed by the same method on the backend —
- * so the number promised here is the number contacted, not an estimate.
- *
- * Deliberately lighter than the Dashboard's Reject dialog: no warning block, and a
- * navy confirm rather than a red one. Declining a request permanently gives up this
- * bank's claim on it; sending an appeal asks some people to consider donating.
- * Dressing the second in the first's alarm would devalue the warning where it is
- * earned.
+ * The step between "Send Appeal" and sending: shows how many donors it will reach (the same server calculation
+ * the send uses), since an appeal can't be recalled. Deliberately lighter than the Reject dialog.
  */
 function AppealConfirmation({ appeal, onCancel, onConfirm }) {
   const { bloodType, reach, error, sending } = appeal;
   const cancelRef = useRef(null);
 
-  // Escape closes, and focus lands on Cancel. Cancel rather than the confirm
-  // button because a dialog should not be dismissible into an action by reflex,
-  // even a mild one — and it is the only control that is never disabled here.
+  // Escape closes and focus lands on Cancel, so the dialog is never dismissed into an action by reflex.
   useEffect(() => {
     cancelRef.current?.focus();
     const onKeyDown = (event) => {
@@ -859,11 +710,8 @@ function AppealConfirmation({ appeal, onCancel, onConfirm }) {
           {description !== null && (
             <>
               <div className="bi-confirm-count">{description.heading}</div>
-              {/* Says what the filter did, rather than quietly shrinking the
-                  audience. A small number reads very differently once you know
-                  it is nine people recovering rather than nine people missing —
-                  and "nobody registered" reads differently again. See
-                  describeAppealReach for the four cases. */}
+              {/* Says what the eligibility filter did rather than silently shrinking the audience
+                  (see describeAppealReach). */}
               <div className="bi-confirm-note">{description.note}</div>
             </>
           )}
@@ -882,9 +730,7 @@ function AppealConfirmation({ appeal, onCancel, onConfirm }) {
   );
 }
 
-/** Mirrors InventoryService's 28-day "within 4 weeks" window client-side, purely
- *  for the table's own "Expiring Soon" column (the stat card total comes from
- *  the server, this only decides which rows to show a count on). */
+/** Mirrors the server's 28-day window client-side, only for the table's own "Expiring Soon" column. */
 function isWithinExpiryWindow(isoDate) {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() + 28);
@@ -905,35 +751,11 @@ function Stat({ tone, icon, figure, label, note }) {
 }
 
 /**
- * "Add New Batch" — the mockup's button had no behaviour; this is the form that
- * makes it real. Same design tokens as the rest of the file (navy/red/shadow/
- * radius/Inter), styled as a small centered modal since no such surface existed
- * to reuse.
+ * "Add New Batch": the form that makes the mockup's button real, a small modal in the file's own design tokens.
  */
 /**
- * "Record Donation" — find the donor, record what was drawn and tested.
- *
- * Two steps in one dialog. The donor has to be found first because everything
- * below depends on knowing who this is — and on whether they may donate at all.
- * A donor still inside Business Rule 2's 90-day recovery window locks the form:
- * the group, the units and the confirm button are all disabled, and the amber
- * message says why and from what date a donation can be recorded. The backend
- * refuses the same request independently with a 409, so this lock explains the
- * refusal in advance rather than being the thing that enforces it.
- *
- * The tested blood group starts empty and is never seeded from the donor's stored
- * profile group. Business Rule 4: the group is re-tested at every donation and the
- * record must reflect that test, so pre-filling it — even "helpfully" — would let
- * one mistyped profile follow a donor into every donation and into the stock
- * issued from it. The profile group is shown beside it for recognition, and a
- * mismatch is called out rather than hidden.
- *
- * Exported so the Donors page (Business Rule 21) can open the same flow from
- * a roster row's "Record donation" shortcut, rather than a second copy of
- * this dialog. `initialPhone` is the one addition that reuse needed: a
- * shortcut starting from a donor already on screen can hand their number
- * straight to the lookup step instead of leaving it blank for every other
- * way of opening this dialog.
+ * "Record Donation": find the donor, then record the tested group and units; a donor in recovery locks the form
+ * (the server also refuses). The group never pre-fills (Business Rule 4); exported for the Donors page.
  */
 export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialPhone = "" }) {
   const [phone, setPhone] = useState(initialPhone);
@@ -958,9 +780,7 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
     setError(null);
     try {
       setDonor(await lookupDonorByPhone(trimmed));
-      // A new donor starts a new form. The group in particular must not carry
-      // over: a result tested for the previous donor sitting pre-selected under
-      // this one is exactly the Business Rule 4 slip the empty default prevents.
+      // A new donor starts a new form; the tested group must never carry over (Business Rule 4).
       setBloodType("");
       setUnitsDonated("1");
       setFieldErrors({});

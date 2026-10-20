@@ -7,37 +7,14 @@ import {
   describeStockStatus, requestStatusLabel, urgencyLabel, isReportEmpty, countNoun, shareOf,
 } from "../lib/reports.js";
 
-/* ================================================================
-   BloodLink — Admin Console › Reports (Business Rule 23)
-
-   A read-only, citywide summary in four sections — Stock, Requests, Donations,
-   Donors — each with its own "Download CSV". Distinct from the Audit Log, which
-   records what administrators did; this page reports the state of the system.
-
-   • Every figure is counted by the database (GET /api/admin/reports/summary/…);
-     nothing here adds anything up. lib/reports.js only words and draws it.
-   • Aggregates only. No donor's name, phone, email or address is fetched, so
-     none can appear — on the page or in a CSV.
-   • Each section loads on its own, with its own loading, empty and error state,
-     so one slow or failed section never blanks the others.
-   • The date range applies to Requests and Donations only; changing it refetches
-     those two and leaves Stock and Donors (both "as of today") alone.
-   • Plain CSS bars, no chart library: the page is a set of short ranked lists,
-     which bars draw clearly and print well.
-
-   Rendered inside AdminConsole's .ad-root, so it uses that file's tokens and its
-   panel, table, badge and button classes; only what is new here is styled below,
-   under an `ar-` prefix.
-   ================================================================ */
+/* BloodLink — Admin Console › Reports (Business Rule 23): read-only citywide Stock, Requests, Donations and Donors,
+   each with a CSV; figures counted by the database, aggregates only, each section loading on its own. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 
 /**
- * Loads one section and keeps its own { status, data, error }. `load` is re-run
- * whenever it changes (the dated sections pass one that closes over the range), and
- * `reload` runs it again for a Try Again button. A response that arrives after a
- * newer request was started is dropped, so a quick second range never shows the
- * first range's figures.
+ * Loads one section with its own { status, data, error }; reload re-runs it, and responses from superseded
+ * requests are dropped.
  */
 function useSection(load) {
   const [state, setState] = useState({ status: "loading", data: null, error: null });
@@ -251,9 +228,7 @@ export default function AdminReports() {
 }
 
 /**
- * One report section: heading, its Download CSV button, and whichever of loading /
- * error / empty / content applies. The CSV is fetched from the server, for the
- * same range the section is showing, so the file always matches the page.
+ * One report section: heading, Download CSV for the same range, and its loading/error/empty/content state.
  */
 function Section({ section, title, sub, range, state, onRetry, emptyText, children }) {
   const [downloading, setDownloading] = useState(false);

@@ -14,22 +14,8 @@ import com.bloodlink.config.WebSocketConfig;
 import com.bloodlink.notification.dto.NotificationResponse;
 
 /**
- * Pushes one notification to one signed-in user's open sockets.
- *
- * Two things make this more than a one-line call to SimpMessagingTemplate.
- *
- * First, timing. Notifications are created inside the same database transaction as
- * the event that caused them — fulfilling a request writes the deduction, the new
- * status and the alert together — and that transaction can still fail after the
- * alert has been built. A push cannot be taken back, so it is deferred until the
- * transaction has actually committed. Without that, a bank could be told stock had
- * fallen in a fulfilment that was then rolled back and never happened.
- *
- * Second, failure. A WebSocket push is best-effort by design: the durable copy is
- * the Notification row, and a client that missed the push reads it from
- * GET /api/notifications on its next load. So a delivery failure is logged and
- * swallowed rather than thrown — letting it propagate would turn "the alert did not
- * reach a screen" into "the fulfilment failed", which is far worse and quite wrong.
+ * Pushes one notification to a user's open sockets, deferred until the transaction commits so a rolled-back
+ * event is never announced. Failures are logged, not thrown: the Notification row is the durable copy.
  */
 @Component
 public class NotificationPublisher {
@@ -43,10 +29,8 @@ public class NotificationPublisher {
     }
 
     /**
-     * Delivers to whichever sessions {@code recipientUserId} currently has open,
-     * once the surrounding transaction commits. Nobody connected means nothing is
-     * sent and nothing is wrong — that is the ordinary case for a donor who is not
-     * looking at the app.
+     * Delivers to the recipient's open sessions once the transaction commits;
+     * nobody connected means nothing is sent, which is normal.
      */
     public void publish(UUID recipientUserId, NotificationResponse payload) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {

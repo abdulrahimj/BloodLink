@@ -36,11 +36,8 @@ import com.bloodlink.stock.BatchStockService.InsufficientStockException;
 import com.bloodlink.stock.BatchStockService.Issue;
 
 /**
- * What BatchStockService does with what its queries return: issuing first expiry
- * first out from the locked batches, refusing with the usable and expired figures,
- * refusing allocations that do not add up to their contribution, and always
- * reporting eight groups. The queries themselves are proven against a real
- * database in BatchStockCutoverIT and the race tests.
+ * BatchStockService's logic over stubbed queries: FEFO issuing, refusal figures, allocation totals and eight groups.
+ * The queries are proven in BatchStockCutoverIT and the race tests.
  */
 @ExtendWith(MockitoExtension.class)
 class BatchStockServiceTest {

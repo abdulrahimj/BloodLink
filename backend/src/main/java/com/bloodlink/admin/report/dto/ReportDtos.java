@@ -6,12 +6,8 @@ import java.util.List;
 import com.bloodlink.domain.enums.StockStatus;
 
 /**
- * The response shapes of the Admin Reports page (Business Rule 23), kept together
- * because each is small and none is used anywhere else.
- *
- * Aggregates only, by design: counts and sums keyed by blood group, status, urgency,
- * month or blood bank name. Nothing here can carry a donor's name, phone, email,
- * address or date of birth — ReportSummaryServiceTest checks every record's fields.
+ * The Admin Reports response shapes (Business Rule 23), kept together because each is small.
+ * Aggregates only: no field can hold a donor's personal details (ReportSummaryServiceTest checks).
  */
 public final class ReportDtos {
 
@@ -28,10 +24,8 @@ public final class ReportDtos {
      *  the same per-group judgement its own inventory page makes. */
     public record StockBankRow(String bankName, long totalUnits, int criticalGroups, int lowGroups) {}
 
-    /** Section 1: USABLE stock only (Business Rules 23 and 24). {@code totalUnits} and
-     *  {@code expiringSoonUnits} exclude every unit in an expired batch;
-     *  {@code pastExpiryUnits} is those expired units, awaiting discard, reported on their
-     *  own and NOT part of the total. (The field name predates the rule reversing.) */
+    /** Section 1: usable stock only (Business Rules 23, 24); totalUnits and expiringSoonUnits exclude expired batches.
+     * pastExpiryUnits is the expired units awaiting discard, reported separately (the name predates the rule). */
     public record StockReport(
         long totalUnits,
         long expiringSoonUnits,

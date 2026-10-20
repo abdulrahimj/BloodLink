@@ -25,13 +25,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * Units of one batch discarded, why, and by whom — the write-off ledger of the
- * batch-stock redesign (table V18). Written only by the write-off action,
- * BatchWriteOffService (Stage 3).
- *
- * Append-only for the same reasons and by the same four means as
- * {@link ContributionAllocation}. The matching STOCK_WRITTEN_OFF audit-log entry is
- * written alongside it by BatchWriteOffService, in the same transaction.
+ * Units of one batch discarded, why and by whom: the write-off ledger (V18), written only by BatchWriteOffService.
+ * Append-only like ContributionAllocation; its STOCK_WRITTEN_OFF audit entry is written in the same transaction.
  */
 @Entity
 @Table(name = "batch_write_offs")
@@ -71,10 +66,8 @@ public class BatchWriteOff {
     private Instant writtenOffAt;
 
     /**
-     * The only way to make one. Applies the same note rules as V18's CHECK
-     * constraints (blank becomes null, required for OTHER, at most 500 characters),
-     * so a bad note is refused here, with a readable message, before the database
-     * would refuse it anyway.
+     * The only way to make one; applies V18's note rules (blank to null, required for OTHER, max 500)
+     * so a bad note gets a readable message before the database refuses it.
      */
     public static BatchWriteOff record(
         BloodInventoryBatch batch, int units, WriteOffReason reason, String note, User writtenOffBy
@@ -96,9 +89,8 @@ public class BatchWriteOff {
     }
 
     /**
-     * The same, stamped with the moment it happened as read from the application's
-     * clock — what the write-off action uses, so that the entry, its audit-log entry
-     * and the batch's last_updated all carry one instant, and a test can fix it.
+     * The same, stamped with an instant from the application's clock, so the entry, its audit entry
+     * and the batch's last_updated share one instant.
      */
     public static BatchWriteOff record(
         BloodInventoryBatch batch, int units, WriteOffReason reason, String note, User writtenOffBy,
@@ -115,11 +107,8 @@ public class BatchWriteOff {
     }
 
     /**
-     * What is wrong with a note for this reason, or empty if it is acceptable:
-     * required for OTHER, at most {@link #NOTE_MAX_LENGTH} characters once trimmed.
-     * Returned rather than thrown, as StockPolicy.problemWithEnteredExpiry is, so the
-     * write-off endpoint can attach it to its own "note" field — one copy of the rule
-     * for the endpoint and this factory alike.
+     * What is wrong with a note for this reason, or empty if fine; returned rather than thrown so the endpoint
+     * can attach it to its "note" field. One copy of the rule for both.
      */
     public static Optional<String> problemWithNote(WriteOffReason reason, String note) {
         String clean = cleanNote(note);

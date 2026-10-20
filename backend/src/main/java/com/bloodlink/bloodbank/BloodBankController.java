@@ -12,10 +12,8 @@ import com.bloodlink.bloodbank.dto.BloodBankResponse;
 import com.bloodlink.bloodbank.dto.DashboardResponse;
 
 /**
- * Blood bank reference data and the Blood Bank Dashboard's aggregate view.
- * SecurityConfig opens the plain listing to every signed-in role (hospitals and
- * donors both need to know what banks exist) and reserves /dashboard for
- * BLOOD_BANK_STAFF and ADMIN.
+ * Blood bank reference data and the Blood Bank Dashboard; the listing is open to every signed-in role,
+ * /dashboard to BLOOD_BANK_STAFF and ADMIN (SecurityConfig).
  */
 @RestController
 @RequestMapping("/api/blood-banks")

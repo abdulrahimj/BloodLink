@@ -1,28 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-/* ================================================================
-   BloodLink — notification bell
-
-   Replaces the static red dot both portal mockups drew beside the date in
-   their header. The dot said "there is something"; this says how many and,
-   when opened, what.
-
-   Shared between the Donor Portal and the Blood Bank Dashboard rather than
-   written into each. Both mockups drew the same bell in the same place, so
-   two copies would only mean two chances for them to diverge.
-
-   The styling deliberately declares no colours of its own. Every value below
-   is a var() the portal's own root already defines (--navy, --red, --card-bg,
-   and the rest), and CSS custom properties inherit, so this renders in each
-   screen's palette by being mounted inside it — no new visual language, and
-   nothing to keep in step by hand if a token changes.
-   ================================================================ */
+/* BloodLink — notification bell, shared by the portals: shows how many and, when opened, what.
+   Declares no colours of its own, inheriting each portal's CSS variables. */
 
 const ICON = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' };
 
-/** "8 mins ago" down to a plain date, for the timestamp under each row.
- *  Kept local rather than imported from lib/dates.js so this component can drop
- *  into a portal (the Donor one) that keeps its own formatters. */
+/** "8 mins ago" down to a plain date for each row's timestamp, kept local so the component fits any portal. */
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function relativeTime(instantIso) {
@@ -39,10 +22,7 @@ function relativeTime(instantIso) {
 }
 
 /**
- * A notification's type decides the colour of its dot, using the same meanings
- * the rest of the system already gives those colours: red for a shortage, amber
- * for something waiting on a decision, navy for a settled outcome, green for an
- * appeal a donor can act on.
+ * Dot colour by notification type: red shortage, amber awaiting a decision, navy settled, green an appeal.
  */
 const TYPE_TONE = {
   LOW_STOCK_ALERT: 'var(--red)',
@@ -52,18 +32,14 @@ const TYPE_TONE = {
 };
 
 /**
- * @param {Array}    notifications  newest first.
- * @param {number}   unreadCount    drives the badge; hidden at zero.
- * @param {boolean}  connected      whether the live socket is currently open.
- * @param {function} onMarkAllRead
+ * notifications newest first; unreadCount drives the badge (hidden at zero);
+ * connected is the live socket state; onMarkAllRead clears the badge.
  */
 export default function NotificationBell({ notifications, unreadCount, connected, onMarkAllRead }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
-  // A click anywhere else, or Escape, closes the panel. Bound at the document
-  // because the panel is not a native popover and would otherwise stay open
-  // behind whatever the user clicked next.
+  // A click elsewhere or Escape closes the panel, bound at the document since it is not a native popover.
   useEffect(() => {
     if (!open) return undefined;
 

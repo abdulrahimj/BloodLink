@@ -1,10 +1,5 @@
-/* ================================================================
-   BloodLink — blood bank calls
-
-   Wraps the reference-data listing and the staff-facing dashboard summary.
-   Both bloodBankId values come from the caller (the bank picker, or the
-   signed-in staff member's own bank) — nothing here resolves "mine" itself.
-   ================================================================ */
+/* BloodLink — blood bank calls: the reference listing and the staff dashboard summary;
+   the bloodBankId always comes from the caller. */
 
 import { apiRequest } from './client.js';
 

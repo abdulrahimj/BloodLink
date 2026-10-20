@@ -18,23 +18,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One blood bank's issue of units towards one hospital request — Business Rule 20,
- * table V15.
- *
- * This table is the source of truth for how much of a request has been covered and
- * by whom. {@link BloodRequest#getStatus()} and
- * {@link BloodRequest#getLastContributedByBloodBank()} are both derived from these
- * rows; neither can replace them, because a request may now be covered by several
- * banks and a single column cannot name several.
- *
- * Unlike {@link BloodRequestDecline} there is no unique constraint on
- * (request, bank): a decline is one final answer, but a bank may contribute to the
- * same request more than once — two units today, three when the next donation
- * session comes in — and each of those is its own act with its own timestamp.
- *
- * The units recorded here have already left the contributing bank's inventory: the
- * deduction and this row are written in the same transaction (RequestService), so
- * there is no state in which a contribution exists that stock was not taken for.
+ * One bank's issue of units towards one request (Business Rule 20, V15): the source of truth for coverage
+ * and contributors. No unique (request, bank): a bank may give more than once. Written with its stock deduction.
  */
 @Entity
 @Table(name = "blood_request_contributions")

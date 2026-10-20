@@ -17,18 +17,8 @@ import com.bloodlink.domain.enums.BloodType;
 import jakarta.persistence.LockModeType;
 
 /**
- * Batches of stock (V18, the source of all stock since V19).
- *
- * <h2>One definition of "usable"</h2>
- * Every query that counts stock takes {@code today} as a parameter, supplied by
- * StockPolicy from the UTC clock, and applies the same test: a batch is usable when
- * {@code expiryDate >= :today} (usable through the whole of its expiry date) and
- * expired when {@code expiryDate < :today}. No query reads the database's own
- * current_date, so "today" means the same thing in every figure, and tests can fix it.
- *
- * A bare {@link Repository} rather than JpaRepository on purpose: batches are never
- * deleted (a used-up batch stays as history), so this repository inherits no delete
- * methods to be called by mistake.
+ * Batches of stock (V18; all stock since V19). Every query takes today as a parameter (usable: expiry >= today),
+ * never current_date. A bare Repository, since batches are never deleted.
  */
 public interface BloodInventoryBatchRepository extends Repository<BloodInventoryBatch, UUID> {
 
@@ -39,15 +29,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     // ---------- one bank's stock, per blood group ----------
 
     /**
-     * One bank's stock, one row per blood group it has ever held a batch of. Groups
-     * with no batches at all are absent; the service reports them as zero.
-     *
-     * usableUnits: units in batches not yet expired. expiringSoonUnits: of those, the
-     * ones expiring on or before {@code cutoff} (today + 28 days). expiredUnits: units
-     * still on the shelf in expired batches, which are not counted as stock.
-     * liveBatches: batches with any units left, expired ones included.
-     * earliestUsableExpiry: the soonest expiry among usable batches with units left.
-     * lastUpdated: the most recent change to any of the group's batches.
+     * One bank's stock per blood group it has held: usable, expiring-soon (by cutoff), expired and live-batch counts,
+     * earliest usable expiry and last update. Groups with no batches are absent (reported as zero).
      */
     @Query("""
         select b.bloodType as bloodType,
@@ -104,21 +87,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     // ---------- issuing stock: the FEFO lock ----------
 
     /**
-     * Locks one bank's usable batches of one blood group, in issue order — earliest
-     * expiry first, then id — and returns them. Called inside the contribution
-     * transaction, after the request row has been locked (BloodRequestRepository
-     * .findByIdForUpdate): request first, then batches, is the one lock order in the
-     * system, which is what makes a deadlock impossible.
-     *
-     * The ORDER BY is what PostgreSQL locks the rows in, so two transactions taking
-     * the same bank's batches always queue in the same order rather than each
-     * holding one the other needs. The order can never change underneath a waiting
-     * transaction because expiry_date and id are fixed (V18 trigger). A batch emptied
-     * by the transaction that held the lock no longer matches
-     * {@code unitsRemaining > 0} when the waiter re-reads it, so it drops out.
-     *
-     * Serves from idx_batches_fefo, whose predicate is the {@code unitsRemaining > 0}
-     * clause here.
+     * Locks one bank's usable batches of a group in issue order (expiry, then id), after the request lock:
+     * one lock order everywhere, so no deadlock. Served by idx_batches_fefo.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
@@ -134,17 +104,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     );
 
     /**
-     * Locks one batch by id, whatever its expiry date or units left, and returns it:
-     * the write-off's lock (Business Rule 24). The same PESSIMISTIC_WRITE as
-     * {@link #lockUsableBatchesInIssueOrder}, which on PostgreSQL is
-     * {@code FOR NO KEY UPDATE}: a contribution wanting this batch waits for the
-     * write-off to commit and then re-reads the units it left, and vice versa.
-     *
-     * Expired and empty batches are deliberately not filtered out here — writing off
-     * an expired batch is the main reason this exists, and an empty one must be found
-     * so the caller can say it is empty rather than that it does not exist. A
-     * write-off holds no other row lock, so it can never be one half of a deadlock
-     * with a contribution (request first, batches second).
+     * Locks one batch by id whatever its state: the write-off's lock (FOR NO KEY UPDATE, as a contribution's).
+     * Expired and empty batches are included; holding no other lock, it cannot deadlock with a contribution.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select b from BloodInventoryBatch b where b.id = :id")
@@ -153,9 +114,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     // ---------- across banks ----------
 
     /**
-     * Banks holding at least {@code units} usable units of one group: the banks a new
-     * hospital request could be met from, and so the ones alerted about it
-     * (NotificationService.notifyNewRequest). Expired units do not count.
+     * Banks holding at least units usable units of a group, the ones alerted about a new request;
+     * expired units do not count.
      */
     @Query("""
         select b.bloodBank.id from BloodInventoryBatch b
@@ -180,9 +140,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
         """)
     List<BloodTypeCount> sumUsableUnitsByBloodType(@Param("today") LocalDate today);
 
-    /** Usable units per (bank, group), every bank and group that has any. The service
-     *  judges each one's Critical / Low status with StockStatus, as each bank's own
-     *  Inventory screen does, and counts the missing groups as zero. */
+    /** Usable units per (bank, group) for every pair that has any; the service judges each with StockStatus
+     * and counts missing groups as zero. */
     @Query("""
         select b.bloodBank.id as bankId, b.bloodType as bloodType, sum(b.unitsRemaining) as usableUnits
           from BloodInventoryBatch b
@@ -235,13 +194,8 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     // ---------- integrity checks ----------
 
     /**
-     * The stock identity check: every batch for which
-     * {@code units_received = units_remaining + units allocated to hospitals + units written off}
-     * does NOT hold. Should always be empty; anything returned is stock that has left
-     * a shelf without a record of where it went, or a record of units that never left.
-     *
-     * Native SQL so the same query can be pasted into psql as it stands. MIGRATED
-     * batches start with received = remaining and no history, so they satisfy it.
+     * The stock identity check: batches where received != remaining + allocated + written off; should always be empty.
+     * Native SQL so it can be pasted into psql; MIGRATED batches satisfy it.
      */
     @Query(value = """
         select b.id

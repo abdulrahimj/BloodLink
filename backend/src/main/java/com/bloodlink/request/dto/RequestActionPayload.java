@@ -15,25 +15,14 @@ public record RequestActionPayload(
     RequestAction action,
 
     /**
-     * Which bank is acting. Ignored for BLOOD_BANK_STAFF — their bank comes from
-     * their own User row, never from the body — and required only for an ADMIN
-     * declining (REJECT) on a bank's behalf. An ADMIN cannot CONTRIBUTE at all
-     * (Business Rule 8, Stage 3b-2), so it is never read for a contribution.
+     * Which bank is acting: ignored for BLOOD_BANK_STAFF (their own bank), required only for an ADMIN's REJECT;
+     * an ADMIN cannot CONTRIBUTE (Business Rule 8).
      */
     UUID bloodBankId,
 
     /**
-     * Units to contribute. Required for CONTRIBUTE and meaningless for REJECT, so
-     * it is nullable here and checked in the service, which is the only place that
-     * knows which action arrived.
-     *
-     * More than the request still needs is not an error: the service records what
-     * is genuinely outstanding and reports that back, because between the operator
-     * reading the screen and pressing the button another bank may have covered part
-     * of it. Refusing in that case would punish a race the operator cannot see;
-     * capping issues exactly the units that are still wanted. More than the bank
-     * holds *is* refused — that is a mistake about its own shelf, not about someone
-     * else's timing.
+     * Units to contribute: required for CONTRIBUTE, checked in the service. More than still needed is capped,
+     * not refused; more than the bank holds is refused.
      */
     @Positive(message = "Enter at least one unit")
     Integer units

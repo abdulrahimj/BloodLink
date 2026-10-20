@@ -1,22 +1,8 @@
 package com.bloodlink.security;
 
 /**
- * Thrown while the application is starting, when the JWT signing secret must not be
- * used (Business Rule 15, {@link JwtSecretPolicy}): it is missing, it is shorter than
- * HMAC-SHA256's 256-bit minimum, or it is the public placeholder and the active
- * profile is not a local-only one. It stops the start outright: there is no degraded
- * mode, because every token the application signed would be forgeable.
- *
- * {@link InsecureJwtSecretFailureAnalyzer} turns this into Spring Boot's plain
- * "APPLICATION FAILED TO START / Description / Action" report, so whoever is
- * deploying sees what is wrong and the one variable that fixes it, instead of a
- * bean-creation stack trace to dig through.
- *
- * <b>Never carries the secret itself</b>, only its length, so a refused start
- * cannot copy the value into a log.
- *
- * An IllegalStateException because that is what this is: the application's
- * configuration is in a state it must not run in.
+ * Stops startup when the JWT secret is missing, too short, or the public placeholder outside a local profile
+ * (Business Rule 15); reported by InsecureJwtSecretFailureAnalyzer, and never carries the secret itself.
  */
 public class InsecureJwtSecretException extends IllegalStateException {
 

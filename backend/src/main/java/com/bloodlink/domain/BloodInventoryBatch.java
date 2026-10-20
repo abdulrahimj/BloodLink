@@ -27,21 +27,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * One batch of blood units at one bank, with its own expiry date — the batch-stock
- * redesign (table V18). Since the V19 cutover the only record of stock: it replaced
- * the old one-row-per-(bank, group) blood_inventory table (Business Rule 24).
- *
- * <h2>What can change, and what cannot</h2>
- * Only {@link #unitsRemaining}, {@link #lastUpdated} and {@link #expiryNoticedAt}
- * ever change. Every other column is the batch's identity — which bank, which
- * group, how many arrived, when it expires, where it came from — and is fixed
- * once the batch exists, in three places: no setter here, {@code updatable = false}
- * on the mapping, and V18's trigger in the database. The expiry date in particular
- * must never move, because issuing earliest-expiry-first relies on the order being
- * stable. A wrongly entered batch is written off (DATA_ENTRY_ERROR) and re-added.
- *
- * Batches are never deleted: one that has been fully used stays as history, with
- * zero units remaining.
+ * One batch of units at one bank with its own expiry date (V18), the only record of stock since V19 (Business Rule 24).
+ * Only units remaining, last updated and expiry noticed change; the identity is fixed, and batches are never deleted.
  */
 @Entity
 @Table(name = "blood_inventory_batches")
@@ -120,9 +107,8 @@ public class BloodInventoryBatch {
     }
 
     /**
-     * Takes units off the shelf: an issue to a hospital or a write-off. Refuses
-     * anything that would take more than is left, the same rule V18's CHECK
-     * enforces in the database, so the mistake fails here at the line that made it.
+     * Takes units off the shelf (an issue or a write-off), refusing more than remain,
+     * the same rule V18's CHECK enforces, so the mistake fails here.
      */
     public void deductUnits(int units) {
         if (units <= 0) {
@@ -136,10 +122,8 @@ public class BloodInventoryBatch {
     }
 
     /**
-     * The same deduction, with last_updated stamped at {@code at} — an instant read
-     * from the application's clock by the caller (the write-off action) — instead of
-     * by the {@link #onUpdate} hook's system clock. The value is set now, so a
-     * response built before the transaction flushes already shows it.
+     * The same deduction, stamping last_updated with the caller's clock instant instead of onUpdate's,
+     * set now so a response built before the flush already shows it.
      */
     public void deductUnits(int units, Instant at) {
         deductUnits(units);
@@ -148,12 +132,8 @@ public class BloodInventoryBatch {
     }
 
     /**
-     * Set by {@link #deductUnits(int, Instant)} so the update hook keeps the instant it
-     * was given. Not a column: it lives only as long as this loaded instance, which is
-     * one transaction, and a freshly loaded batch always starts false. Deliberately
-     * never reset by the hook — Hibernate may run the hook more than once within the
-     * transaction (an automatic flush before a query, then the commit), and resetting
-     * it after the first run let the second overwrite the given instant.
+     * Set by deductUnits(int, Instant) so the update hook keeps the given instant; not a column.
+     * Never reset by the hook, since Hibernate may run it twice in one transaction.
      */
     @Transient
     @Getter(AccessLevel.NONE)

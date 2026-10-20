@@ -11,16 +11,8 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 /**
- * The Audit Log page's data — Business Rule 17.
- *
- * One GET, and deliberately nothing else: no POST (entries are written only as a
- * side effect of the actions they record, never on request), and no PUT, PATCH or
- * DELETE (an entry, once written, is permanent). A request with any other method
- * gets 405 Method Not Allowed — AuditLogIT asserts that, and also checks every
- * mapped route in the application to confirm no other controller exposes one.
- *
- * Under /api/admin/**, which SecurityConfig restricts to ADMIN, so there is no role
- * check to repeat here.
+ * The Audit Log page's data (Business Rule 17): one GET only, since entries are written by the actions they record
+ * and are permanent; any other method is a 405. ADMIN-only via SecurityConfig.
  */
 @RestController
 @RequestMapping("/api/admin/audit-log")
@@ -33,20 +25,8 @@ public class AuditLogController {
     }
 
     /**
-     * One page of recorded administrator actions, newest first.
-     *
-     * {@code page} is 0-based and defaults to 0; {@code size} defaults to 20 and
-     * is capped at 100, so a caller cannot ask for the whole, ever-growing log in
-     * one response the way the original version of this endpoint did. Both are
-     * validated directly on the {@code @RequestParam}s rather than refused inside
-     * the service — a bad value (negative page, size out of range, a non-number)
-     * is never silently corrected, only refused with a 400 naming the field.
-     *
-     * Deliberately no {@code @Validated} on this class: Spring MVC has validated
-     * constraint-annotated {@code @RequestParam}s natively since 6.1, and that is
-     * what {@code GlobalExceptionHandler.handleParameterValidation} expects —
-     * see {@code AppealController.reach}'s comment for why {@code @Validated}
-     * would route the same constraints through the wrong exception type.
+     * One page of entries, newest first: page 0-based (default 0), size default 20 and max 100; bad values are a 400.
+     * No @Validated on this class; see AppealController.reach for why.
      */
     @GetMapping
     public AuditLogPageResponse list(

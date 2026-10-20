@@ -12,26 +12,8 @@ import {
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Blood Bank: Donors (Business Rule 21)
-
-   Third view of the Blood Bank portal, wired to the sidebar's previously
-   dead "Donors" link. Shows every donor who has at least one donation on
-   record at this bank — the schema has no direct donor-to-bank link, so that
-   is the only honest reading of "this bank's donors" (the same reading the
-   Dashboard's own "Registered Donors" stat already uses).
-
-   Wired to GET /api/donors/roster (paginated, filterable) and GET
-   /api/donors/roster/{donorId}/donations (one donor's history at this bank).
-   All the paging/filter arithmetic lives in frontend/src/lib/donorRoster.js
-   and lib/pagination.js — this component only calls it.
-
-   Clicking a row opens that donor's history at this bank in a side panel,
-   with a "Record donation" shortcut that opens the same RecordDonationModal
-   the Blood Inventory screen uses (exported from BloodBankInventory.jsx)
-   rather than a second copy of that flow, pre-filled with the donor's phone
-   number since the panel already knows who they are.
-   ================================================================ */
+/* BloodLink — Blood Bank: Donors (Business Rule 21): donors with a donation at this bank, paged and filtered,
+   with a history side panel and a "Record donation" shortcut reusing RecordDonationModal. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
@@ -51,11 +33,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Waits briefly after typing before turning the search box into a request —
-  // otherwise every keystroke would be its own round trip. Debounced here
-  // rather than in lib/donorRoster.js: timing is not logic worth unit-testing
-  // the way the query-building and page-reset rules are, and keeping it here
-  // means the lib stays pure functions with nothing asynchronous in it.
+  // Debounces the search box so each keystroke isn't a request; kept here so the lib stays pure functions.
   useEffect(() => {
     const handle = setTimeout(() => {
       setFilters((current) => applyDonorRosterFilterChange(current, { q: searchText }));
@@ -72,9 +50,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
     return () => { cancelled = true; };
   }, [filters, bloodBankId]);
 
-  // Once the server reports how many pages actually exist, pull a stale page
-  // number (left over from a filter that just shrank the result set) back
-  // down to the real last page — the same pattern the Audit Log page uses.
+  // Once the real page count is known, pull a stale page number back to the last page.
   useEffect(() => {
     if (!pageData) return;
     const clamped = clampPageToAvailable(filters.page, pageData.totalPages);
@@ -89,9 +65,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
     setFilters((current) => applyDonorRosterFilterChange(current, changes));
   }
 
-  /** After a donation is recorded from this page's shortcut, close both
-   *  overlays and reload the current page — the donor just recorded now has
-   *  a different donationsHere and last-donation date. */
+  /** After recording a donation, close both overlays and reload, since the donor's figures changed. */
   async function handleDonationRecorded() {
     setRecordingDonationFor(null);
     setSelectedDonor(null);
@@ -512,13 +486,8 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
 }
 
 /**
- * One donor's donation history at this bank only — a side panel rather than
- * a modal, so it reads as "more detail about this row" rather than
- * interrupting the roster the way a dialog would.
- *
- * "Record donation" is a shortcut into the existing flow (RecordDonationModal),
- * not a second way to record one: it opens the same dialog this bank's
- * Inventory screen uses, pre-filled with this donor's phone number.
+ * One donor's history at this bank in a side panel; "Record donation" opens the existing RecordDonationModal,
+ * pre-filled with their phone.
  */
 function DonorHistoryPanel({ donor, bloodBankId, onClose, onRecordDonation }) {
   const [history, setHistory] = useState(null);

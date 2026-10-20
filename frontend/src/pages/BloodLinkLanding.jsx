@@ -1,27 +1,7 @@
 import React from "react";
 
-/* ================================================================
-   BloodLink — Public Landing Page
-
-   ▸ FITS THE SCREEN. The page is locked to 100vh and never scrolls.
-     All sizing is in vh/clamp units so it scales with the window.
-
-   ▸ Self-contained: all artwork is inline SVG, so the file renders
-     anywhere with no image assets, bundler or network needed.
-
-   Wired into App.jsx as the root route (no hash) for a signed-out visitor;
-   a signed-in visitor never sees it, and #login / #register still go
-   straight to those screens regardless of this page. The layout and
-   styling are the mockup's, unchanged — the only wiring needed is real
-   navigation: the three Login/Register buttons became <a> tags pointing
-   at the existing #login and #register hash routes App.jsx already
-   listens for, in place of the mockup's inert onClick-less buttons.
-
-   The header's About and Contact are the two links that got no such
-   destination, because no such page exists. They are inert <span>s rather
-   than <a>s — see the comment above them in the header for why that is a
-   fix and not a cosmetic choice.
-   ================================================================ */
+/* BloodLink — Public Landing Page: fits the screen without scrolling, all artwork inline SVG.
+   The root route for signed-out visitors; Login/Register are links to #login and #register. */
 
 export default function BloodLinkLanding() {
   return (
@@ -243,16 +223,8 @@ export default function BloodLinkLanding() {
       {/* ================= HEADER ================= */}
       <header className="bl-header">
         <Logo />
-        {/* About and Contact are deliberately plain <span>s, not links. As
-            <a href="#about"> / <a href="#contact"> they sent the browser to a hash
-            App.jsx's readRoute does not recognise, and its fallback for an
-            unrecognised hash is the Login screen — so clicking "About" signed-out
-            landed the visitor on a login form, with no way back but the browser's
-            Back button. There are no About or Contact pages to point at yet, so
-            they carry no href, no click handler and no focus stop: nothing
-            happens, and nothing promises that anything will. Give each an href
-            once there is a real page behind it — and add the hash to readRoute at
-            the same time, since that is the half whose absence caused this. */}
+        {/* About and Contact are plain <span>s: as links they fell through to the Login screen.
+            Give each an href, and add the hash to readRoute, once a real page exists. */}
         <nav className="bl-nav">
           <span>About</span>
           <span>Contact</span>

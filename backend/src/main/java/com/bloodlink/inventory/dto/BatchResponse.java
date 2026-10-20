@@ -10,11 +10,8 @@ import com.bloodlink.stock.StockPolicy;
 import com.bloodlink.stock.StockPolicy.ExpiryState;
 
 /**
- * One batch of stock, as GET /api/inventory/{bloodBankId}/batches lists it. Bank
- * staff of that bank and administrators only; hospitals never see batch detail.
- *
- * {@code state} and {@code daysUntilExpiry} are worked out here, on the server, from
- * StockPolicy, so the screen never needs its own copy of the expiry rules.
+ * One batch of stock as the batch list shows it (bank staff and admins only);
+ * state and daysUntilExpiry come from StockPolicy on the server.
  */
 public record BatchResponse(
     UUID id,

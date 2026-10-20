@@ -20,76 +20,8 @@ import {
   clampPageToAvailable, isAuditLogEmpty, describeAuditLogPage,
 } from "../lib/auditLogPaging.js";
 
-/* ================================================================
-   BloodLink — Admin Console (System Administrator)
-
-   Covers the administrator use cases from Chapters One & Three:
-     • Manage User Accounts  (all four roles, activate / suspend)
-     • View Reports & Analytics  (donation trends, request outcomes)
-
-   Wired to GET /api/admin/users (one page at a time, searched, filtered and
-   sorted by the server), POST + PATCH /api/admin/users, and
-   GET /api/admin/reports/donations + /requests + /users. Layout, styling and the two
-   inline SVG charts are the mockup's, unchanged; the TRENDS/OUTCOMES/USERS
-   fixtures are replaced with fetched data, and a loading/error pair was
-   added using the same idiom as the other wired portals.
-
-   Three views, switched from the sidebar the way BloodBankPortal switches its
-   own (plain state, no URL routing):
-     • Dashboard (DashboardView) — read-only: the four stat cards and two
-       charts, nothing that changes anything.
-     • User Accounts (UserAccountsView) — the account table with its
-       Suspend/Activate actions, the Create Account flow, and a role filter.
-     • Settings — the shared ProfileSettings screen every role uses for its
-       own name, email and password (Business Rule 16). An administrator
-       edits their own account there exactly as anyone else does, and, like
-       anyone else, cannot change their own phone.
-   The mockup drew the user table beneath the charts on one screen; it was
-   moved to its own page once the table gained a Create Account flow and a
-   donor register that only grows — a list to work through does not belong
-   on a summary screen. Audit Log and Settings were wired later, and Blood
-   Banks and Hospitals after them (Business Rule 19): each lists that type's
-   facilities and lets an administrator add one — create only, no edit or
-   delete. Reports came last (Business Rule 23, AdminReports.jsx): a read-only
-   citywide summary in four sections, each with a CSV download.
-
-   The notification bell is deliberately left exactly as the mockup drew it —
-   a static icon with an always-on dot, no live count. No Notification type
-   has been assigned to ADMIN yet (that is still an open decision), so there
-   is nothing real to wire it to; wiring it to a count of zero would be worse
-   than leaving it inert, since a bell that never lights up reads as broken
-   rather than as "nothing has happened".
-
-   Two stat cards changed meaning rather than just source:
-     • "Partner Facilities" is now the live count of seeded blood banks plus
-       hospitals (GET /api/blood-banks + /api/hospitals), not a hardcoded 6 —
-       true today and still true if a facility is ever added.
-     • "System Alerts" tracked nothing the schema records, so it was not
-       wireable as written. It is replaced by "Pending Requests", sourced
-       from the real request-outcomes report — a genuine citywide figure that
-       keeps the same amber "needs attention" framing the mockup intended.
-
-   "Create Account" is likewise new UI, for the same reason (Business Rule 14):
-   the mockup drew a user table but no way to add to it, because until now staff
-   and administrator accounts were inserted into the database by hand. The button,
-   its form and the one-time credentials screen are all built from the tokens
-   already declared below. The credentials screen is deliberately the loudest
-   thing on this page — the generated password is shown exactly once and cannot
-   be retrieved afterwards, so an administrator who closes it without reading it
-   has to create the account again.
-
-   The user table's Action column is new UI: the mockup's own table had no
-   button to suspend or activate anyone, only a status badge. Built from this
-   file's own tokens (navy/red/amber/shadow/radius already declared below),
-   the same justification the appeal button and batch modal used elsewhere —
-   not a deviation from an existing design, a control the mockup never drew.
-   Activate needs no confirmation (restoring access is the safe direction,
-   the same asymmetry the Blood Bank Dashboard already gives Approve/Reject);
-   Suspend opens a light confirmation, because it denies a real person access
-   immediately — though never irreversibly, since any administrator can undo
-   it with one more click, which is why this stops short of the Dashboard's
-   heavier Reject dialog.
-   ================================================================ */
+/* BloodLink — Admin Console: Dashboard (stats and charts), User Accounts (search, create, edit, suspend),
+   Audit Log, Blood Banks/Hospitals, Reports and Settings, switched from the sidebar. */
 
 /* Shared SVG stroke presets (declared before any component uses them) */
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -110,15 +42,12 @@ function statusLabel(status) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-/** ROLE_LABEL, minus DONOR: the three roles an administrator may create here.
- *  Donors self-register (Business Rule 8), and the server refuses a DONOR on this
- *  endpoint regardless — offering it would be offering something that cannot work. */
+/** The three roles an administrator may create here; donors self-register (Business Rule 8)
+ * and the server refuses DONOR anyway. */
 const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
 
-/** The views this console switches between. Held as plain
- *  state rather than a URL hash, the same way BloodBankPortal switches Dashboard /
- *  Blood Inventory: App.jsx's hash routing chooses which portal a role sees, and
- *  nothing inside a portal has ever needed its own address. */
+/** The views this console switches between, held as plain state like BloodBankPortal's,
+ * since App.jsx's hash routing only picks the portal. */
 const VIEW = {
   DASHBOARD: "dashboard", USERS: "users", BANKS: "banks", HOSPITALS: "hospitals",
   REPORTS: "reports", AUDIT: "audit", SETTINGS: "settings",
@@ -139,11 +68,8 @@ const HEADINGS = {
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
-/** How each audit action reads, and the badge tone it wears: the two that remove
- *  or restrict access in red and green (the same pair Suspend/Activate use), a
- *  creation in navy, an edit in amber. A facility being added is a creation too,
- *  so it wears the same navy; the Subject column says what kind of thing it was.
- *  Stock written off a batch (Business Rule 24) is blood lost, so it wears red. */
+/** How each audit action reads and its badge tone: suspend red, reactivate green, creations (facilities too) navy,
+ * edits amber, and a write-off red (blood lost). */
 const AUDIT_ACTION = {
   ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
   ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
@@ -154,9 +80,7 @@ const AUDIT_ACTION = {
   STOCK_WRITTEN_OFF: { label: "Written off", tone: "ad-au-written-off" },
 };
 
-/** The line under an audit entry's subject: the account's role, which kind of
- *  facility it is (Business Rule 19 — a facility has no role), or a stock batch
- *  (a write-off; the server names it by group, expiry date and bank). */
+/** The line under an audit entry's subject: the account's role, the kind of facility, or a stock batch. */
 function auditSubjectKind(entry) {
   if (entry.targetType === "BLOOD_BANK") return "Blood bank";
   if (entry.targetType === "HOSPITAL") return "Hospital";
@@ -182,14 +106,8 @@ const FACILITY_KIND = {
 const ROLE_FILTERS = ["ALL", "DONOR", "HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
 
 /**
- * The console shell: sidebar, header, data loading, and which view is showing.
- *
- * The account counts (GET /api/admin/reports/users) are loaded here and shared: the
- * Dashboard's "Total Users" and "Registered Donors" cards and the User Accounts role
- * buttons all read them, and the User Accounts page reloads them after it creates or
- * suspends an account, so the cards are right when the administrator switches back.
- * The account list itself is not loaded here at all any more — the User Accounts page
- * fetches one page at a time — so no screen ever downloads every account.
+ * The console shell: sidebar, header, data loading and the current view. Account counts are loaded here and shared,
+ * reloaded after account changes; the account list itself is paged by the User Accounts view.
  */
 export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [view, setView] = useState(VIEW.DASHBOARD);
@@ -197,11 +115,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [userCounts, setUserCounts] = useState(null);
   const [trends, setTrends] = useState([]);
   const [outcomes, setOutcomes] = useState(null);
-  // The facility reference lists, kept rather than counted away: the stat card
-  // needs their total, and the Create Account form needs the rows themselves for
-  // its hospital / blood bank picker. Both come from the listings this page
-  // already fetched (GET /api/blood-banks, GET /api/hospitals) — the same
-  // endpoints every other picker in the app uses, not a second admin-only one.
+  // Facility lists from the public endpoints, kept for the stat card's total and the Create Account pickers.
   const [banks, setBanks] = useState([]);
   const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -219,9 +133,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
     return { countsData, trendsData, outcomesData, banks, hospitals };
   }
 
-  /** Re-reads the account counts after the User Accounts page changes an account.
-   *  A failure leaves the old numbers on screen: a stat card a moment out of date is
-   *  a smaller harm than an error banner over a change that did succeed. */
+  /** Re-reads account counts after an account change; on failure the old numbers stay rather than an error banner. */
   async function reloadUserCounts() {
     try {
       setUserCounts(await getUserCounts());
@@ -252,9 +164,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   }, []);
 
   /**
-   * After the administrator saves their own name or email in Profile Settings:
-   * passes it up to App (header avatar, stored session). The User Accounts table
-   * needs nothing patched — it fetches its page fresh every time it is opened.
+   * Passes the administrator's own name/email change up to App; the accounts table refetches itself anyway.
    */
   function handleUserUpdated(changes) {
     onUserUpdated?.(changes);
@@ -745,17 +655,15 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           </div>
           <div className="ad-top-right">
             <div className="ad-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            {/* Deliberately not a <NotificationBell> — see the file header
-                comment. No Notification type is addressed to ADMIN yet, so
-                this stays the mockup's own static icon. */}
+            {/* Deliberately not a <NotificationBell>: no Notification type is addressed to ADMIN yet,
+                so this stays the mockup's static icon. */}
             <div className="ad-bell"><BellIcon /></div>
             <div className="ad-avatar">{initials(user.fullName)}</div>
           </div>
         </div>
 
-        {/* Settings needs none of the console's overview data, so it is not held
-            behind that data's loading state or its errors — an administrator whose
-            reports failed to load can still change their own password. */}
+        {/* Settings is not held behind the overview data's loading or errors,
+            so an administrator can still change their password. */}
         {view === VIEW.SETTINGS && <ProfileSettings onUserUpdated={handleUserUpdated} />}
 
         {/* Like Settings, the log fetches its own data and does not wait on the
@@ -811,14 +719,8 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
 }
 
 /**
- * Dashboard — the read-only system summary.
- *
- * Four stat cards and two charts, and nothing that changes anything. Account
- * management used to share this screen as a table underneath the charts; it now
- * lives on its own page (UserAccountsView), so this one answers only "how is the
- * system doing?" and never "what do I need to do?". The cards and charts are
- * exactly as they were. The two user counts come from GET /api/admin/reports/users,
- * counted by the database, rather than from downloading every account.
+ * Dashboard: the read-only system summary, four stat cards and two charts;
+ * the user counts come from GET /api/admin/reports/users.
  */
 function DashboardView({ counts, trends, outcomes, facilityCount }) {
   const totalUsers = roleCount(counts, "");
@@ -870,25 +772,8 @@ function DashboardView({ counts, trends, outcomes, facilityCount }) {
 }
 
 /**
- * User Accounts — every account in the system, and everything an administrator
- * can do to one: create it, suspend it, reactivate it.
- *
- * The same columns, Edit / Suspend / Activate buttons and confirmation, Create
- * Account dialog and one-time credentials screen (Business Rule 14) as before.
- *
- * <h3>One page at a time, from the server</h3>
- * Search, the role buttons, the status filter, the sort and the page all go to
- * GET /api/admin/users as one request, and the database returns only the rows on
- * screen. Nothing else is fetched in the background: a new page is requested only
- * when Previous/Next, a filter, the sort, the page size or the (debounced) search
- * changes. All of that logic lives in lib/userAccounts.js and lib/pagination.js;
- * this component only calls it.
- *
- * After an action changes an account, the page on screen is fetched again rather
- * than patched by hand, because the change may have moved the account out of the
- * current filter or sort position; if that leaves the page past the end, it is
- * pulled back to the last page, as on the Donors page. The role-button counts come
- * from the console shell's count endpoint and are reloaded after a create.
+ * User Accounts: create, edit, suspend and reactivate accounts. Search, filters, sort and paging go to the server
+ * one page at a time (logic in lib/userAccounts.js); after a change the page is refetched, not patched.
  */
 function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals }) {
   const [query, setQuery] = useState(initialUserAccountsState);
@@ -902,9 +787,7 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
   const [reloadToken, setReloadToken] = useState(0);
   const reloadPage = () => setReloadToken((token) => token + 1);
 
-  // Waits until typing pauses before searching, the same 350ms the Donors page uses,
-  // so the database is not asked once per letter. Returning the same state object
-  // when the text has not really changed means no extra request (or page reset).
+  // Waits 350ms after typing pauses before searching; unchanged text returns the same state, so no extra request.
   useEffect(() => {
     const handle = setTimeout(() => {
       setQuery((current) => (current.q.trim() === searchText.trim()
@@ -914,9 +797,7 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
     return () => clearTimeout(handle);
   }, [searchText]);
 
-  // Fetches exactly one page whenever the query (or the reload token) changes — and
-  // at no other time. A response for a query the administrator has already moved on
-  // from is dropped rather than shown.
+  // Fetches exactly one page whenever the query or reload token changes, dropping responses for stale queries.
   useEffect(() => {
     let cancelled = false;
     setLoadingPage(true);
@@ -945,16 +826,12 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
     setQuery((current) => clearUserAccountFilters(current));
   }
 
-  // The Create Account form, and the credentials screen that replaces it on
-  // success. Separate pieces of state because the second outlives the first:
-  // the form closes the moment the account is created, and the password stays
-  // on screen until the administrator dismisses it themselves.
+  // The Create Account form and its credentials screen, separate state because the password screen
+  // outlives the form until dismissed.
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [newCredentials, setNewCredentials] = useState(null);
 
-  // Which row's status is mid-write, and the last write failure — mirrors the
-  // Blood Bank Dashboard's actingOn/actionError pair, keyed to one row rather
-  // than shown as a page-level banner.
+  // Which row's status is mid-write and the last write failure, shown against that row.
   const [updatingUserId, setUpdatingUserId] = useState(null);
   const [actionError, setActionError] = useState(null);
 
@@ -973,10 +850,7 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
     return () => { mountedRef.current = false; };
   }, []);
 
-  /** Escape closes the confirmation, and focus moves to Cancel — the same
-   *  keyboard handling the Dashboard's Reject dialog already uses, so the two
-   *  confirmations in this app behave identically even though this one is
-   *  visually lighter. */
+  /** Escape closes the confirmation and focus moves to Cancel, as in the Dashboard's Reject dialog. */
   useEffect(() => {
     if (!confirmingSuspend) return;
 
@@ -989,9 +863,7 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
   }, [confirmingSuspend]);
 
   /**
-   * Writes one status change, then fetches the page again rather than patching the
-   * row by hand — under the Active or Suspended filter the account may no longer
-   * belong on this page at all, and only the server's answer says so.
+   * Writes one status change, then refetches the page, since the account may no longer belong under the filter.
    */
   async function applyStatus(targetUserId, status) {
     setUpdatingUserId(targetUserId);
@@ -1022,18 +894,8 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
   }
 
   /**
-   * Called by the form once the account exists, with the server's 201 body.
-   *
-   * The table fetches its current page again (the new account may or may not belong
-   * on it, given the sort), and the role-button and Dashboard counts are reloaded.
-   * If a role or status filter would hide the new account, that filter switches to
-   * show it (stateAfterAccountCreated), as the console always did, so the
-   * administrator's first sight of the account they just made is not its absence.
-   *
-   * The password is held in state only for as long as the credentials screen is
-   * open, and is never written to storage — it cannot be fetched again, so
-   * keeping a copy anywhere would be keeping the one thing hashing exists to
-   * avoid keeping.
+   * After creation: refetch the page and reload counts, switching a filter that would hide the new account.
+   * The password lives in state only while the credentials screen is open, never stored.
    */
   function handleAccountCreated(result) {
     const next = stateAfterAccountCreated(query, result.account);
@@ -1064,9 +926,8 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
           </div>
         </div>
 
-        {/* The role filter: the same buttons as before, now applied by the server.
-            Counts are totals per role from the database. aria-pressed tells a
-            screen reader which role is narrowing the table. */}
+        {/* The role filter buttons, applied by the server, with per-role totals from the database;
+            aria-pressed marks the active role. */}
         <div className="ad-filters" role="group" aria-label="Filter accounts by role">
           {ROLE_FILTERS.map((role) => {
             const value = role === "ALL" ? "" : role;
@@ -1148,10 +1009,7 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
               {!loadError && rows.map((u) => {
                 const facility = u.bloodBankName ?? u.hospitalName;
                 const busy = updatingUserId === u.id;
-                // The backend refuses this too (409), but a button that
-                // always fails is worse than one that explains itself —
-                // the same reasoning BloodBankDashboard already gives
-                // canFulfil for a request this bank did not approve.
+                // The backend refuses self-suspension (409) too, but a button that explains itself is better.
                 const isSelf = u.id === user.id;
 
                 return (
@@ -1170,9 +1028,8 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
                     <td className="ad-muted">{formatRelativeTime(u.createdAt)}</td>
                     <td>
                       <div className="ad-acts">
-                        {/* Disabled on your own row for the same reason the server
-                            refuses it: Business Rule 16 keeps every account holder,
-                            administrators included, from changing their own phone. */}
+                        {/* Disabled on your own row, as the server refuses it:
+                            nobody changes their own phone (Business Rule 16). */}
                         <button
                           type="button"
                           className="ad-act ad-act--edit"
@@ -1282,16 +1139,8 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
 }
 
 /**
- * Edit another account's phone and facility — Business Rule 17.
- *
- * Pre-filled with what the account has now, so saving without touching anything
- * sends the current values back; Save stays disabled until something differs, and
- * the server records nothing for a save that changes nothing anyway.
- *
- * The facility picker appears only for the two staff roles, and it is the one the
- * account's existing role calls for — role itself is shown but not editable here.
- * Changing it is deliberately out of scope: a donor account has a linked donor
- * record a role change would affect, and that needs a decision of its own.
+ * Edit another account's phone and facility (Business Rule 17), pre-filled; Save enables only on a change.
+ * The facility picker matches the existing role, which itself is not editable here.
  */
 function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
   const needsHospital = account.role === "HOSPITAL_STAFF";
@@ -1431,19 +1280,8 @@ function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
 }
 
 /**
- * Blood Banks / Hospitals — one page, used for both (Business Rule 19).
- *
- * Lists that type's facilities, with a "Create New" button at the top that opens
- * an inline form above the list. Create only: there is no edit or delete, because
- * changing or removing a facility means deciding what happens to the staff, stock
- * and requests tied to it — a separate, later decision. No search, filtering or
- * paging either; at two of each today, the whole list fits on screen.
- *
- * The list is the one the console shell already fetched (GET /api/blood-banks or
- * /api/hospitals) and shares with the Dashboard's Partner Facilities card and the
- * User Accounts pickers. A new facility is added to that shared list from the 201
- * response, so it appears here, in that card and in those pickers at once, without
- * a reload.
+ * Blood Banks / Hospitals (Business Rule 19): the list plus an inline "Create New" form; create only.
+ * The list is the shell's shared one, so a new facility appears everywhere without a reload.
  */
 function FacilitiesView({ kind, facilities, setFacilities }) {
   const [creating, setCreating] = useState(false);
@@ -1517,12 +1355,8 @@ function FacilitiesView({ kind, facilities, setFacilities }) {
 }
 
 /**
- * The inline form behind "Create New". Three fields, all required; the server
- * checks them too and its messages are shown beside the field they concern.
- *
- * A duplicate name comes back as a 409 with a message naming it, shown at the top
- * of the form. The contact phone is sent as typed: it is a facility's front-desk
- * number, not a login, so it is not reformatted (Business Rule 13 does not apply).
+ * The inline "Create New" form: three required fields, server messages shown by each field;
+ * a duplicate name is a 409, and the phone is sent as typed.
  */
 function CreateFacilityForm({ kind, onCancel, onCreated }) {
   const [form, setForm] = useState({ name: "", location: "", contactPhone: "" });
@@ -1611,21 +1445,8 @@ function CreateFacilityForm({ kind, onCancel, onCreated }) {
 }
 
 /**
- * Audit Log — every administrator action, newest first (Business Rule 17), one
- * page at a time.
- *
- * Read-only by construction, not just by omission of buttons: the backend has no
- * endpoint that changes or removes an entry, and the database refuses it too. So
- * this table has no row actions at all.
- *
- * Fetched fresh on every page or page-size change rather than kept with the
- * console's other data: entries are added by actions taken on other pages (User
- * Accounts), and a log that needed a reload to show what was just done would read
- * as one that missed it.
- *
- * All of the paging arithmetic — disabling Previous/Next at the ends, clamping a
- * stale page number once the server reports the real total, the empty-log check —
- * lives in frontend/src/lib/auditLogPaging.js. This component only calls it.
+ * Audit Log (Business Rule 17): read-only, newest first, one page at a time, fetched fresh on each change
+ * so new entries always show. Paging arithmetic lives in lib/auditLogPaging.js.
  */
 function AuditLogView() {
   const [page, setPage] = useState(0);
@@ -1642,10 +1463,7 @@ function AuditLogView() {
     return () => { cancelled = true; };
   }, [page, size]);
 
-  // Once the server has reported how many pages actually exist, pull a stale
-  // page number — left over from switching the page size, most likely — back
-  // down to the real last page instead of leaving the view stuck on one that no
-  // longer exists.
+  // Once the real page count is known, pull a stale page number back to the last page.
   useEffect(() => {
     if (!pageData) return;
     const clamped = clampPageToAvailable(page, pageData.totalPages);
@@ -1653,9 +1471,7 @@ function AuditLogView() {
   }, [pageData, page]);
 
   if (error) {
-    // A failed load here is never a dead session (apiRequest only clears one on
-    // a session-level 401, which this is not), so the Admin Console stays open
-    // and the administrator can simply try again.
+    // A failed load here never ends the session, so the administrator can simply try again.
     return <div className="ad-error"><div className="ad-error-msg">{error}</div></div>;
   }
   if (!pageData) {
@@ -1743,23 +1559,8 @@ function AuditLogView() {
 }
 
 /**
- * The Create Account form.
- *
- * Role comes first because everything below it depends on that answer: a hospital
- * staff account needs a hospital, a blood bank staff account needs a bank, and an
- * administrator needs neither. The matching picker appears only once the role that
- * requires it is chosen, so the form never shows a field that would be refused if
- * it were filled in (Business Rule 14 rejects, rather than ignores, a facility sent
- * for an administrator).
- *
- * Donor is not an option, and this is not merely a display decision: donors create
- * their own accounts through public registration, which also writes the Donor
- * profile row — blood group, date of birth, address — that this form has no fields
- * for. The server refuses the role too; the form simply never offers something that
- * could not work.
- *
- * No password field either. The server generates one and returns it once — see
- * NewAccountCredentials, which is what replaces this dialog on success.
+ * The Create Account form: role first, then only the facility picker that role needs (Business Rule 14).
+ * No Donor option and no password field; the server generates one (see NewAccountCredentials).
  */
 function CreateAccountDialog({ banks, hospitals, onCancel, onCreated }) {
   const [form, setForm] = useState({
@@ -1771,9 +1572,7 @@ function CreateAccountDialog({ banks, hospitals, onCancel, onCreated }) {
   const cancelRef = useRef(null);
   const roleRef = useRef(null);
 
-  /** Escape closes the form, and focus starts on the role selector — the field
-   *  every other field's meaning depends on. Same handling as the suspend
-   *  confirmation, so both dialogs behave identically at the keyboard. */
+  /** Escape closes the form and focus starts on the role selector, as in the suspend confirmation. */
   useEffect(() => {
     roleRef.current?.focus();
     const onKeyDown = (event) => { if (event.key === "Escape") onCancel(); };
@@ -1821,9 +1620,7 @@ function CreateAccountDialog({ banks, hospitals, onCancel, onCreated }) {
       });
       onCreated(created);
     } catch (err) {
-      // Covers a duplicate phone or email (409), a bad phone number or a missing
-      // facility (400, keyed to the field). The backend's messages are written
-      // for display, so they are shown verbatim.
+      // Shows a duplicate phone/email (409) or a bad phone or missing facility (400) verbatim, as worded by the backend.
       setError(err.message);
       setFieldErrors(err.fieldErrors ?? {});
       setSubmitting(false);
@@ -1942,17 +1739,8 @@ function CreateAccountDialog({ banks, hospitals, onCancel, onCreated }) {
 }
 
 /**
- * The one-time credentials screen.
- *
- * This exists because of a fact about the system rather than a design preference:
- * only the BCrypt hash of the password is stored, so there is no endpoint that
- * could show it again — not to this administrator, not to anyone. If it is lost,
- * the account needs a new password, not a lookup. The warning below says so
- * plainly for that reason, and this dialog deliberately has no scrim-click or
- * Escape dismissal: closing it is a decision, not something to do by accident.
- *
- * The administrator relays the password to the new staff member directly. BloodLink
- * sends no email or SMS, so there is no other channel it could travel down.
+ * The one-time credentials screen: only the hash is stored, so the password can never be shown again.
+ * No scrim-click or Escape dismissal; the administrator relays it in person.
  */
 function NewAccountCredentials({ result, onDone }) {
   const [copied, setCopied] = useState(false);
@@ -1970,9 +1758,7 @@ function NewAccountCredentials({ result, onDone }) {
       // on screen, and a confirmation that never resets reads as stuck.
       setTimeout(() => setCopied(false), 2500);
     } catch {
-      // Clipboard access can be refused outright (an insecure origin, a browser
-      // permission). Saying so is better than a button that silently does
-      // nothing, since the password is still readable right above it.
+      // Clipboard access can be refused, so say so rather than silently failing; the password is still visible.
       setCopyFailed(true);
     }
   }
@@ -2032,15 +1818,8 @@ function NewAccountCredentials({ result, onDone }) {
 }
 
 /**
- * A light confirmation before a suspension is submitted.
- *
- * Deliberately not the Blood Bank Dashboard's RejectConfirmation pattern: that
- * dialog earns its warning block and scary framing because a bank cannot undo
- * its own decline and the request leaves its queue for good. Suspending an
- * account is not like that — it denies access immediately, which is real, but
- * any administrator can reverse it with one more click a moment later, so the
- * dialog says only what is actually true: who this affects and what happens,
- * nothing more alarming than that.
+ * A light confirmation before suspending: access is denied immediately but any administrator can reverse it,
+ * so it says only who is affected and what happens.
  */
 function SuspendConfirmation({ targetUser, cancelRef, onCancel, onConfirm }) {
   return (
@@ -2105,10 +1884,8 @@ function rolePill(role) {
 }
 
 /**
- * The donut's four slices, percentages derived from the server's real counts.
- * Rounded independently rather than with largest-remainder adjustment, so the
- * four percentages can land a point or two off 100 in total — a cosmetic
- * rounding artefact common to this kind of legend, not a data error.
+ * The donut's four slices from the server's counts, each rounded independently,
+ * so the total may be a point or two off 100.
  */
 function outcomeSlices(outcomes) {
   const pct = (n) => (outcomes.total === 0 ? 0 : Math.round((n / outcomes.total) * 100));
@@ -2138,11 +1915,8 @@ function Stat({ tone, icon, figure, label, note }) {
 /* ================= CHARTS ================= */
 
 /**
- * The vertical scale is derived from the real data rather than a hardcoded 200:
- * six months of a real, small system might never clear single digits, and
- * fixing the axis at 200 would draw every bar as a sliver. Rounded up to a
- * multiple of 4 (minimum 4) so the four gridlines above zero are always whole
- * numbers, the same way the mockup's fixed 0/50/100/150/200 ladder was.
+ * The vertical scale follows the data (rounded up to a multiple of 4, minimum 4)
+ * so small real numbers aren't drawn as slivers.
  */
 function TrendChart({ data }) {
   const CW = 430, CH = 180, PAD_L = 34, PAD_B = 26, PAD_T = 12;

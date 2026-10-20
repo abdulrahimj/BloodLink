@@ -36,13 +36,8 @@ import com.bloodlink.web.error.IncorrectCurrentPasswordException;
 import com.bloodlink.web.error.InvalidFieldException;
 
 /**
- * Business Rule 16 at the service: what a signed-in user may change about their own
- * account, and what proof a password change needs.
- *
- * Runs the real BCryptPasswordEncoder, not a mock. Every password assertion here is
- * "does this plaintext verify against that stored hash", and a mocked encoder would
- * answer whatever the test told it to — which is exactly how a check that never
- * really compares anything passes.
+ * Business Rule 16 at the service: what users may change about their own account and what a password change needs.
+ * Uses the real BCryptPasswordEncoder so password checks really compare.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -239,9 +234,7 @@ class AccountServiceTest {
 
     @Test
     void thePhoneRefusalSaysWhyWithoutPromisingAFixThatDoesNotExist() {
-        // Explains the reason (it is the login) and stops there: no endpoint lets
-        // anyone edit a phone after creation, so the message must not send the user
-        // off to ask for something nobody can do in the app.
+        // Explains why (it is the login) without pointing at an edit that doesn't exist anywhere in the app.
         assertThatThrownBy(() -> service.updateMyDetails(account.getId(),
                 details("X", "x@example.com", Map.of("phone", "+23276111222"))))
             .hasMessageContaining("how you sign in")

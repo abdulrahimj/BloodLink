@@ -8,28 +8,8 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
- * The one definition of what "expired", "usable" and "expiring soon" mean for a
- * batch of stock — the batch-stock redesign. Every stock figure the application
- * shows will be built on these answers (from Stage 2), so the Inventory screen, the
- * dashboard, hospital availability, alerts, appeals and the Admin Reports cannot
- * disagree about which units count. The frontend will be sent the result rather
- * than working it out again.
- *
- * <h2>The rule</h2>
- * A batch's expiry date is the last day it may be used, <b>inclusive</b>: it is
- * usable through the whole of that date and expired from 00:00 UTC the next day.
- * <ul>
- *   <li><b>Expired</b>: expiry date before today.</li>
- *   <li><b>Usable</b>: expiry date today or later. (Whether any units are left is a
- *       separate question about the batch, not about its date.)</li>
- *   <li><b>Expiring soon</b>: usable, and expiring within
- *       {@link #EXPIRING_SOON_WINDOW_DAYS} days, today included.</li>
- * </ul>
- * "Today" is the UTC date from the injected {@link Clock} (see TimeConfig), which
- * is what makes the midnight boundary testable.
- *
- * Each rule comes in two forms: a static one that takes "today" explicitly, for
- * pure logic and tests, and an instance one that reads today from the clock.
+ * The one definition of expired, usable and expiring soon for a batch, so every figure agrees.
+ * Expiry is the last usable day inclusive; "today" is the UTC date from the injected Clock.
  */
 @Component
 public class StockPolicy {
@@ -38,18 +18,14 @@ public class StockPolicy {
     public static final int EXPIRING_SOON_WINDOW_DAYS = 28;
 
     /**
-     * The default shelf life given to units from a recorded donation: expiry =
-     * donation date + 42 days, the usual life of red cells in additive solution.
-     * PROVISIONAL: the project owner is confirming the real value with the blood
-     * bank staff, and staff will be able to edit the date when recording.
+     * Default shelf life of donated units: donation date + 42 days (red cells in additive solution).
+     * Provisional until confirmed with the blood bank staff.
      */
     public static final int DONATION_SHELF_LIFE_DAYS = 42;
 
     /**
-     * The furthest ahead an expiry date entered by staff may be: 365 days from today,
-     * today itself being the earliest. A typo guard (a year typed as 2027 instead of
-     * 2026 would otherwise make a batch look good for a year), agreed with the project
-     * owner. Applies to Add New Batch and to Record Donation's optional expiry date.
+     * The furthest an entered expiry may be: 365 days from today (today earliest), a typo guard
+     * for Add New Batch and Record Donation.
      */
     public static final int MAX_ENTERED_EXPIRY_DAYS = 365;
 
@@ -117,10 +93,8 @@ public class StockPolicy {
     }
 
     /**
-     * What is wrong with an expiry date typed by staff, or empty if it is acceptable:
-     * it must be today or later, and at most {@link #MAX_ENTERED_EXPIRY_DAYS} days
-     * away. Returned as a message rather than thrown, so each caller can attach it to
-     * its own request field.
+     * What is wrong with a staff-entered expiry date, or empty: today to MAX_ENTERED_EXPIRY_DAYS away.
+     * Returned rather than thrown so each caller attaches it to its own field.
      */
     public static Optional<String> problemWithEnteredExpiry(LocalDate expiryDate, LocalDate today) {
         if (expiryDate.isBefore(today)) {

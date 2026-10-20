@@ -58,15 +58,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Covers CLAUDE.md's own numbers exactly (Business Rule 3: below 15 = Critical,
- * below 40 = Low), the "always eight rows" contract both frontend screens assume,
- * the own-bank-only write rule agreed with the project owner, and, since batch-level
- * stock (Business Rule 24), that every figure is usable stock and that each new
- * batch keeps its own expiry date.
- *
- * The per-group figures themselves are summed in SQL; this class stubs what that
- * query returns and checks what the service builds from it. The SQL is proven
- * against a real database in BatchStockCutoverIT.
+ * Business Rule 3's thresholds, the always-eight-rows contract, own-bank-only writes, usable-stock figures
+ * and each batch's own expiry (Business Rule 24). The SQL itself is proven in BatchStockCutoverIT.
  */
 @ExtendWith(MockitoExtension.class)
 class InventoryServiceTest {
@@ -93,10 +86,7 @@ class InventoryServiceTest {
 
     @BeforeEach
     void setUp() {
-        // A real AppealCooldownPolicy and a real BatchStockService over mocked
-        // repositories, not mocks of them — the same choice RequestServiceTest makes
-        // for ActingBankResolver. Stubbing them would make every assertion below a
-        // test of the stub rather than of the rule the screen actually gets.
+        // A real AppealCooldownPolicy and BatchStockService over mocked repositories, so the rules are tested.
         StockPolicy stockPolicy = new StockPolicy(CLOCK);
         service = new InventoryService(
             bloodBankRepository, batchRepository, allocationRepository, writeOffRepository,
@@ -107,9 +97,7 @@ class InventoryServiceTest {
     }
 
     /**
-     * A signed-in staff member of BANK_ID — the only kind of caller that may add stock
-     * since Stage 3b. The Add New Batch tests below used an ADMIN principal purely as
-     * a shortcut past this lookup; ADMIN is now refused, so they use this instead.
+     * A signed-in staff member of BANK_ID, the only caller that may add stock since Stage 3b.
      */
     private AuthenticatedUser ownBankStaff() {
         AuthenticatedUser principal = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.BLOOD_BANK_STAFF);
@@ -162,14 +150,8 @@ class InventoryServiceTest {
     }
 
     /**
-     * The Send Appeal button's state travels with the stock it is derived from
-     * (Business Rule 12), so the screen cannot draw the button from one moment's
-     * cooldown and another moment's units.
-     *
-     * Also the clearest place to see the two threshold sets side by side: at 35
-     * units the badge says Low (Rule 3's Low band runs to 40) while the button is
-     * unavailable (an appeal needs fewer than 30). Both are correct, and they are
-     * meant to disagree.
+     * The Send Appeal state travels with its stock (Business Rule 12); at 35 units the badge says Low
+     * while the button is unavailable, deliberately.
      */
     @Test
     void everyRowCarriesItsAppealButtonStateAndTheTwoThresholdSetsDifferOnPurpose() {
@@ -191,10 +173,7 @@ class InventoryServiceTest {
     }
 
     /**
-     * Expired units are not stock (Business Rule 24). A group holding 35 units on the
-     * shelf, 25 of them in expired batches, is a Critical group with 10 usable units —
-     * and so may appeal, where the old one-row table would have shown a Low group of
-     * 35 that could not.
+     * Expired units are not stock (Business Rule 24): 35 units with 25 expired is a Critical 10 that may appeal.
      */
     @Test
     void expiredUnitsAreReportedSeparatelyAndNeverCountTowardsTheBadgeOrTheAppeal() {
@@ -212,9 +191,7 @@ class InventoryServiceTest {
     }
 
     /**
-     * A cooldown this bank holds turns its row's button to "Appeal Sent." — the
-     * whole point of the feature, and the part that could not work before, since
-     * nothing recorded that an appeal had been sent at all.
+     * A running cooldown turns the row's button to "Appeal Sent.".
      */
     @Test
     void aRowWithARunningCooldownReportsItRatherThanOfferingTheButton() {
@@ -254,10 +231,7 @@ class InventoryServiceTest {
     }
 
     /**
-     * A new batch is the only way a group's usable units can rise, so it is the only
-     * place an appeal cooldown can be recovered out of (Business Rule 12). A batch
-     * that takes the group back over the threshold that triggered its cooldown
-     * deletes that cooldown for good.
+     * A batch that takes the group back over its cooldown's trigger threshold deletes that cooldown (Business Rule 12).
      */
     @Test
     void addBatchClearsACooldownWhenTheBatchCrossesTheThresholdThatTriggeredIt() {
@@ -371,12 +345,8 @@ class InventoryServiceTest {
     }
 
     /**
-     * Business Rule 7's merge is gone (Business Rule 24): a new batch is stored with
-     * its OWN expiry date, never the earlier one already on the shelf. The concern the
-     * old rule protected still holds, through the group's figure: the earlier-expiring
-     * stock is still on the shelf, so the group's expiry date shown is still that
-     * earlier date — and now it stops being shown once those units are gone, instead
-     * of sticking to the group for ever.
+     * A new batch keeps its own expiry date (Business Rule 24), while the group still shows the earlier expiry
+     * until those units are gone.
      */
     @Test
     void addBatchKeepsTheNewBatchsOwnDateAndTheGroupStillShowsTheEarlierExpiry() {

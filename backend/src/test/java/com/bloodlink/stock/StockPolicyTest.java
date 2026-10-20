@@ -13,9 +13,7 @@ import com.bloodlink.config.TimeConfig;
 import com.bloodlink.stock.StockPolicy.ExpiryState;
 
 /**
- * The definitions every stock figure will be built on, tested against a fixed
- * clock: expired, usable, expiring soon, and the exact moment a batch changes from
- * one to the other (00:00:00 UTC the day after its expiry date).
+ * Expired, usable and expiring soon against a fixed clock, including the 00:00 UTC flip after the expiry date.
  */
 class StockPolicyTest {
 

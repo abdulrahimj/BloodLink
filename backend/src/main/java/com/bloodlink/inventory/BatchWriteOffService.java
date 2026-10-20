@@ -30,16 +30,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Writing stock off: units of one batch discarded, with a reason, and recorded
- * (Business Rule 24, Stage 3 of the batch-stock redesign). The other way units leave
- * a shelf besides issuing them to a hospital request, and the way expired units —
- * shown on every screen but never counted as stock — are finally taken off it.
- *
- * Who may: active blood bank staff, for their own bank's batches only. An
- * administrator may not — discarding units is a physical act on a bank's own shelf,
- * and ADMIN's access to stock is read-only (Stage 3b). The rule is InventoryService's,
- * asked through {@link InventoryService#requireStockChangeAccess}, so that adding and
- * writing off stock can never be governed by two different copies of it.
+ * Writing units off one batch with a reason (Business Rule 24), the way expired units finally leave the shelf.
+ * Active staff of the batch's own bank only, never ADMIN, via InventoryService.requireStockChangeAccess.
  */
 @Service
 public class BatchWriteOffService {
@@ -80,37 +72,8 @@ public class BatchWriteOffService {
     }
 
     /**
-     * Writes {@code units} off one batch. In order, and why in that order:
-     * <ol>
-     *   <li>The caller must be active staff of this bank (403 otherwise, ADMIN
-     *       included) and the bank must exist (404) — the same rule as Add New
-     *       Batch. Nothing is read or written for a caller who fails it.</li>
-     *   <li>The request is checked on its own: units at least 1, a known reason, and
-     *       a note that meets the rules (required for OTHER, at most 500 characters).
-     *       Each is a 400 on its own field. Nothing is locked yet, so a malformed
-     *       request never holds up a contribution.</li>
-     *   <li>The batch row is locked ({@code FOR NO KEY UPDATE}, the same lock a
-     *       contribution takes), then must belong to this bank: one of another bank,
-     *       or none at all, is the same 404, so a bank learns nothing about another
-     *       bank's stock by guessing ids. A write-off takes this one lock and no
-     *       other, so it cannot deadlock with a contribution, which takes the
-     *       request's lock first and batches second.</li>
-     *   <li>Read after the lock, so it is the true figure: a batch with nothing left
-     *       is refused (409), and so is more than it holds (409) — a mistake about
-     *       the shelf, never quietly reduced, since the operator would then believe
-     *       more had been discarded than was. A contribution that took units a moment
-     *       earlier has committed by now, and its units are already gone.</li>
-     *   <li>Expired batches may be written off — that is the main use. Whether the
-     *       batch is usable decides only whether usable stock falls: discarding
-     *       expired units changes no figure that counts as stock.</li>
-     *   <li>The deduction, the write-off row and its STOCK_WRITTEN_OFF audit entry
-     *       are written in this one transaction, all stamped with one instant from
-     *       the application clock, so none can exist without the others.</li>
-     *   <li>If usable stock fell, the low-stock rule is asked exactly as after a
-     *       contribution (NotificationService.notifyStockCrossing): a write-off that
-     *       takes a group into Low or Critical alerts that bank's staff, as a
-     *       Notification row and a live push.</li>
-     * </ol>
+     * Writes units off one batch: access (403/404), then the request (400s), then the batch lock and ownership (404),
+     * then the units left (409); deduction, ledger row and audit entry in one transaction, then the low-stock check.
      */
     @Transactional
     public BatchWriteOffResponse writeOff(
@@ -177,10 +140,8 @@ public class BatchWriteOffService {
     }
 
     /**
-     * The audit entry's words, as of this moment: what was discarded, from which
-     * batch, why, and what is left. For example: "Wrote off 3 units of O+ from a batch
-     * at Makeni Regional Blood Bank expiring 2026-10-01 (already expired). Reason:
-     * Expired. 7 of 10 units remain in the batch."
+     * The audit entry's wording: what was discarded, from which batch, why and what is left,
+     * e.g. "Wrote off 3 units of O+ ... 7 of 10 units remain in the batch."
      */
     static String describe(BloodBank bank, BloodInventoryBatch batch, BatchWriteOff writeOff, LocalDate today) {
         String details = "Wrote off %s of %s from a batch at %s expiring %s%s. Reason: %s. %d of %d units remain in the batch."

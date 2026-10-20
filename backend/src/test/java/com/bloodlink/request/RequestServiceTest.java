@@ -60,10 +60,8 @@ import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.InvalidFieldException;
 
 /**
- * Covers the parts of Figure 3.5 that are easy to get wrong and expensive if they
- * are: Business Rule 5's lifecycle edges (and the illegal ones), the deduction at
- * fulfilment, the refusal when stock has moved since approval, and the scoping
- * that keeps one hospital from seeing another's requests.
+ * The request lifecycle's edges and illegal transitions, stock leaving at contribution,
+ * and the scoping that keeps hospitals to their own requests.
  */
 @ExtendWith(MockitoExtension.class)
 class RequestServiceTest {
@@ -90,12 +88,8 @@ class RequestServiceTest {
 
     @BeforeEach
     void setUp() {
-        // A real ActingBankResolver over the mocked repositories, not a mock of it.
-        // "Which bank is this caller acting as" moved out of RequestService when
-        // donation appeals needed the same rule, and stubbing it here would quietly
-        // delete the coverage the "who may act" tests below already give it. The same
-        // goes for BatchStockService: it is real, over a mocked batch repository, so
-        // every contribution test still sees the units actually leave a batch.
+        // A real ActingBankResolver and BatchStockService over mocked repositories,
+        // so the "who may act" and stock-deduction tests cover the real rules.
         service = new RequestService(
             bloodRequestRepository,
             new BatchStockService(batchRepository, allocationRepository, new StockPolicy(CLOCK)),
@@ -333,10 +327,7 @@ class RequestServiceTest {
     }
 
     /**
-     * The capping rule, and the shape of the race the pessimistic lock turns into a
-     * safe outcome: an operator offers more units than the request still needs
-     * (because another bank contributed since their screen was drawn), and only the
-     * units genuinely outstanding are taken.
+     * Offering more units than still needed takes only what is outstanding: the race the lock makes safe.
      */
     @Test
     void aContributionIsCappedAtWhatTheRequestStillNeeds() {
@@ -422,9 +413,7 @@ class RequestServiceTest {
         verify(contributionRepository, never()).save(any());
     }
 
-    /** Business Rule 20: contributing and declining are opposite answers to the same
-     *  question, so a bank that has given units may not then decline — a decline
-     *  counts towards closing a request this bank has just helped fill. */
+    /** A bank that contributed may not then decline the same request (Business Rule 20). */
     @Test
     void aBankThatHasContributedCannotThenDeclineTheSameRequest() {
         BloodBank actingBank = bank(BANK_ID, "Makeni Regional Blood Bank");
@@ -463,10 +452,7 @@ class RequestServiceTest {
     }
 
     /**
-     * Business Rule 20's deliberate difference from Business Rule 11: a request that
-     * has already received units never closes by decline, however many banks turn
-     * down the remainder. Real progress exists on it, and stock that could complete
-     * it may arrive tomorrow.
+     * A request that has received units never closes by decline, however many banks decline (Business Rule 20).
      */
     @Test
     void everyBankDecliningDoesNotCloseARequestThatHasAlreadyReceivedUnits() {
@@ -512,11 +498,8 @@ class RequestServiceTest {
     }
 
     /**
-     * Stage 3b-2: a contribution takes units off a shelf, so an ADMIN may not make
-     * one on any bank's behalf, named or not. Refused before the request is locked
-     * or any stock read, so nothing is touched. This replaces two earlier tests
-     * that asserted the opposite: that an ADMIN had to name a bank (a 400 when they
-     * did not) and could then contribute from it.
+     * Stage 3b-2: an ADMIN may not contribute, bank named or not, refused before any lock or stock read.
+     * Replaces earlier tests asserting the opposite.
      */
     @Test
     void anAdministratorCannotContributeWhetherOrNotABankIsNamed() {
@@ -616,9 +599,7 @@ class RequestServiceTest {
     }
 
     /**
-     * Expired units are never counted (Business Rule 24). The refusal names the usable
-     * units, the units being contributed, and the expired units that could not be
-     * counted, so an operator looking at a fridge full of bags knows why.
+     * A short-stock refusal names usable, attempted and expired units (Business Rule 24).
      */
     @Test
     void aRefusalForShortStockAlsoSaysHowManyExpiredUnitsCouldNotBeCounted() {

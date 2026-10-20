@@ -4,38 +4,14 @@ import org.springframework.boot.diagnostics.AbstractFailureAnalyzer;
 import org.springframework.boot.diagnostics.FailureAnalysis;
 
 /**
- * Presents a refused start (Business Rule 15) the way Spring Boot presents its own
- * configuration mistakes:
- *
- * <pre>
- * ***************************
- * APPLICATION FAILED TO START
- * ***************************
- *
- * Description:
- * ...what is wrong...
- *
- * Action:
- * ...what to do about it...
- * </pre>
- *
- * Without this, the same failure still stops the application — the exception is
- * what does that — but it reaches the log as a BeanCreationException wrapped
- * around the real cause, several screens of stack trace above the one line that
- * matters. The person reading it is deploying the system, possibly not the person
- * who wrote it, and should not have to know which bean to look for.
- *
- * Registered in META-INF/spring.factories, which is how Spring Boot discovers
- * failure analyzers; it has no effect on a start that succeeds. Public because it is
- * instantiated reflectively from that file, from outside this package.
+ * Reports a refused start (Business Rule 15) as Spring Boot's "APPLICATION FAILED TO START" block
+ * instead of a stack trace; registered in META-INF/spring.factories, so public.
  */
 public class InsecureJwtSecretFailureAnalyzer extends AbstractFailureAnalyzer<InsecureJwtSecretException> {
 
     /**
-     * Picks the description for the reason the secret was refused. The action is the
-     * same fix in every case (set BLOODLINK_JWT_SECRET to a long random value), so a
-     * missing or short secret shares one action and only the placeholder, which also
-     * needs the "only local profiles may use it" explanation, has its own.
+     * Picks the description for why the secret was refused; the action is the same fix each time,
+     * with the placeholder getting its own explanation.
      */
     @Override
     protected FailureAnalysis analyze(Throwable rootFailure, InsecureJwtSecretException cause) {

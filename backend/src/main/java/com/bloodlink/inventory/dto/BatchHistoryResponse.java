@@ -7,14 +7,8 @@ import java.util.UUID;
 import com.bloodlink.domain.enums.WriteOffReason;
 
 /**
- * One batch and everything that has happened to its units — GET
- * /api/inventory/{bloodBankId}/batches/{batchId}. Bank staff of that bank and
- * administrators only.
- *
- * The figures always reconcile: unitsReceived = unitsRemaining + unitsIssued +
- * unitsWrittenOff (the stock identity, Business Rule 24). For a MIGRATED batch that
- * history starts at the V19 cutover; what happened to its units before then was never
- * recorded by the old one-row-per-group table.
+ * One batch and everything that happened to its units; bank staff and admins only.
+ * unitsReceived = remaining + issued + written off; a MIGRATED batch's history starts at V19.
  */
 public record BatchHistoryResponse(
     BatchResponse batch,

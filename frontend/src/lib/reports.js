@@ -1,16 +1,5 @@
-/* ================================================================
-   BloodLink — Admin Reports page logic (Business Rule 23)
-
-   Pure functions behind AdminReports.jsx, kept here so `npm test` can check them.
-   None of them counts anything: every figure arrives already counted by the
-   database. What lives here is how those figures are worded and drawn — the
-   default date range, the range check that saves a round trip, "No data" in place
-   of a meaningless percentage, a bar's width, a status badge's wording.
-
-   The server stays the authority on the range (it refuses a bad one with a 400
-   naming the field); checking it here as well only spares the administrator a
-   request that is certain to be refused.
-   ================================================================ */
+/* BloodLink — Admin Reports page logic (Business Rule 23): wording and drawing of figures the database counted,
+   tested by npm test. The range check only saves a request; the server is the authority. */
 
 import { formatFullDate } from "./dates.js";
 
@@ -23,9 +12,7 @@ export function toIsoDay(date) {
 }
 
 /**
- * The range the page opens with, matching the server's own default: the 1st of
- * the month five months back, up to today — the last six calendar months, the same
- * six the Dashboard's trend chart shows. In UTC, like the server.
+ * The opening range, matching the server's default: the 1st of the month five months back to today, in UTC.
  */
 export function defaultReportRange(today = new Date()) {
   const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 5, 1));
@@ -33,9 +20,7 @@ export function defaultReportRange(today = new Date()) {
 }
 
 /**
- * Why a range cannot be sent, as { field, message }, or null when it can. The same
- * three refusals the server makes — missing, backwards, longer than five years —
- * on the same fields ("from" for backwards, "to" for too long).
+ * Why a range can't be sent, as { field, message }, or null: the server's three refusals on the same fields.
  */
 export function validateReportRange({ from, to }) {
   if (!from) return { field: "from", message: "Choose a start date." };
@@ -105,9 +90,7 @@ export function urgencyLabel(urgency) {
 }
 
 /**
- * Whether a section has nothing to show, so it says "No data for this period"
- * rather than drawing a page of zeros. Stock is never empty while a bank exists:
- * a bank with no stock is itself the news (eight Critical groups).
+ * Whether a section has nothing to show ("No data for this period"); Stock is never empty while a bank exists.
  */
 export function isReportEmpty(section, report) {
   if (!report) return true;

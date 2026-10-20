@@ -1,13 +1,5 @@
-/* ================================================================
-   BloodLink — shared paging arithmetic
-
-   The same small set of pure functions every paged list on this site needs:
-   when to disable Previous/Next, how to pull a stale page number back into
-   range, and how to label "Page X of Y". Originally written for the Audit
-   Log (frontend/src/lib/auditLogPaging.js, which now just re-exports these
-   under its own names so nothing that already depends on it has to change),
-   and reused as-is for the blood bank's Donors page.
-   ================================================================ */
+/* BloodLink — shared paging arithmetic: disabling Previous/Next, clamping a stale page and "Page X of Y",
+   used by the Audit Log and Donors pages. */
 
 /** The page-size choices offered wherever this project lets someone pick one. */
 export const DEFAULT_PAGE_SIZES = [20, 50, 100];
@@ -25,11 +17,8 @@ export function canGoToNextPage(page, totalPages) {
 }
 
 /**
- * Keeps a remembered page number valid once the server has reported how many
- * pages actually exist — typically after changing the page size, or a filter
- * narrowing the result set, leaves the current page pointing past the new
- * last page. Clamps down to the new last page rather than resetting to the
- * first one, so the view stays as close as possible to where the person was.
+ * Pulls a remembered page back within range once the server reports the page count,
+ * clamping to the last page rather than resetting to the first.
  */
 export function clampPageToAvailable(page, totalPages) {
   if (totalPages <= 0) return 0;
@@ -48,12 +37,8 @@ export function describePage(page, totalPages) {
 }
 
 /**
- * "Showing 14-26 of 58" — which rows of the whole result this page holds.
- *
- * Worked out from the page number and size the server reported, not from how many
- * rows happen to be on screen, except for the last page, which is clamped to the
- * total so it never claims rows that do not exist ("Showing 53-58", not "53-65").
- * An empty result, or a page past the end, reads "Showing 0 of N".
+ * "Showing 14-26 of 58" from the reported page and size, the last page clamped to the total;
+ * empty or past the end reads "Showing 0 of N".
  */
 export function describeShowingRange(page, size, totalElements) {
   const first = page * size + 1;

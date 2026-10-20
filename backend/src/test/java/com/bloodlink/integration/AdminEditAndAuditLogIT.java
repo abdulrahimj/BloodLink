@@ -58,30 +58,8 @@ import jakarta.persistence.EntityManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Business Rule 17 end to end: an administrator editing another account's phone and
- * facility, and the append-only audit log that records that and every other
- * administrator action — through the real endpoints, filter chain and database.
- *
- * <h2>"No way to modify or delete an entry" — proven three ways</h2>
- * <ol>
- *   <li><b>Over HTTP:</b> every modifying method against the audit log's URLs is
- *       refused, and an entry is unchanged afterwards.</li>
- *   <li><b>In the route table:</b> the application's full list of mapped endpoints
- *       is read back from Spring MVC and checked — no route anywhere that touches
- *       the audit log answers anything but GET. Unlike a list of URLs to try, this
- *       also catches an endpoint added later under a path nobody thought to test.</li>
- *   <li><b>At the database:</b> an UPDATE, a DELETE and a TRUNCATE issued directly
- *       in SQL all fail, courtesy of V12's triggers — so even code that bypassed
- *       every endpoint could not do it.</li>
- * </ol>
- * Each database test is its own method because a refused statement aborts the
- * PostgreSQL transaction it ran in; nothing can follow it in the same method.
- *
- * Shares bloodlink_test with the other integration tests and the same guarantee:
- * {@code @Transactional}, so every row written here — audit entries included — is
- * rolled back. (A rollback is not a DELETE: the triggers do not fire, and nothing
- * is left behind.) Run with:
- * <pre>{@code .\mvnw.cmd test -Dtest=AdminEditAndAuditLogIT}</pre>
+ * Business Rule 17 end to end: editing another account's phone/facility and the append-only log, proven
+ * over HTTP, in the route table and in SQL (V12 triggers). Rolled back; run -Dtest=AdminEditAndAuditLogIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -258,11 +236,8 @@ class AdminEditAndAuditLogIT {
     // ---------- pagination (Business Rule 17) ----------
 
     /**
-     * More entries than one page holds, created directly through the
-     * {@code AuditLogService} bean rather than 25 real HTTP round trips — faster,
-     * and the HTTP path for writing one entry is already proven above. Checks the
-     * three positions that matter: the first page, the last (partial) page, and a
-     * page past the end, plus the totals every page carries.
+     * More entries than one page, written through AuditLogService directly; checks the first, last partial
+     * and past-the-end pages and their totals.
      */
     @Test
     void pagingSplitsMoreEntriesThanOnePageHoldsAcrossFirstLastAndPastTheEnd() throws Exception {
@@ -304,9 +279,7 @@ class AdminEditAndAuditLogIT {
             .andExpect(jsonPath("$.totalElements").value(25))
             .andExpect(jsonPath("$.totalPages").value(3));
 
-        // The three pages together cover every entry exactly once — proof that
-        // LIMIT/OFFSET paging and the newest-first tie-breaker never duplicate or
-        // drop a row between pages.
+        // The three pages cover every entry exactly once: no duplicate or dropped row between pages.
         AuditLogPageResponse firstPage = objectMapper.readValue(
             mockMvc.perform(get("/api/admin/audit-log").param("size", "10")
                     .header("Authorization", "Bearer " + token))
@@ -363,9 +336,7 @@ class AdminEditAndAuditLogIT {
 
     @Test
     void noRouteInTheWholeApplicationCanModifyTheAuditLog() {
-        // Read back from Spring MVC itself: every mapped endpoint, every controller.
-        // Any route touching the audit log — by path, or by being declared on its
-        // controller — must answer GET and nothing else.
+        // Every mapped route, read back from Spring MVC: anything touching the audit log must answer GET only.
         Map<RequestMappingInfo, HandlerMethod> routes = handlerMapping.getHandlerMethods();
         assertThat(routes).isNotEmpty();
 

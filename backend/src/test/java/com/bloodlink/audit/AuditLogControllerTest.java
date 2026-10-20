@@ -23,19 +23,8 @@ import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.web.error.GlobalExceptionHandler;
 
 /**
- * Pagination on {@code GET /api/admin/audit-log} (Business Rule 17), in isolation
- * from Spring Boot and the database: a standalone {@link MockMvc}, built directly
- * on {@code new AuditLogController(mock)} and {@link GlobalExceptionHandler}, so
- * these run as fast as any other Mockito-based unit test in this project while
- * still exercising the real {@code @RequestParam} constraint annotations — Spring
- * MVC's native method validation (the same mechanism {@code AppealController.reach}
- * relies on) is active in a standalone builder by default, with no extra wiring.
- *
- * What the page does with the response once it has it — Previous/Next, "Page X of
- * Y", the empty-log message — is covered separately as plain functions in
- * {@code frontend/src/lib/auditLogPaging.test.js}. The full round trip through a
- * real database, including the newest-first tie-breaker on real rows, is
- * {@code AdminEditAndAuditLogIT}.
+ * Audit-log pagination in standalone MockMvc with the real @RequestParam constraints and error handler.
+ * Page rendering is tested in auditLogPaging.test.js; the database round trip in AdminEditAndAuditLogIT.
  */
 @ExtendWith(MockitoExtension.class)
 class AuditLogControllerTest {

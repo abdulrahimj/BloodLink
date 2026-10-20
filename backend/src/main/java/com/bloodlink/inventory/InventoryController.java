@@ -27,11 +27,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import jakarta.validation.Valid;
 
 /**
- * Per-bank, per-blood-group stock. The per-group totals are readable by any
- * signed-in role (SecurityConfig: hospitals need a live view across banks); batch
- * detail is for bank staff and administrators only, and writing (adding a batch,
- * writing one off) is for BLOOD_BANK_STAFF alone — refused to ADMIN there and again
- * inside InventoryService, which also scopes it to the caller's own bank.
+ * Per-bank, per-group stock: totals readable by any signed-in role, batch detail by bank staff and admins,
+ * and writes by BLOOD_BANK_STAFF of their own bank only (refused to ADMIN here and in InventoryService).
  */
 @RestController
 @RequestMapping("/api/inventory")
@@ -81,9 +78,8 @@ public class InventoryController {
     }
 
     /**
-     * Writes units of one batch off, with a reason (Business Rule 24) — expired
-     * batches included, which is the main use. Active staff of that bank only — not
-     * ADMIN; 201 with the write-off and the batch as it now stands.
+     * Writes units of one batch off with a reason (Business Rule 24), expired batches included;
+     * own-bank active staff only, not ADMIN. 201 with the write-off and the batch.
      */
     @PostMapping("/{bloodBankId}/batches/{batchId}/write-offs")
     @ResponseStatus(HttpStatus.CREATED)
@@ -97,10 +93,7 @@ public class InventoryController {
     }
 
     /**
-     * "Add New Batch". {bloodType} is the clinical label ("A+", "O-") — the client
-     * must URL-encode it (encodeURIComponent) so "+" survives as a literal
-     * character rather than being read as an encoded space. Active staff of that
-     * bank only — not ADMIN.
+     * "Add New Batch"; {bloodType} is the URL-encoded clinical label. Own-bank active staff only, not ADMIN.
      */
     @PatchMapping("/{bloodBankId}/{bloodType}")
     public InventoryItemResponse addBatch(

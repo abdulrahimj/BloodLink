@@ -6,15 +6,8 @@ import java.util.UUID;
 import com.bloodlink.domain.enums.StockStatus;
 
 /**
- * The receipt for a recorded donation.
- *
- * Reports the usable stock position of that blood group *after* the donation's
- * batch was added, not just the donation itself. Recording a donation is the one
- * action in this system that writes three things at once — a Donation row, the donor's
- * last-donation date, and the bank's inventory — and the third is the one the
- * staff member cannot see from the form they just filled in. Handing back the
- * resulting figure lets the screen say "O+ is now 46 units" instead of leaving
- * them to go and check that the stock half of the action actually happened.
+ * The receipt for a recorded donation, including the group's usable stock after the new batch,
+ * so the screen can confirm the stock half of the action happened.
  */
 public record DonationRecordedResponse(
     UUID donationId,

@@ -19,14 +19,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * How many units one contribution to a hospital request took from one batch —
- * traceability for the batch-stock redesign (table V18). A contribution that drew
- * on two batches has two of these, and together they add up to its
- * {@code unitsContributed}. Nothing in the application writes them yet.
- *
- * Append-only, like the audit log: no setters, {@code @Immutable} so Hibernate
- * never issues an UPDATE, a repository with no delete method, and V18's triggers
- * refusing UPDATE, DELETE and TRUNCATE in the database.
+ * How many units one contribution took from one batch (V18): a contribution's allocations add up to its units.
+ * Append-only: no setters, @Immutable, no delete method, and V18 triggers refusing UPDATE, DELETE and TRUNCATE.
  */
 @Entity
 @Table(

@@ -17,11 +17,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Answers unauthenticated requests to protected endpoints with a JSON 401.
- *
- * Without this, Spring Security's default would redirect to a login page — useless
- * to a fetch() call from the React SPA, which would see an opaque HTML response
- * instead of a status it can branch on (and, in practice, a confusing CORS error).
+ * Answers unauthenticated requests to protected endpoints with a JSON 401
+ * instead of a login redirect the SPA could not use.
  */
 @Component
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {

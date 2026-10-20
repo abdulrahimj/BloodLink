@@ -9,27 +9,8 @@ import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 
 /**
- * Refuses to start any application under the "test" profile whose database is not
- * one of the integration tests' own: bloodlink_dev holds the project owner's real
- * data, and a test run must never be able to reach it (CLAUDE.md, Conventions).
- *
- * <h2>The gap this closes</h2>
- * The integration tests find bloodlink_test through application-test.properties.
- * But an environment variable outranks every properties file, so a developer who
- * set {@code SPRING_DATASOURCE_URL} permanently (to run the server against
- * bloodlink_dev, say) would send {@code mvnw test "-Dtest=*IT"} to that database
- * instead, silently. The tests roll back what they write, but Flyway would still
- * migrate it, and a database the owner did not choose would be the one under test.
- * This check turns that into a refusal before any connection is opened.
- *
- * Runs after Spring Boot has loaded every properties file and resolved the active
- * profiles (lowest precedence among post-processors), so it sees the URL the
- * application would really use. Registered in src/test/resources/META-INF/
- * spring.factories, so it exists only on the test classpath and never in the jar.
- *
- * PartialFulfilmentRaceIT's own throwaway database is set later, by
- * {@code @DynamicPropertySource}; at this point that class still resolves to
- * bloodlink_test, and its database is allowed here in case that ever changes.
+ * Refuses any "test" profile start whose database is not an integration-test one, so bloodlink_dev can't be reached
+ * even if SPRING_DATASOURCE_URL is set. Test classpath only, registered in META-INF/spring.factories.
  */
 public class IntegrationDatabaseGuard implements EnvironmentPostProcessor, Ordered {
 

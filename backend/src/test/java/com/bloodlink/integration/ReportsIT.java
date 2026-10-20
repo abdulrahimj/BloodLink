@@ -63,20 +63,8 @@ import jakarta.persistence.EntityManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The Admin Reports page's numbers, computed by the real aggregate queries against a
- * real database and checked against seed data whose right answer is known exactly
- * (Business Rule 23).
- *
- * <ul>
- *   <li>Requests and donations are dated in 2001 and read back over a 2001 range, so
- *       no other row in the database can be in them: those totals are exact.</li>
- *   <li>Stock is seeded into two new blood banks; their per-bank rows are exact, and
- *       the citywide figures are checked as the change from before seeding.</li>
- *   <li>Donor counts are checked as a change too, and the eligible count is checked
- *       against Donor.isEligibleToDonate() applied to every donor one by one.</li>
- * </ul>
- * Shares {@code bloodlink_test} and its guarantee: {@code @Transactional}, all rolled
- * back. Run with {@code .\mvnw.cmd test -Dtest=ReportsIT}.
+ * The Admin Reports numbers from the real aggregate queries against seed data with known answers (Business Rule 23):
+ * 2001-dated requests/donations, new banks for stock, donor counts as deltas. Rolled back; run -Dtest=ReportsIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -132,10 +120,8 @@ class ReportsIT {
     }
 
     /**
-     * Business Rule 23, reversed by Business Rule 24: an expired batch is NOT stock.
-     * Its units appear only in pastExpiryUnits (awaiting discard), never in the total,
-     * a group's figure, or "expiring soon" — exactly as the Inventory screen now
-     * counts them.
+     * An expired batch is not stock (Business Rule 24): its units appear only in pastExpiryUnits,
+     * never in totals or "expiring soon".
      */
     @Test
     void stockTotalsMoveByExactlyWhatWasAddedAndAnExpiredBatchIsExcludedAndReportedSeparately() throws Exception {

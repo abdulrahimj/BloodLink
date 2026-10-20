@@ -1,14 +1,5 @@
-/* ================================================================
-   BloodLink — notification calls
-
-   The REST side of the bell icon. Every route is scoped server-side to
-   whoever owns the JWT, so there is no user id to pass here — see
-   NotificationService on the backend.
-
-   These exist alongside the live WebSocket push, not instead of it. A socket
-   only carries what arrives while it is open, so this is what fills the bell
-   with everything that happened while the browser was closed.
-   ================================================================ */
+/* BloodLink — notification calls: the REST side of the bell, scoped to the JWT's owner;
+   fills the bell with whatever arrived while no socket was open. */
 
 import { apiRequest } from './client.js';
 
@@ -23,9 +14,7 @@ export function getUnreadCount() {
 }
 
 /**
- * PATCH /api/notifications/read-all — clears the badge.
- * Returns the count afterwards (zero), so the caller can set the badge from the
- * response rather than assuming the write landed.
+ * PATCH /api/notifications/read-all: clears the badge and returns the resulting count (zero).
  */
 export function markAllNotificationsRead() {
   return apiRequest('/api/notifications/read-all', { method: 'PATCH' });

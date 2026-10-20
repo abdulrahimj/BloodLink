@@ -62,19 +62,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The write-off action (Business Rule 24, Stage 3), end to end through the real HTTP
- * endpoint and a real database: what a write-off writes (the batch's units, the
- * write-off row, the STOCK_WRITTEN_OFF audit entry pointing at the batch, a low-stock
- * alert), that expired batches can be written off, who may do it, every refusal and
- * that a refusal writes nothing, the audit log page's view of it, and the lock it
- * takes.
- *
- * The application clock is BatchStockCutoverIT's movable one, so the test can check
- * that every timestamp a write-off writes came from that clock and not the system's.
- *
- * Each test works on blood banks it creates for itself, so every figure is exact.
- * Shares bloodlink_test and its guarantee: {@code @Transactional}, all rolled back.
- * Hibernate's SQL is logged for this class so one test can read back the lock.
+ * The write-off action end to end (Business Rule 24): what it writes, expired batches, who may, every refusal
+ * writing nothing, the audit page, and its lock. Uses BatchStockCutoverIT's movable clock; rolled back.
  */
 @SpringBootTest(properties = "logging.level.org.hibernate.SQL=DEBUG")
 @AutoConfigureMockMvc
@@ -255,9 +244,7 @@ class BatchWriteOffIT {
     // ---------- ADMIN reads stock but cannot change it (Stage 3b) ----------
 
     /**
-     * Until Stage 3b this test asserted the opposite — that an ADMIN could write off
-     * any bank's batch and was recorded as the actor. The project owner has decided an
-     * administrator must not change stock at all, expired batches included.
+     * Since Stage 3b an administrator may not write off any batch, expired included, and nothing is written.
      */
     @Test
     void anAdministratorCannotWriteOffAnyBatchExpiredOrNotAndNothingIsWritten() throws Exception {

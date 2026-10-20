@@ -22,29 +22,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * Turns a "Authorization: Bearer <token>" header into an authenticated
- * SecurityContext for the duration of one request.
- *
- * Runs before Spring Security's authorisation checks, so by the time a rule such as
- * hasRole('BLOOD_BANK_STAFF') is evaluated the caller's role is already established.
- *
- * The principal's identity and role are rebuilt entirely from the token's signed
- * claims — no lookup needed for those, because the signature already guarantees the
- * claims are ours and unaltered. Whether the account is still allowed to act is a
- * different question the token cannot answer on its own: a stateless JWT stays
- * cryptographically valid for its whole lifetime (up to 24 hours) regardless of
- * anything that happens to the account afterwards. An administrator suspending
- * someone must take effect now, not whenever that person's current token happens to
- * expire, so this filter asks the database for the one fact a signature cannot
- * carry — {@link #accountIsActive} — on every authenticated request. That is a
- * deliberate departure from "no database lookup": one indexed read by primary key
- * is the cost of "suspended means suspended immediately", and there is no way to
- * honour that requirement from the token's contents alone.
- *
- * A missing, malformed, or expired token — or one for an account that is no longer
- * active — is never an error here: the filter simply leaves the context empty and
- * continues. Whether that is acceptable is the authorisation layer's decision, which
- * then returns 401 for a protected endpoint and serves a public one normally.
+ * Turns a Bearer token into an authenticated SecurityContext for one request, rebuilding the principal from claims.
+ * Also checks the account is still ACTIVE on every request; a bad token or suspended account just leaves it empty.
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -90,10 +69,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 }
-                // Suspended, or the account no longer exists: leave the context empty.
-                // Falling through unauthenticated is exactly how a bad signature is
-                // already handled below, and a suspended account's existing token
-                // deserves no better treatment than one that was never valid.
+                // Suspended or missing account: leave the context empty, exactly as for a bad signature.
 
             } catch (JwtException | IllegalArgumentException ex) {
                 // Bad signature, expired, or a role name we no longer recognise.
@@ -106,9 +82,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     /**
-     * Fail-closed by construction: a missing row (should not happen for a validly
-     * signed token, but the database is the source of truth, not the assumption)
-     * reads the same as SUSPENDED — never as active.
+     * Fail-closed: a missing row reads the same as SUSPENDED, never as active.
      */
     private boolean accountIsActive(UUID userId) {
         return userRepository.findStatusById(userId)

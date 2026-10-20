@@ -6,11 +6,8 @@ import java.util.UUID;
 import com.bloodlink.domain.BloodRequestContribution;
 
 /**
- * One bank's contribution to a request, as both portals show it — Business Rule 20.
- *
- * The hospital reads these to see where its blood actually came from ("2 units from
- * Makeni Regional Blood Bank, 2 from Holy Spirit"), which a single fulfilling-bank
- * name could never express once more than one bank can help.
+ * One bank's contribution to a request as both portals show it (Business Rule 20),
+ * so the hospital sees where its blood came from.
  */
 public record ContributionResponse(
     UUID bloodBankId,

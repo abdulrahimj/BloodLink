@@ -54,27 +54,15 @@ public class BloodRequest {
     private RequestStatus status;
 
     /**
-     * Optional free-text ward / patient reference from the request form
-     * ("Maternity Ward — Bed 12"). Purely a label the requesting hospital uses to
-     * match delivered units back to the patient who needs them — this system holds
-     * no patient records, by design.
+     * Optional ward/patient label ("Maternity Ward — Bed 12") for the hospital's own use;
+     * this system holds no patient records.
      */
     @Column(name = "patient_reference")
     private String patientReference;
 
     /**
-     * The bank that contributed to this request most recently — null until some
-     * bank has (Business Rule 20).
-     *
-     * Not "the bank that owns this request": several banks may contribute to one
-     * request, and BloodRequestContribution is the source of truth for who gave
-     * what. This is a convenience pointer, kept for the display case that only
-     * needs one name ("2 of 4 units received, from Makeni Regional Blood Bank")
-     * and for the wording of the hospital's notification. Anything that needs
-     * totals, or every contributor, reads the contributions table.
-     *
-     * Renamed from fulfilled_by_blood_bank_id in V15, which is where the reasoning
-     * for keeping the column at all is set out in full.
+     * The bank that contributed most recently, null until one has (Business Rule 20; renamed in V15).
+     * A display convenience only: BloodRequestContribution is the source of truth for who gave what.
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "last_contributed_by_blood_bank_id")

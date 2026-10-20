@@ -25,14 +25,8 @@ import com.bloodlink.domain.enums.NotificationType;
 import com.bloodlink.notification.dto.NotificationResponse;
 
 /**
- * The two things that make this class more than a one-line call to
- * SimpMessagingTemplate: a push made mid-transaction waits for that transaction to
- * actually commit before going out, and a delivery failure is swallowed rather
- * than allowed to fail the write that caused it.
- *
- * Both are timing- and exception-shaped behaviour that a service-layer test
- * calling the real NotificationService could easily miss — this exercises them
- * directly against NotificationPublisher itself.
+ * A push made mid-transaction waits for commit, and a delivery failure is swallowed
+ * rather than failing the write, tested directly.
  */
 @ExtendWith(MockitoExtension.class)
 class NotificationPublisherTest {
@@ -43,9 +37,7 @@ class NotificationPublisherTest {
 
     @AfterEach
     void clearAnyOpenSynchronization() {
-        // Defensive: a test that fails before reaching its own cleanup line must
-        // not leave transaction synchronization active for whichever test runs
-        // next on the same thread.
+        // Defensive: never leave transaction synchronization active for the next test on this thread.
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.clearSynchronization();
         }
@@ -78,9 +70,7 @@ class NotificationPublisherTest {
         try {
             publisher.publish(RECIPIENT_ID, payload);
 
-            // Nothing sent yet — the whole point is that a rollback after this line
-            // must still be possible without a notification having already gone out
-            // for something that never actually happened.
+            // Nothing sent yet, so a rollback after this point can never leave a notification behind.
             verify(messagingTemplate, never()).convertAndSendToUser(any(), any(), any());
 
             TransactionSynchronizationManager.getSynchronizations().forEach(sync -> sync.afterCommit());
@@ -95,9 +85,7 @@ class NotificationPublisherTest {
 
     @Test
     void aTransactionThatNeverCommitsNeverSendsThePush() {
-        // The rollback case: afterCommit is simply never invoked by Spring in this
-        // scenario, which is exactly what protects a notification from going out
-        // for a fulfilment (say) that failed after the alert was built.
+        // On rollback Spring never invokes afterCommit, so no notification goes out for a failed transaction.
         NotificationPublisher publisher = new NotificationPublisher(messagingTemplate);
 
         TransactionSynchronizationManager.initSynchronization();
@@ -117,9 +105,7 @@ class NotificationPublisherTest {
         doThrow(new MessagingException("socket closed"))
             .when(messagingTemplate).convertAndSendToUser(any(), any(), any());
 
-        // Must not throw: the durable Notification row is already written by the
-        // time this runs, and a push that fails to go out must never look, to the
-        // caller, like the write itself failed.
+        // Must not throw: the Notification row is already written, so a failed push must not look like a failed write.
         assertThatCode(() -> publisher.publish(RECIPIENT_ID, payload())).doesNotThrowAnyException();
     }
 }

@@ -24,35 +24,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * One entry in the administrators' audit log — Business Rule 17, table V12.
- *
- * <h2>Append-only, from four directions</h2>
- * <ul>
- *   <li><b>No setters.</b> An entry is built once, by {@link #record}, and has no
- *       way to be altered afterwards in Java.</li>
- *   <li><b>{@code @Immutable}.</b> Hibernate never issues an UPDATE for this entity,
- *       even if something did manage to change a loaded instance.</li>
- *   <li><b>No update or delete path.</b> AuditLogRepository declares only
- *       {@code save} and reads, and no endpoint does anything but read.</li>
- *   <li><b>Database triggers (V12).</b> UPDATE, DELETE and TRUNCATE on the table
- *       fail, whatever issued them.</li>
- * </ul>
- * Any one would do in the ordinary course; together they mean a mistake in one
- * layer is still caught by the next.
- *
- * Both people are held as associations rather than copied names, so the log page
- * shows who they are now; what the action changed is captured as text in
- * {@link #details} at the moment it happened, so that part never shifts.
- *
- * <h2>One subject per entry</h2>
- * An account action's subject is {@link #target}; a facility creation's (Business
- * Rule 19, V14) is {@link #targetBloodBank} or {@link #targetHospital}; a stock
- * write-off's (Business Rule 24, V18) is {@link #targetBatch}. Exactly one of the
- * four is set, matching the action — the factory methods below build only those
- * shapes, and V18's CHECK constraint refuses any other at the database.
- *
- * The actor is an administrator for every action except STOCK_WRITTEN_OFF, whose
- * actor is a member of the batch's own bank's staff (an administrator cannot write off).
+ * One audit log entry (Business Rule 17, V12): append-only via no setters, @Immutable, no update path, V12 triggers.
+ * Exactly one subject per entry (account, facility or batch), matching the action and enforced by a CHECK.
  */
 @Entity
 @Table(name = "audit_log")
@@ -138,9 +111,7 @@ public class AuditLog {
     }
 
     /**
-     * Units written off one batch, as a STOCK_WRITTEN_OFF entry (Business Rule 24).
-     * Stamped with {@code createdAt} from the application's clock, the same instant
-     * as the write-off it records, rather than left to {@link #onCreate}.
+     * A STOCK_WRITTEN_OFF entry (Business Rule 24), stamped with the same clock instant as the write-off.
      */
     public static AuditLog recordStockWrittenOff(
         User actor, BloodInventoryBatch batch, String details, Instant createdAt
@@ -155,9 +126,8 @@ public class AuditLog {
     }
 
     /**
-     * Refuses a facility action passed through the account factory. V14's
-     * audit_log_target_matches_action constraint would refuse the row anyway; this
-     * fails at the line that made the mistake, instead of at a later flush.
+     * Refuses a facility action passed through the account factory,
+     * failing here rather than at a later flush against V14's constraint.
      */
     private static void requireAccountAction(AuditAction action) {
         if (!action.isAccountAction()) {

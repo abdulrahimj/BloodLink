@@ -50,15 +50,8 @@ import jakarta.persistence.EntityManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Business Rule 19 end to end: an administrator adding a blood bank or a hospital,
- * through the real endpoints, security filter chain and PostgreSQL database — which
- * is where V14's case-insensitive unique index and audit-log constraints live, and
- * so the only place they can be proven.
- *
- * Shares bloodlink_test with the other integration tests and the same guarantee:
- * {@code @Transactional}, so every facility, account and audit entry written here is
- * rolled back when each method ends, and re-running is always safe. Run with:
- * <pre>{@code .\mvnw.cmd test -Dtest=AdminFacilityCreationIT}</pre>
+ * Business Rule 19 end to end, where V14's case-insensitive index and audit constraints live.
+ * @Transactional on bloodlink_test; run -Dtest=AdminFacilityCreationIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

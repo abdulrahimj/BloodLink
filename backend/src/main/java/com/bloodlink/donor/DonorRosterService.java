@@ -27,16 +27,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * A blood bank's own donor roster, and each roster donor's history at that
- * bank — Business Rule 21.
- *
- * "This bank's donors" is not a stored relationship (donors register on their
- * own, with no blood-bank link); it means donors with at least one
- * {@code Donation} row at this bank, the same reading
- * {@code DonationRepository.countDistinctDonorsByBloodBankId} already gives
- * the Dashboard's "Registered Donors" stat. Which bank "this" is comes from
- * {@link ActingBankResolver} exactly as every other bank-scoped write already
- * resolves it — bank staff act as their own bank, an ADMIN must name one.
+ * A bank's donor roster (Business Rule 21): donors with at least one donation at this bank,
+ * the same reading as the Dashboard's Registered Donors stat; the bank comes from ActingBankResolver.
  */
 @Service
 public class DonorRosterService {
@@ -56,11 +48,8 @@ public class DonorRosterService {
     }
 
     /**
-     * One page of the roster, filtered and sorted exactly as the Donors page's
-     * controls ask (Business Rule 21). Every parameter but {@code principal}
-     * has already been validated by {@link DonorRosterController} by the time
-     * this runs (page/size bounds, blood-group label, eligibility and sort
-     * values) — this method only has to turn them into query parameters.
+     * One page of the roster, filtered and sorted as the Donors page asks; every parameter but principal
+     * was validated by DonorRosterController.
      */
     @Transactional(readOnly = true)
     public DonorRosterPageResponse listRoster(
@@ -79,9 +68,8 @@ public class DonorRosterService {
         // same as every other blood-type-taking endpoint.
         BloodType bloodType = bloodTypeLabel == null ? null : BloodType.fromLabel(bloodTypeLabel);
 
-        // Both patterns escape % and _ (LikePattern), so a typed "%" matches only a
-        // literal "%" rather than every donor; the phone pattern also maps a local
-        // "0…" fragment to the stored "+232…" form (PhoneNumber.searchFragment).
+        // Both patterns escape % and _ (LikePattern); the phone pattern also maps a local "0…" fragment
+        // to the stored "+232…" form.
         String trimmedQ = normalizeSearch(q);
         String namePattern = trimmedQ == null ? null : LikePattern.contains(trimmedQ.toLowerCase());
         String phonePattern = trimmedQ == null ? null : LikePattern.contains(PhoneNumber.searchFragment(trimmedQ));
@@ -89,10 +77,8 @@ public class DonorRosterService {
         // null = either; true = Business Rule 2's ELIGIBLE; false = IN_RECOVERY.
         // DonorRosterController's @Pattern already refused anything else.
         Boolean wantEligible = eligibility == null ? null : "ELIGIBLE".equals(eligibility);
-        // Borrows the one constant the 90-day rule is built from (Donor.
-        // ELIGIBILITY_WINDOW_DAYS) to produce a date to filter by; the
-        // response's own eligibility fields never come from this comparison —
-        // see DonorRepository.ROSTER_FILTER's note.
+        // The 90-day cutoff date to filter by (Donor.eligibilityCutoff); the response's eligibility fields
+        // never come from this comparison.
         LocalDate eligibilityCutoff = Donor.eligibilityCutoff(LocalDate.now());
 
         PageRequest pageable = PageRequest.of(page, size);
@@ -113,15 +99,8 @@ public class DonorRosterService {
     }
 
     /**
-     * One donor's donation history at this bank only, newest first, capped at
-     * 50 (Business Rule 21).
-     *
-     * A 404 — the same one, whatever the reason — when there is nothing to
-     * show: an id that matches no donor at all, and an id that matches a real
-     * donor who simply never gave at this bank, are indistinguishable in the
-     * response on purpose. Confirming the second case would tell a bank
-     * employee that someone is a registered donor elsewhere, which is exactly
-     * the kind of fact this bank has no business relationship to learn.
+     * One donor's history at this bank only, newest first, capped at 50 (Business Rule 21).
+     * The same 404 for an unknown donor and one who never gave here, so nothing leaks about other banks.
      */
     @Transactional(readOnly = true)
     public List<DonationAtBankItem> getDonationHistoryAtBank(
@@ -144,9 +123,7 @@ public class DonorRosterService {
     }
 
     /**
-     * donationsHere for a whole page of donors in one query, keyed by donor id
-     * — see DonationRepository.countByBloodBankIdAndDonorIdIn for why this is
-     * batched rather than queried per row.
+     * donationsHere for a whole page of donors in one query, keyed by donor id.
      */
     private Map<UUID, Long> countDonationsHere(UUID bloodBankId, List<Donor> donors) {
         if (donors.isEmpty()) {

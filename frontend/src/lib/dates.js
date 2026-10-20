@@ -1,20 +1,12 @@
-/* ================================================================
-   BloodLink — shared date formatting
-
-   Small helpers used by the Blood Bank portal screens. Kept separate rather
-   than duplicated per-page (as DonorPortal.jsx does for its own one-off
-   formatters) because BloodBankDashboard and BloodBankInventory are two
-   views of the same portal and need to agree on formatting exactly.
-   ================================================================ */
+/* BloodLink — shared date formatting for the Blood Bank portal screens,
+   so the Dashboard and Inventory format dates identically. */
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** Parses a "YYYY-MM-DD" LocalDate string as a local calendar date, not UTC
- *  midnight — `new Date("YYYY-MM-DD")` would shift a day in negative-UTC-offset
- *  zones, which matters for an expiry date. */
+/** Parses "YYYY-MM-DD" as a local calendar date, since new Date("YYYY-MM-DD") would shift a day west of UTC. */
 export function parseIsoDate(isoDate) {
   const [year, month, day] = isoDate.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -37,9 +29,7 @@ export function formatHeaderDate(date) {
 }
 
 /**
- * "8 mins ago", "3 hrs ago", "Yesterday", or a plain date once it's old enough
- * that a relative phrase stops being useful — matches the mockup's own mix of
- * these exact forms for the requests panel.
+ * "8 mins ago", "3 hrs ago", "Yesterday", or a plain date once relative wording stops helping.
  */
 export function formatRelativeTime(instantIso) {
   const then = new Date(instantIso);

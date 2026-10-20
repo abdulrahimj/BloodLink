@@ -6,11 +6,8 @@ import java.util.UUID;
 import com.bloodlink.domain.enums.EligibilityStatus;
 
 /**
- * Everything the Donor Portal dashboard needs in one call — GET /api/donors/me.
- *
- * bloodType is the wire label ("A+", "O-") or null when the donor registered
- * without knowing their group ("I don't know yet"); Business Rule 4 means it is
- * only ever established from a tested Donation, never edited directly.
+ * Everything the Donor Portal dashboard needs in one call (GET /api/donors/me); bloodType is the label,
+ * or null if unknown, established only from a tested donation.
  */
 public record DonorProfileResponse(
     UUID id,

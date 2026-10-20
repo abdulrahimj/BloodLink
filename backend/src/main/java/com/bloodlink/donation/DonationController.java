@@ -15,19 +15,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import jakarta.validation.Valid;
 
 /**
- * "Record Donation" — the blood bank / lab staff use case that finally writes to
- * the donations table.
- *
- * SecurityConfig has restricted /api/donations/** to BLOOD_BANK_STAFF and ADMIN
- * since before anything served it; this is the route that rule was waiting for.
- * Which bank a staff member records against is narrowed again inside
- * DonationService via ActingBankResolver — their own, always.
- *
- * POST only. A donation is an event that happened, not a record to be edited:
- * there is no amend or delete route, because correcting one would have to
- * unwind the donor's eligibility date and the units already issuable from stock,
- * which is a reversal flow in its own right and not something to smuggle in
- * behind a PATCH.
+ * "Record Donation" for blood bank staff, who always record against their own bank (via DonationService).
+ * POST only: a donation is an event, with no amend or delete route.
  */
 @RestController
 @RequestMapping("/api/donations")
@@ -40,13 +29,8 @@ public class DonationController {
     }
 
     /**
-     * Records a donation, updates the donor's eligibility clock, and adds the
-     * units to stock — all or nothing. Refused with 409, and nothing written, if
-     * the donor is still inside Business Rule 2's 90-day recovery window.
-     *
-     * 201 with a receipt that includes the resulting stock figure, so the screen
-     * can confirm the inventory half of the action actually landed rather than
-     * leaving staff to go and check.
+     * Records a donation, updates the donor's eligibility and adds the units to stock, all or nothing;
+     * 409 for a donor in recovery. 201 with a receipt including the resulting stock figure.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

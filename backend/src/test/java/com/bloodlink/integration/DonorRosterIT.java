@@ -45,35 +45,8 @@ import com.bloodlink.repository.UserRepository;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * A blood bank's donor roster and per-bank donation history, end to end —
- * Business Rule 21. An integration test rather than more unit tests because
- * what matters here is a real query across two tables (Donor and Donation),
- * scoped correctly to one bank, with pagination and several optional filters
- * combined — exactly the kind of thing a mock can be told the answer to but
- * only a real database query can get wrong.
- *
- * Two seeded banks, four donors arranged across them:
- * <ul>
- *   <li>Aminata Sesay — O-, one donation (2 units) at bank A only, dated 91
- *       days ago (eligible, just past the boundary).</li>
- *   <li>Mohamed Kamara — A+, one donation at bank A only, dated exactly 90
- *       days ago (still in recovery — Business Rule 2's boundary day is
- *       inclusive of the window).</li>
- *   <li>Aminata Koroma — O-, one donation at bank A and three separate
- *       donations at bank B, every one of them more than 90 days ago (so she
- *       is eligible overall — her most recent donation anywhere is the bank A
- *       one, 91 days ago). Proves the same donor shows up at both banks with
- *       a different donationsHere for each: 1 at bank A, 3 at bank B.</li>
- *   <li>Fatmata Conteh — O+, one donation at bank B only, dated 10 days ago
- *       (in recovery), never at bank A. Must never appear in bank A's roster
- *       or its history route.</li>
- * </ul>
- *
- * <h2>Running this test</h2>
- * <pre>{@code .\mvnw.cmd test -Dtest=DonorRosterIT}</pre>
- * Shares {@code bloodlink_test} with the other integration tests and the same
- * guarantee: {@code @Transactional}, so every row written here — the donors,
- * their accounts, and their donations — is rolled back.
+ * A bank's donor roster and per-bank history end to end (Business Rule 21), against a real two-table query.
+ * Four donors across two banks cover the 90-day boundary and per-bank counts; rolled back. Run -Dtest=DonorRosterIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -189,9 +162,7 @@ class DonorRosterIT {
     @Test
     void pagingSplitsTheRosterAcrossFirstLastAndPastTheEnd() throws Exception {
         Fixture fx = new Fixture();
-        // 3 donors at bank A already (Aminata Sesay, Mohamed Kamara, Aminata
-        // Koroma); two more at size 2 makes a clean 2-page roster of exactly 4,
-        // isolated from the others by a group no other test in this class uses.
+        // Three donors at bank A already; two more in an unused group give a clean 2-page roster of 4 at size 2.
         registerAndDonate("Extra Donor One", "AB+", fx.bankA, 91, 1);
         registerAndDonate("Extra Donor Two", "AB+", fx.bankA, 91, 1);
 
@@ -289,11 +260,8 @@ class DonorRosterIT {
         }
     }
 
-    /** Registers a donor, gives them one donation at {@code bank} dated
-     *  {@code daysAgo} days ago, and sets {@code last_donation_date} to match —
-     *  the live POST /api/donations endpoint always dates a donation today, so
-     *  backdating (needed to test both sides of the 90-day line) has to go
-     *  through the repositories directly. */
+    /** Registers a donor with one backdated donation at bank and a matching last_donation_date,
+     * through the repositories, since the endpoint always dates donations today. */
     private Donor registerAndDonate(String fullName, String bloodType, BloodBank bank, int daysAgo, int units)
             throws Exception {
         Donor donor = registerDonor(fullName, bloodType);
@@ -354,9 +322,7 @@ class DonorRosterIT {
         return objectMapper.readValue(result.getResponse().getContentAsString(), AuthResponse.class).token();
     }
 
-    /** The roster's first page (default size 20, enough for every scenario in
-     *  this class bar the dedicated pagination test), with an optional extra
-     *  query string. */
+    /** The roster's first page (default size 20) with an optional extra query string. */
     private DonorRosterPageResponse roster(String token, String extraQuery) throws Exception {
         String url = "/api/donors/roster" + (extraQuery == null ? "" : "?" + extraQuery);
         MvcResult result = mockMvc.perform(get(url).header("Authorization", bearer(token)))
