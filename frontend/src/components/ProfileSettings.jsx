@@ -2,32 +2,8 @@ import React, { useEffect, useState } from "react";
 import { changeMyPassword, getMyAccount, updateMyDetails } from "../api/account.js";
 import { initials } from "../lib/dates.js";
 
-/* ================================================================
-   BloodLink — Profile Settings (Business Rule 16)
-
-   One screen, shared by all four roles: Donor, Hospital Staff, Blood Bank
-   Staff and Administrator. Each portal keeps its own sidebar, header and
-   notification bell, and shows this in its main area when "Settings" is
-   chosen — one form to maintain, and no role's rules can drift from
-   another's.
-
-   What it shows:
-     • Your details — full name and email, editable.
-     • Managed by your administrator — phone (the login), role and facility,
-       shown read-only with who can change them, so nobody hunts for an edit
-       box that is deliberately missing. The server refuses any attempt to
-       change them too; hiding the inputs is a courtesy, not the control.
-     • Change password — current password required, then the new one twice.
-
-   No design mockup exists for this screen. It is built from the tokens every
-   portal already declares (navy / red / green / amber, Inter, white cards on
-   a light grey page with the same radius and shadow), and its form controls
-   follow the Admin Console's Create Account dialog, so it reads as the same
-   system rather than a new one.
-
-   Self-contained: its styles are scoped under .ps-root with their own copies
-   of the tokens, so it looks the same whichever portal it is placed in.
-   ================================================================ */
+/* BloodLink — Profile Settings (Business Rule 16), one screen for all four roles: editable name and email,
+   read-only phone/role/facility, and password change. Styles scoped under .ps-root. */
 
 const ROLE_LABEL = {
   DONOR: "Donor",
@@ -41,14 +17,8 @@ const ROLE_LABEL = {
 const MIN_PASSWORD_LENGTH = 8;
 
 /**
- * The banner text for a failed request, or null when it would only repeat a
- * message already shown under one of this form's own inputs.
- *
- * Some errors carry the same sentence as both their message and a field error — a
- * wrong current password does — and showing it in a banner and again under the box
- * reads as two problems. But a field error for something that is NOT on this form
- * (the server naming "phone", say) has no input to appear under, so the banner is
- * then the only place it can be seen and must stay.
+ * The banner text for a failed request, or null when it would only repeat a message under one of this form's inputs;
+ * errors for fields not on this form still show here.
  */
 function bannerFor(err, visibleFields) {
   const fieldErrors = err.fieldErrors ?? {};
@@ -57,9 +27,7 @@ function bannerFor(err, visibleFields) {
 }
 
 /**
- * @param onUserUpdated called with { fullName, email } after a successful save,
- *                      so the portal's header and the stored session show the new
- *                      name without a sign-out
+ * onUserUpdated is called with { fullName, email } after a save, so the header and session update without sign-out.
  */
 export default function ProfileSettings({ onUserUpdated }) {
   const [account, setAccount] = useState(null);
@@ -107,14 +75,10 @@ export default function ProfileSettings({ onUserUpdated }) {
 }
 
 /**
- * Full name and email — the two things every role may change about itself.
- * No current password is asked for here: neither is a credential. Save is only
- * enabled once something has actually changed.
+ * Full name and email, editable by every role without a current password; Save enables only after a change.
  */
 function DetailsCard({ account, onSaved }) {
-  // A donor may have no email at all (Business Rule 18) — the account arrives with
-  // email: null. The input always holds a string, so "none" is "" here; comparing
-  // against account.email directly would call .trim() on null and break the screen.
+  // A donor may have no email (null); the input always holds a string, so "none" is "" here.
   const storedEmail = account.email ?? "";
   const emailOptional = account.role === "DONOR";
 
@@ -195,9 +159,7 @@ function DetailsCard({ account, onSaved }) {
 }
 
 /**
- * Phone, role and facility: shown, not editable. Each says who can change it,
- * because "why can't I edit my phone?" deserves an answer on the screen rather
- * than a support call. The facility row appears only for the two staff roles.
+ * Phone, role and facility, shown read-only with who can change them; facility only for staff roles.
  */
 function ManagedFactsCard({ account }) {
   const facility = account.hospitalName ?? account.bloodBankName;
@@ -205,10 +167,7 @@ function ManagedFactsCard({ account }) {
 
   return (
     <div className="ps-card">
-      {/* Worded as "set up for you", not "an administrator can change these":
-          there is no screen anywhere — not even the Admin Console — that edits a
-          phone, role or facility after an account exists, so promising an
-          in-app fix would send people looking for something that isn't there. */}
+      {/* Worded as "set up for you", since no screen anywhere edits a phone, role or facility after creation. */}
       <div className="ps-card-title">Managed by your administrator</div>
       <div className="ps-card-sub">
         Set when your account was created. Contact your system administrator if any of these need to change.
@@ -238,18 +197,8 @@ function ManagedFactsCard({ account }) {
 }
 
 /**
- * Change password: current password first, then the new one twice.
- *
- * The current password is what stops anyone who finds this screen open — a
- * shared machine at a facility, a phone left unlocked — from setting a password
- * of their own and locking the real owner out (Business Rule 16). A wrong one
- * comes back as a 401 on the currentPassword field; the API client knows that
- * kind of 401 is about the typed field, not the session, so the user is not
- * signed out for a typo.
- *
- * "Confirm new password" is checked here only — the server never sees it — the
- * same split Register.jsx uses: it guards against a typo in a password nobody can
- * see, which is a browser-side concern.
+ * Change password: current password first (so an open session can't lock the owner out), then the new one twice.
+ * A wrong current password is a field 401 that keeps the session; the confirm field is checked only here.
  */
 function PasswordCard() {
   const [currentPassword, setCurrentPassword] = useState("");

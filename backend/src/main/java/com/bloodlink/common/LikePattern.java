@@ -1,18 +1,8 @@
 package com.bloodlink.common;
 
 /**
- * Builds the pattern for a "contains" search — {@code column like :pattern escape '\'} —
- * from text a person typed, so that what they typed is matched literally.
- *
- * In a LIKE pattern {@code %} means "anything" and {@code _} means "any one
- * character". Left as they are, a search for "%" matches every row and a search for
- * "a_b" matches "axb", which is not what anyone typing them meant. Each is escaped
- * with a backslash here, and every query using this pattern names that backslash in
- * its {@code escape '\'} clause, so the database reads them as plain characters.
- * The backslash itself is escaped first, so a typed backslash is literal too.
- *
- * Shared by every search box that queries with LIKE (the blood bank's Donors roster
- * and the Admin Console's User Accounts), so the rule is written once.
+ * Builds a LIKE "contains" pattern from typed text with \, % and _ escaped, so the text matches literally
+ * (queries use escape '\'). Shared by the Donors roster and User Accounts searches.
  */
 public final class LikePattern {
 

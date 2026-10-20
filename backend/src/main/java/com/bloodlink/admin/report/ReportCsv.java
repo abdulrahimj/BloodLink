@@ -15,22 +15,8 @@ import com.bloodlink.admin.report.dto.ReportDtos.StockGroupRow;
 import com.bloodlink.admin.report.dto.ReportDtos.StockReport;
 
 /**
- * The "Download CSV" files of the Admin Reports page (Business Rule 23), built on the
- * server from the same report objects the page shows.
- *
- * <h2>Made safe to open in a spreadsheet</h2>
- * <ul>
- *   <li><b>Formula injection.</b> A spreadsheet runs a cell starting with {@code =},
- *       {@code +}, {@code -} or {@code @} (or a tab or carriage return) as a formula.
- *       A text cell that starts with one is prefixed with an apostrophe, so it shows
- *       as text. Bank names are typed by administrators, so this is not theoretical.</li>
- *   <li><b>Quoting.</b> Every text cell is wrapped in double quotes and any double
- *       quote inside it doubled, so commas, quotes and line breaks stay in their cell.
- *       Numbers are written bare, so they stay numbers.</li>
- *   <li><b>Encoding.</b> UTF-8 with a byte-order mark, which is what makes Excel read
- *       it as UTF-8 rather than guessing; rows end in CRLF (RFC 4180).</li>
- * </ul>
- * Each file is one or more small titled tables separated by a blank row.
+ * The Admin Reports CSV downloads (Business Rule 23), built from the same objects the page shows.
+ * Formula injection defused with an apostrophe, text cells quoted, UTF-8 with a BOM and CRLF rows.
  */
 public final class ReportCsv {
 
@@ -94,15 +80,17 @@ public final class ReportCsv {
             .row("As of", today.toString())
             .blank()
             .row("Measure", "Units")
-            .row("Total units", report.totalUnits())
-            .row("Expiring within " + report.expiringSoonWindowDays() + " days (including already expired)", report.expiringSoonUnits())
-            .row("Already past expiry date", report.pastExpiryUnits())
+            // Usable stock only (Business Rules 23 and 24): expired units are not stock, and
+            // appear only on their own row, never inside the two figures before it.
+            .row("Total usable units", report.totalUnits())
+            .row("Usable units expiring within " + report.expiringSoonWindowDays() + " days", report.expiringSoonUnits())
+            .row("Expired units awaiting discard (not counted as stock)", report.pastExpiryUnits())
             .blank()
-            .row("Blood group", "Units", "Status");
+            .row("Blood group", "Usable units", "Status");
         for (StockGroupRow group : report.groups()) {
             csv.row(group.bloodType(), group.units(), group.status().name());
         }
-        csv.blank().row("Blood bank", "Total units", "Critical groups", "Low groups");
+        csv.blank().row("Blood bank", "Usable units", "Critical groups", "Low groups");
         for (StockBankRow bank : report.banks()) {
             csv.row(bank.bankName(), bank.totalUnits(), bank.criticalGroups(), bank.lowGroups());
         }

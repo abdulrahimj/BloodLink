@@ -1,20 +1,11 @@
-/* ================================================================
-   BloodLink — admin calls
-
-   Account management, adding facilities, and citywide reporting, all restricted server-side to
-   ADMIN (SecurityConfig gates the whole /api/admin/** prefix on the role, so
-   there is nothing to scope here the way a bank- or hospital-facing call
-   would need to — an administrator's view is never "my own facility").
-   ================================================================ */
+/* BloodLink — admin calls: account management, adding facilities and citywide reports,
+   all restricted server-side to ADMIN. */
 
 import { apiDownload, apiRequest } from './client.js';
 
 /**
- * GET /api/admin/users — one page of accounts, searched, filtered and sorted by the
- * server. `params` is what lib/userAccounts.js's buildUserAccountsParams produced:
- * page, size, sort, direction, and q / role / status only when set. Resolves to
- * { content, page, size, totalElements, totalPages }; the totals count only the
- * accounts that match. A bad value is a 400 naming the field.
+ * GET /api/admin/users: one page of accounts with params from buildUserAccountsParams;
+ * resolves to { content, page, size, totalElements, totalPages }.
  */
 export function getAdminUsers(params) {
   const query = new URLSearchParams(
@@ -24,37 +15,23 @@ export function getAdminUsers(params) {
 }
 
 /**
- * GET /api/admin/reports/users — { total, donors, hospitalStaff, bloodBankStaff,
- * admins }, counted by the database. Feeds the Dashboard's "Total Users" and
- * "Registered Donors" cards and the counts on the User Accounts role buttons.
+ * GET /api/admin/reports/users: account counts per role, for the Dashboard cards and role buttons.
  */
 export function getUserCounts() {
   return apiRequest('/api/admin/reports/users');
 }
 
 /**
- * POST /api/admin/users — creates a staff or administrator account.
- *
- * `payload` is { fullName, phone, email, role, bloodBankId?, hospitalId? }, where
- * role is "HOSPITAL_STAFF", "BLOOD_BANK_STAFF" or "ADMIN" — never "DONOR", which
- * the server refuses outright (donors register themselves).
- *
- * No password is sent: the server generates one and returns it, in plaintext,
- * exactly once — { account, temporaryPassword }. That value is never retrievable
- * again and exists nowhere else, so the caller must show it to the administrator
- * before it is lost, and must not stash it anywhere afterwards.
+ * POST /api/admin/users: creates a staff/admin account from { fullName, phone, email, role, facility id }, never DONOR.
+ * Resolves to { account, temporaryPassword }, shown once and never stored.
  */
 export function createStaffAccount(payload) {
   return apiRequest('/api/admin/users', { method: 'POST', body: payload });
 }
 
 /**
- * PATCH /api/admin/users/{id} — activates or suspends one account.
- *
- * `status` is "ACTIVE" or "SUSPENDED". A suspension takes effect immediately —
- * the backend rejects that account's existing token on its very next request,
- * not only at its next login — and self-suspension is refused server-side with
- * a 409, so there is always at least one path back in.
+ * PATCH /api/admin/users/{id}: "ACTIVE" or "SUSPENDED"; a suspension takes effect immediately,
+ * and self-suspension is a 409.
  */
 export function updateUserStatus(userId, status) {
   return apiRequest(`/api/admin/users/${userId}`, {
@@ -64,15 +41,8 @@ export function updateUserStatus(userId, status) {
 }
 
 /**
- * PATCH /api/admin/users/{id}/details — changes another account's phone and
- * facility (Business Rule 17).
- *
- * Always the whole desired state: `phone`, plus `bloodBankId` for blood bank
- * staff or `hospitalId` for hospital staff (null otherwise). Role cannot be
- * changed here, and an administrator cannot use this on their own account —
- * both are refused server-side. Resolves to the updated account, in the same
- * shape the User Accounts table renders. Every real change is recorded in the
- * audit log.
+ * PATCH /api/admin/users/{id}/details: the full desired phone and facility (Business Rule 17); not role, not your own.
+ * Resolves to the updated account; real changes are audit-logged.
  */
 export function editAccountDetails(userId, { phone, bloodBankId = null, hospitalId = null }) {
   return apiRequest(`/api/admin/users/${userId}/details`, {
@@ -82,13 +52,8 @@ export function editAccountDetails(userId, { phone, bloodBankId = null, hospital
 }
 
 /**
- * POST /api/admin/blood-banks — adds a blood bank (Business Rule 19).
- *
- * `payload` is { name, location, contactPhone }, all required. Resolves to the new
- * row in the same shape GET /api/blood-banks returns, so it can be added straight
- * to that list. A name another blood bank already has (ignoring case and spacing)
- * is a 409. The contact phone is stored as typed — it is a facility's display
- * number, not a login, so Business Rule 13's format does not apply.
+ * POST /api/admin/blood-banks (Business Rule 19): { name, location, contactPhone }, resolving to the new row;
+ * a duplicate name is a 409, and the phone is stored as typed.
  */
 export function createBloodBank(payload) {
   return apiRequest('/api/admin/blood-banks', { method: 'POST', body: payload });
@@ -100,11 +65,8 @@ export function createHospital(payload) {
 }
 
 /**
- * GET /api/admin/audit-log — one page of recorded administrator actions, newest
- * first. Read-only: the log has no endpoint that changes or removes an entry.
- *
- * `page` is 0-based (default 0); `size` defaults to 20 and the server refuses
- * anything above 100. Resolves to { content, page, size, totalElements, totalPages }.
+ * GET /api/admin/audit-log: one read-only page, newest first (page 0-based, size default 20, max 100);
+ * resolves to { content, page, size, totalElements, totalPages }.
  */
 export function getAuditLog(page = 0, size = 20) {
   return apiRequest(`/api/admin/audit-log?page=${page}&size=${size}`);
@@ -122,11 +84,8 @@ export function getRequestOutcomes() {
   return apiRequest('/api/admin/reports/requests');
 }
 
-/* ---------- the Reports page (Business Rule 23) ----------
-   Four read-only sections, each counted by the database and each with a CSV twin
-   at the same path plus /export. `range` is { from, to } as yyyy-MM-dd strings;
-   Stock and Donors are "as of today" and take none. A bad, backwards or over-five-
-   year range is a 400 naming the field. Nothing returned identifies a donor. */
+/* ---------- the Reports page (Business Rule 23): four sections, each with a CSV twin at /export ----------
+   range is { from, to } (yyyy-MM-dd) for Requests and Donations only; bad ranges are a 400. */
 
 /** Builds "?from=…&to=…" for the two date-ranged sections. */
 function rangeQuery({ from, to }) {
@@ -154,10 +113,7 @@ export function getDonorReport() {
 }
 
 /**
- * GET /api/admin/reports/summary/{section}/export — that section's CSV, built on
- * the server. `section` is "stock", "requests", "donations" or "donors"; `range`
- * is needed by the two dated sections and ignored otherwise. Resolves to
- * { blob, fileName }.
+ * GET .../summary/{section}/export: the section's CSV from the server; resolves to { blob, fileName }.
  */
 export function downloadReportCsv(section, range) {
   const query = section === 'requests' || section === 'donations' ? rangeQuery(range) : '';

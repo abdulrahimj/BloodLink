@@ -40,18 +40,8 @@ import com.bloodlink.repository.UserRepository;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The Admin Console's User Accounts search, filters, sort and paging, run as the real
- * query against a real database — the parts a mock can be told the answer to but only
- * PostgreSQL can get wrong: the LIKE escaping, the OR across name/email/phone, the
- * filters and the count query agreeing, and the id tie-breaker keeping pages stable.
- *
- * Every account this class creates carries a marker in its name ({@link #mark}), and
- * most assertions measure the change from before the accounts were created rather than
- * an absolute number, so other rows in the database can never make a test pass or fail.
- *
- * Shares {@code bloodlink_test} with the other integration tests and the same
- * guarantee: {@code @Transactional}, so everything written here is rolled back.
- * Run with {@code .\mvnw.cmd test -Dtest=AdminUserSearchIT}.
+ * User Accounts search, filters, sort and paging against a real database: LIKE escaping, the name/email/phone OR,
+ * matching counts and stable pages. Marked accounts, relative assertions; rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -282,10 +272,8 @@ class AdminUserSearchIT {
     // ---------- fixture and helpers ----------
 
     /**
-     * Twelve accounts, every name ending in {@link #mark}: 9 donors (one suspended,
-     * one without an email, one with a literal "%" in its name, five sharing one name),
-     * one of each staff role and one administrator. Index 0 is Aminata Kamara and
-     * index 5 is Hawa Bangura (no email).
+     * Twelve marked accounts: 9 donors (one suspended, one without email, one with "%", five sharing a name),
+     * one of each staff role and an admin. Index 0 is Aminata Kamara, 5 is Hawa Bangura (no email).
      */
     private List<User> seedTwelve() {
         List<User> seeded = new ArrayList<>();
@@ -333,9 +321,7 @@ class AdminUserSearchIT {
     }
 
     /**
-     * One page for "key=value&key=value" written with plain, unencoded values. Each
-     * pair is sent as a real request parameter, so MockMvc does the URL-encoding once —
-     * encoding here as well would turn a typed "%" into the literal text "%25".
+     * One page for unencoded "key=value&..." pairs; MockMvc encodes them once, so "%" stays literal.
      */
     private AdminUserPageResponse page(String query) throws Exception {
         var request = get("/api/admin/users").header("Authorization", bearer(adminToken));

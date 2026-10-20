@@ -13,9 +13,8 @@ public interface BloodBankRepository extends JpaRepository<BloodBank, UUID> {
     List<BloodBank> findAllByOrderByNameAsc();
 
     /**
-     * Whether a blood bank with this name already exists, ignoring case — the
-     * pre-flight duplicate check for Business Rule 19. V14's unique index on
-     * lower(name) is the real guarantee; this only lets the 409 name the problem.
+     * Pre-flight duplicate check for Business Rule 19, ignoring case;
+     * V14's unique index is the real guarantee.
      */
     boolean existsByNameIgnoreCase(String name);
 }

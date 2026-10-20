@@ -29,10 +29,8 @@ import com.bloodlink.web.error.InvalidPhoneNumberException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * The lookup a blood bank runs before recording a donation. What matters here is
- * that it surfaces the donor's eligibility honestly — the Record Donation screen
- * shows that to the staff member as the one fact they must weigh before drawing
- * blood — and that the profile blood group is carried as reference only.
+ * The Record Donation lookup: reports the donor's eligibility honestly,
+ * and carries the profile blood group as reference only.
  */
 @ExtendWith(MockitoExtension.class)
 class DonorLookupServiceTest {
@@ -110,9 +108,7 @@ class DonorLookupServiceTest {
         when(donorRepository.findByUserPhoneWithUser(PHONE))
             .thenReturn(Optional.of(donor(BloodType.O_POSITIVE, null)));
 
-        // The staff member has a donor standing in front of them reading out a
-        // number; they should not also have to know which of the accepted formats
-        // that person happened to register in. All three of these are one number.
+        // All three spellings are one number; staff shouldn't need to know which format the donor registered in.
         service.lookupByPhone("  +232 76 000 001  ");
         service.lookupByPhone("076000001");
         service.lookupByPhone("076 000 001");
@@ -122,10 +118,7 @@ class DonorLookupServiceTest {
 
     @Test
     void aNumberThatIsNotAPhoneNumberIsRefusedRatherThanReportedAsNoSuchDonor() {
-        // "That is not a phone number" and "no donor has that number" are different
-        // problems: the first is a typo to correct here, the second sends the staff
-        // member off to register the donor. Answering 404 to the first would start
-        // that second errand for no reason.
+        // Not a phone number (fix the typo) differs from no donor with that number (register them), so not a 404.
         assertThatThrownBy(() -> service.lookupByPhone("07600000"))
             .isInstanceOf(InvalidPhoneNumberException.class);
 

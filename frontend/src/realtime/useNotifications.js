@@ -1,12 +1,5 @@
-/* ================================================================
-   BloodLink — notification state for one screen
-
-   Joins the two halves of delivery into a single piece of state a portal can
-   render: the REST read that fills the bell on load, and the live socket that
-   keeps it current afterwards. Both portals use this, so the bell behaves
-   identically on the Donor and Blood Bank screens rather than being wired
-   twice and drifting.
-   ================================================================ */
+/* BloodLink — notification state for one screen: the REST read that fills the bell on load
+   plus the live socket, shared so every portal's bell behaves the same. */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -15,22 +8,15 @@ import { getToken } from '../auth/session.js';
 import { connectNotifications } from './notificationSocket.js';
 
 /**
- * @param {object}   [options]
- * @param {function} [options.onNotification] called with each live arrival, for a
- *        screen that has to react to more than the bell — the Blood Bank Dashboard
- *        reloads its stock table and request panel when one of those changes.
- *
- * @returns {{notifications: Array, unreadCount: number, connected: boolean,
- *            markAllRead: function, reload: function}}
+ * options.onNotification is called on each live arrival for screens that react beyond the bell.
+ * Returns { notifications, unreadCount, connected, markAllRead, reload }.
  */
 export function useNotifications({ onNotification } = {}) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [connected, setConnected] = useState(false);
 
-  // Held in a ref rather than read from the closure, so that a caller passing an
-  // inline arrow function (which is a new function on every render) does not tear
-  // down and reopen the WebSocket on every render.
+  // Held in a ref so an inline callback doesn't reopen the WebSocket on every render.
   const onNotificationRef = useRef(onNotification);
   onNotificationRef.current = onNotification;
 
@@ -41,10 +27,7 @@ export function useNotifications({ onNotification } = {}) {
     setUnreadCount(count.unreadCount);
   }, []);
 
-  // Initial fill. A failure here is deliberately swallowed: the bell is secondary
-  // to whatever the screen is actually for, and a page-level error banner because
-  // the notification count could not be fetched would be worse than a bell showing
-  // nothing. The dashboard's own calls report their own failures.
+  // Initial fill; a failure is swallowed, since the bell is secondary to the screen.
   useEffect(() => {
     let cancelled = false;
 
@@ -81,9 +64,7 @@ export function useNotifications({ onNotification } = {}) {
       token,
       onStatusChange: setConnected,
       onNotification: (notification) => {
-        // Prepended, because the list is newest-first everywhere it is read.
-        // Guarded against a duplicate id: a reconnect can overlap with a reload,
-        // and the same notification arriving twice would show as two rows.
+        // Prepended (newest first) and de-duplicated by id, since a reconnect can overlap a reload.
         setNotifications((current) =>
           current.some((existing) => existing.id === notification.id)
             ? current
@@ -99,9 +80,7 @@ export function useNotifications({ onNotification } = {}) {
   }, []);
 
   /**
-   * Clears the badge. The count is taken from the server's response rather than
-   * assumed to be zero, so a notification that arrived between the click and the
-   * response is still counted instead of being silently swallowed.
+   * Clears the badge using the server's returned count, so a notification arriving meanwhile is still counted.
    */
   const markAllRead = useCallback(async () => {
     try {

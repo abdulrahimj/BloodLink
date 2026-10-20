@@ -10,13 +10,8 @@ import java.util.List;
 import com.bloodlink.web.error.InvalidFieldException;
 
 /**
- * The date range the Requests and Donations sections of the Admin Reports page cover
- * (Business Rule 23): {@code from} and {@code to}, both inclusive, in UTC — Sierra
- * Leone's own time, so a day here is the day the users there see.
- *
- * When neither is given, the range is the last six calendar months including this
- * one (the 1st of the month five months back, up to today) — the same six months the
- * Dashboard's trend chart already shows.
+ * The date range of the Requests and Donations report sections (Business Rule 23): from and to inclusive, in UTC.
+ * Default: the last six calendar months including this one, as the Dashboard chart shows.
  */
 public record ReportRange(LocalDate from, LocalDate to) {
 
@@ -24,9 +19,8 @@ public record ReportRange(LocalDate from, LocalDate to) {
     public static final int MAX_YEARS = 5;
 
     /**
-     * Fills in a missing end with today, and a missing start with the 1st of the month
-     * five months before the end, then refuses a range that runs backwards (400 on
-     * "from") or spans more than five years (400 on "to"). Never silently corrects.
+     * Fills a missing end with today and a missing start with the 1st of the month five months earlier;
+     * a backwards range (400 on from) or one over five years (400 on to) is refused, never corrected.
      */
     public static ReportRange resolve(LocalDate from, LocalDate to, LocalDate today) {
         LocalDate end = to != null ? to : today;

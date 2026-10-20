@@ -1,27 +1,11 @@
-/* ================================================================
-   BloodLink — client-side session
-
-   Holds the JWT returned by /api/auth/login and /api/auth/register,
-   plus the user summary that came with it, so the app can render a
-   role-appropriate view without an extra round trip.
-
-   The token is short-lived and the server re-checks the caller's role on
-   every request, so this browser copy is a convenience, never the authority.
-
-   Two stores back the Login screen's "Remember me":
-     localStorage   — survives closing the tab, so staff are not signed out
-                      mid-shift by a refresh. Used when the box is ticked.
-     sessionStorage — cleared when the tab closes. Used when it is not,
-                      which matters on the shared machines at a facility.
-   ================================================================ */
+/* BloodLink — client-side session: the JWT and user summary from login/register (a convenience, never the authority).
+   "Remember me" picks localStorage (survives the tab) or sessionStorage (cleared on close). */
 
 const TOKEN_KEY = 'bloodlink.token';
 const USER_KEY = 'bloodlink.user';
 
 /**
- * Persists the token and user summary from an auth response.
- * Writes to one store and clears the other, so a later sign-in with a different
- * "Remember me" choice can never leave a stale token behind in the unused store.
+ * Stores the token and user summary in one store and clears the other, so no stale token is left behind.
  */
 export function saveSession({ token, user }, remember = true) {
   const target = remember ? localStorage : sessionStorage;
@@ -40,9 +24,7 @@ export function getToken() {
 }
 
 /**
- * The stored user summary ({ id, fullName, email, phone, role }), or null.
- * Wrapped in try/catch because a partially-cleared or hand-edited store would
- * otherwise throw on JSON.parse and break the whole app shell.
+ * The stored user summary or null; try/catch so a damaged store cannot break the app shell.
  */
 export function getUser() {
   try {
@@ -54,14 +36,8 @@ export function getUser() {
 }
 
 /**
- * Merges changed fields into the stored user summary — used after Profile Settings
- * saves a new name or email, so a refresh shows the new name instead of the one the
- * user signed in with.
- *
- * Writes to whichever store currently holds the session, so the "Remember me"
- * choice made at sign-in is kept: a session that was meant to end with the tab
- * must not be promoted to one that survives it just because the user renamed
- * themselves. Does nothing when signed out.
+ * Merges changed fields into the stored user summary after Profile Settings saves,
+ * in whichever store holds the session, keeping the "Remember me" choice. No-op when signed out.
  */
 export function updateSessionUser(changes) {
   const store = localStorage.getItem(TOKEN_KEY) !== null ? localStorage

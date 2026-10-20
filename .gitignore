@@ -1,9 +1,32 @@
 .idea/
 .DS_Store
 *.log
+
+# --- Files that can hold real secrets or credentials: never committed ---
+# (These patterns apply in every folder: backend/, frontend/ and the root.)
+
+# A developer's own backend configuration: their database credentials.
+# The committed template is application.properties.example.
 backend/src/main/resources/application.properties
-# Docker Compose's real secrets. Only .env.example, which holds placeholders, is committed.
+# Any other local profile file (application-prod.properties, application-local.properties, ...)
+# could hold a real JWT secret or password. The demo profile's file is committed on purpose:
+# it holds only the container-only demo database's public settings.
+backend/src/main/resources/application-*.properties
+!backend/src/main/resources/application-demo.properties
+
+# Environment files: Docker Compose's .env holds BLOODLINK_JWT_SECRET, Vite's .env.local
+# holds local overrides. Only the .env.example templates, which hold placeholders, are committed.
 .env
+.env.*
+*.env
+!.env.example
+
+# Keys, certificates and keystores.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
 
 # Scratch space for AI-assisted work (test scripts, screenshots, logs, browser
 # profiles). Not project content; never committed.

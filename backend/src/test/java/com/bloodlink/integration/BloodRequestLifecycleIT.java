@@ -48,72 +48,12 @@ import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
 
-// Spring Boot 4 ships Jackson 3, where ObjectMapper lives under tools.jackson
-// (see RestAuthenticationEntryPoint for the same note) — the bean autowired here
-// is that one, not com.fasterxml.jackson.databind.ObjectMapper.
+// Spring Boot 4 ships Jackson 3, so this is tools.jackson's ObjectMapper, not com.fasterxml's.
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * The end-to-end tests in this project: realistic paths through every layer —
- * SecurityConfig and JwtAuthenticationFilter, Bean Validation, the controllers,
- * the services, and a real PostgreSQL database — rather than single classes in
- * isolation with everything around them mocked away.
- *
- * Two flows live here, both about the life of one blood request:
- * {@link #donorRegistrationHospitalRequestBankFulfilmentAndNotificationAllWorkTogether}
- * walks the happy path from registration through fulfilment, and
- * {@link #oneBankDecliningKeepsARequestOpenForTheOthersAndTheLastDeclineClosesIt}
- * covers Business Rule 11's per-bank declines, which cannot be proven anywhere
- * else: the rule is enforced partly by a JPQL not-exists clause, and only a real
- * query against real rows can show a request leaving one bank's queue while
- * staying in another's.
- *
- * They share this class deliberately rather than splitting into a second IT.
- * CLAUDE.md reserves the {@code bloodlink_test} database for this one test class
- * precisely because it is {@code @Transactional} — every method rolls back
- * everything it writes, so re-running is always safe and never leaves residue to
- * clean up. A method added here inherits that guarantee; a separate consumer of
- * that database would have to re-earn it.
- *
- * The first flow, in order:
- *   1. A donor registers over the real HTTP endpoint, and their own token is
- *      proven to work against their own profile.
- *   1b. That same donor signs in again with their phone number typed the other
- *      accepted way — registered as "076123456", signing in as "+232 76 123 456".
- *      Phone is the login credential and is matched exactly, so this passes only
- *      because registration and login share one normalisation rule; against a real
- *      database rather than a mock, because what is being proven is that the value
- *      stored is the value later looked up.
- *   2. A hospital-staff and a blood-bank-staff account are seeded directly via
- *      the repositories, because — deliberately, per CLAUDE.md — there is no
- *      self-registration path for either role; an administrator would create
- *      these by hand in a real deployment, which is exactly what this test does.
- *   3. The bank adds stock (Business Rule 7's accumulation, exercised for real).
- *   4. The hospital submits a request (Figure 3.5's hospital side).
- *   5. The bank contributes the full amount in one step — Business Rule 20's
- *      simple case, with the stock deduction it requires. (Partial fulfilment by
- *      two banks has its own test class, PartialFulfilmentIT.)
- *   6. The chain closes on the fact that started this project's Phase 7: a
- *      REQUEST_STATUS_CHANGE Notification row exists for the hospital staff who
- *      raised the request, proving the request module and the notification module
- *      actually agree with each other rather than merely each having their own
- *      passing tests.
- *
- * <h2>Running this test</h2>
- * Excluded from the ordinary {@code mvn test} / {@code .\mvnw.cmd test} run by
- * Maven Surefire's own default naming convention — {@code *Test.java} classes are
- * included, {@code *IT.java} classes are not — so this never blocks a normal build
- * for a developer without the database below, and every other test in this
- * project stays exactly as fast and dependency-free as before this test existed.
- * Run it explicitly with:
- * <pre>{@code .\mvnw.cmd test -Dtest=BloodRequestLifecycleIT}</pre>
- *
- * It needs a real PostgreSQL database named {@code bloodlink_test} to exist —
- * create it once with {@code createdb bloodlink_test} (or the {@code psql}
- * equivalent). This is a dedicated, persistent fixture, never {@code bloodlink_dev}:
- * see {@code application-test.properties} for why re-running these tests is always
- * safe — each method is wrapped in one transaction that is rolled back at the end,
- * so nothing they write is ever left behind for the next run to trip over.
+ * End-to-end tests through every layer on a real database: the full request lifecycle with notification,
+ * and Business Rule 11's per-bank declines. @Transactional on bloodlink_test; run -Dtest=BloodRequestLifecycleIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -134,9 +74,7 @@ class BloodRequestLifecycleIT {
     @Test
     void donorRegistrationHospitalRequestBankFulfilmentAndNotificationAllWorkTogether() throws Exception {
         // ---------- 1. A donor registers, for real, over HTTP ----------
-        // Typed the local way, as someone in Makeni writes their own number. Step 1b
-        // below comes back and signs in with the international spelling of the same
-        // number, which is a different string entirely.
+        // Typed the local way; step 1b signs in with the international spelling.
         String localPhone = uniqueLocalPhone();
 
         RegisterRequest registration = new RegisterRequest(
@@ -166,11 +104,7 @@ class BloodRequestLifecycleIT {
             .andExpect(jsonPath("$.eligibilityStatus").value("ELIGIBLE"));
 
         // ---------- 1b. The same donor signs in with the other format ----------
-        // The number was registered as "076900005" and is typed here as
-        // "+232 76 900 005". Phone is the login credential and is matched exactly,
-        // so this only works because registration and login share one normalisation
-        // rule — and if it ever stops working, a real donor is locked out of an
-        // account they created. Proven against the real database, not a mock.
+        // Works only because registration and login share one normalisation rule, proven on the real database.
         String internationalPhone = internationalSpellingOf(localPhone);
         assertThat(internationalPhone).isNotEqualTo(localPhone);
 
@@ -231,9 +165,7 @@ class BloodRequestLifecycleIT {
         BloodRequestResponse created = readBody(createResult, BloodRequestResponse.class);
 
         // ---------- 5. The bank contributes the whole amount in one step ----------
-        // Business Rule 20's simple case: one bank holds enough, so a single
-        // contribution covers the request and closes it — no approval step, because
-        // there is no promise to make any more, only units to issue.
+        // Business Rule 20's simple case: one contribution covers and closes the request.
         mockMvc.perform(patch("/api/requests/{id}", created.id())
                 .header("Authorization", bearer(bankToken))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -259,21 +191,14 @@ class BloodRequestLifecycleIT {
             .andExpect(jsonPath("$[0].status").value("FULFILLED"));
 
         // ---------- 6. The chain's final link: the hospital was actually notified ----------
-        // Read directly from the repository rather than the notifications endpoint:
-        // the WebSocket push is deferred to after-commit (NotificationPublisher),
-        // and this whole test runs inside one transaction that is rolled back
-        // rather than committed, so a live push would never fire here regardless
-        // of whether the durable row — the actual subject of this assertion —
-        // was correctly written.
+        // Read from the repository, since the push is after-commit and this transaction rolls back.
         List<Notification> hospitalNotifications =
             notificationRepository.findTop50ByRecipientIdOrderByCreatedAtDesc(hospitalStaff.getId());
 
         assertThat(hospitalNotifications)
             .extracting(Notification::getType)
             .containsOnly(NotificationType.REQUEST_STATUS_CHANGE);
-        // One notification, not two: a single contribution covered the whole request
-        // (Business Rule 20), so there is one event to tell the hospital about, where
-        // the old approve-then-fulfil pair produced two.
+        // One notification, not two: a single contribution covered the whole request (Business Rule 20).
         assertThat(hospitalNotifications).hasSize(1);
         assertThat(hospitalNotifications)
             .extracting(Notification::getMessage)
@@ -281,27 +206,13 @@ class BloodRequestLifecycleIT {
     }
 
     /**
-     * Business Rule 11's per-bank rejection, end to end against a real database.
-     *
-     * This is deliberately an integration test rather than another unit test. The
-     * rule's visible half — "a bank that has declined stops seeing the request, and
-     * every other bank keeps seeing it" — lives in a JPQL not-exists clause in
-     * BloodRequestRepository.findActionableForBank. A mocked repository would return
-     * whatever it was told to and prove nothing about that clause; only a real query
-     * against real rows can show the request actually leaving one bank's queue while
-     * staying in another's.
-     *
-     * The flow walks every blood bank that exists rather than hard-coding two, so
-     * the assertion is literally the rule — PENDING after each decline except the
-     * last, REJECTED only when none are left — rather than an arithmetic coincidence
-     * that would quietly stop testing anything if a third bank were ever seeded.
+     * Business Rule 11's per-bank declines against a real database, since the rule lives in a JPQL not-exists clause.
+     * Walks every existing bank: PENDING after each decline but the last, REJECTED only when none are left.
      */
     @Test
     void oneBankDecliningKeepsARequestOpenForTheOthersAndTheLastDeclineClosesIt() throws Exception {
         List<BloodBank> banks = bloodBankRepository.findAllByOrderByNameAsc();
-        // The interesting behaviour only exists with more than one bank: with a
-        // single bank, "some banks have declined" and "all banks have declined" are
-        // the same state and nothing here would be proven.
+        // Needs more than one bank, or "some declined" and "all declined" would be the same state.
         assertThat(banks).hasSizeGreaterThan(1);
 
         Hospital hospital = hospitalRepository.findAllByOrderByNameAsc().get(0);
@@ -360,15 +271,8 @@ class BloodRequestLifecycleIT {
             // The declining bank has lost sight of it, for good.
             assertThat(requestIdsVisibleTo(bankTokens.get(i))).doesNotContain(requestId);
 
-            // Declining twice as the same bank is refused rather than silently
-            // counted again — which, left unguarded, could close a request before
-            // the other banks had ever seen it.
-            //
-            // Both cases are a 409, but for different reasons, and the message is
-            // asserted so this cannot pass for the wrong one: while the request is
-            // still open it is the already-declined guard that refuses, and once the
-            // last decline has closed it, it is the lifecycle guard (a REJECTED
-            // request cannot be declined again by anybody).
+            // A second decline by the same bank is a 409, for different reasons before and after the request closes;
+            // the message is asserted so it cannot pass for the wrong one.
             mockMvc.perform(patch("/api/requests/{id}", requestId)
                     .header("Authorization", bearer(bankTokens.get(i)))
                     .contentType(MediaType.APPLICATION_JSON)
@@ -407,10 +311,7 @@ class BloodRequestLifecycleIT {
 
     // ---------- helpers ----------
 
-    /** The ids in one caller's own request feed — for blood bank staff, the queue
-     *  their dashboard shows, already scoped by findActionableForBank. Read through
-     *  the real endpoint rather than the repository so the scoping under test is the
-     *  one the screen actually gets. */
+    /** The ids in one caller's own request feed, read through the real endpoint so the scoping is what the screen gets. */
     private List<UUID> requestIdsVisibleTo(String token) throws Exception {
         MvcResult result = mockMvc.perform(get("/api/requests").header("Authorization", bearer(token)))
             .andExpect(status().isOk())
@@ -421,15 +322,8 @@ class BloodRequestLifecycleIT {
         return List.of(rows).stream().map(BloodRequestResponse::id).toList();
     }
 
-    /** A staff account of the given role, active and ready to sign in — the shape
-     *  an administrator would create by hand, since no self-registration path
-     *  exists for anything but DONOR.
-     *
-     *  The phone is stored through PhoneNumber.normalize rather than as passed,
-     *  because that is the format login compares against — an account written
-     *  straight into the database in any other spelling cannot be signed into. It is
-     *  the one thing whoever creates these accounts by hand has to get right, so the
-     *  test creates them the same way. */
+    /** An active staff account as an administrator would create it by hand,
+     * with the phone stored through PhoneNumber.normalize so login works. */
     private User staffAccount(String fullName, String phone, Role role) {
         User user = new User();
         user.setFullName(fullName);
@@ -457,9 +351,7 @@ class BloodRequestLifecycleIT {
         return objectMapper.readValue(result.getResponse().getContentAsString(), type);
     }
 
-    /** This bank's current O+ units, via the real inventory endpoint — used to make
-     *  the test's arithmetic correct regardless of whatever this bank already held
-     *  when the test started, rather than assuming it begins at zero. */
+    /** This bank's current O+ units via the real endpoint, so the arithmetic holds whatever it held at the start. */
     private int readOPlusUnits(UUID bankId, String token) throws Exception {
         MvcResult result = mockMvc.perform(get("/api/inventory/{bankId}", bankId)
                 .header("Authorization", bearer(token)))
@@ -476,34 +368,22 @@ class BloodRequestLifecycleIT {
     }
 
     /**
-     * A short digits-only suffix so repeated runs of this test (or two runs
-     * started in the same millisecond) never collide on phone/email uniqueness —
-     * a fresh value per run rather than a fixed one, since the whole test is
-     * transactional and every run's rows disappear on rollback anyway, but the
-     * uniqueness constraint is still checked before that rollback happens.
+     * A short digits-only suffix so repeated runs never collide on phone/email uniqueness before the rollback.
      */
     private String uniqueSuffix() {
         return String.valueOf(System.nanoTime()).substring(8);
     }
 
     /**
-     * A distinct phone number for this run, written the local way: a leading 0 and
-     * exactly eight digits, e.g. {@code 076123456}. Six of those digits come from the
-     * clock, for the same reason {@link #uniqueSuffix()} exists — repeated runs must
-     * not collide on the unique phone constraint, which is checked before the
-     * transaction rolls back.
-     *
-     * Unlike the old free-form suffix, the length here is fixed at what a real
-     * Sierra Leone number has, because the system now refuses anything else.
+     * A distinct local-format phone for this run (0 plus eight digits, six from the clock),
+     * so repeated runs don't collide on the unique phone constraint.
      */
     private String uniqueLocalPhone() {
         return "076" + String.format("%06d", System.nanoTime() % 1_000_000L);
     }
 
     /**
-     * The same number as {@link #uniqueLocalPhone()} produced, written the other
-     * accepted way: {@code 076123456} becomes {@code +232 76 123 456}. Used to sign
-     * in with a string the account was demonstrably not registered under.
+     * The same number written the other accepted way (076123456 becomes +232 76 123 456), for signing in.
      */
     private String internationalSpellingOf(String localPhone) {
         String national = localPhone.substring(1);

@@ -16,24 +16,8 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ConfigurableApplicationContext;
 
 /**
- * Business Rule 15, proven the way it will actually happen: by starting a Spring
- * Boot application and watching it refuse to start, or start and warn.
- *
- * <h2>How much of the application is started</h2>
- * A real {@code SpringApplication.run} — profiles resolved from
- * {@code --spring.profiles.active} exactly as a deployment passes them, the logging
- * system initialised, failure analyzers discovered from META-INF/spring.factories —
- * but with {@link JwtService} as its only bean and no auto-configuration. The check
- * lives entirely in that bean's constructor, so this is the whole of what decides
- * whether the application starts, and none of what would need a database. That is
- * what lets these run in the ordinary {@code mvnw test}, not only as an integration
- * test.
- *
- * <h2>Why every setting is a command-line argument</h2>
- * Command-line arguments outrank application.properties and environment variables.
- * Passing the secret and token lifetime that way means these tests prove the same
- * thing on every machine: on a fresh clone with no local application.properties, and
- * on a developer's machine that happens to have BLOODLINK_JWT_SECRET exported.
+ * Business Rule 15 proven by real SpringApplication.run starts with JwtService as the only bean, no database needed.
+ * Every setting is a command-line argument so results are the same on every machine.
  */
 @ExtendWith(OutputCaptureExtension.class)
 class JwtSecretStartupTest {
@@ -45,11 +29,7 @@ class JwtSecretStartupTest {
     private static final String WARNING_MARKER = "INSECURE JWT SECRET - LOCAL DEVELOPMENT ONLY";
 
     /**
-     * Starts a minimal application whose only bean is JwtService.
-     *
-     * @param secret   the value of bloodlink.jwt.secret
-     * @param profiles the value of spring.profiles.active, or null for the default profile
-     * @param extra    any further command-line arguments
+     * Starts a minimal application with only JwtService: secret, profiles (null for default) and extra arguments.
      */
     private static ConfigurableApplicationContext start(String secret, String profiles, String... extra) {
         List<String> args = new ArrayList<>(List.of(
@@ -123,11 +103,53 @@ class JwtSecretStartupTest {
 
     @Test
     void theRefusalHoldsEvenWithLazyInitialisationSwitchedOn() {
-        // Lazy initialisation defers creating beans until first use. Were JwtService
-        // lazy, the check would first run on the first login attempt, after the
-        // deployment had already reported itself healthy. @Lazy(false) prevents that.
+        // Were JwtService lazy, the check would first run at the first login, after the deployment looked healthy.
         assertThatThrownBy(() -> start(PLACEHOLDER, "prod", "--spring.main.lazy-initialization=true"))
             .satisfies(failure -> assertThat(rootCause(failure)).isInstanceOf(InsecureJwtSecretException.class));
+    }
+
+    // ---------- refused everywhere: a missing or short secret ----------
+
+    @Test
+    void aSecretShorterThan32BytesIsRefusedEvenUnderTheDefaultProfile(CapturedOutput output) {
+        // The length rule has no local exemption, shown under the default profile mvnw spring-boot:run uses.
+        String shortSecret = "only-31-bytes-long-not-enough!!";
+
+        assertThatThrownBy(() -> start(shortSecret, null))
+            .satisfies(failure -> assertThat(rootCause(failure))
+                .isInstanceOf(InsecureJwtSecretException.class)
+                .hasMessageContaining("31 bytes long"));
+
+        String log = output.getOut() + output.getErr();
+        assertThat(log)
+            .contains("APPLICATION FAILED TO START")
+            .contains("is 31 bytes long")
+            .contains("needs at least 32 bytes (256 bits)")
+            .contains("Set the BLOODLINK_JWT_SECRET environment variable")
+            .contains("RandomNumberGenerator");
+        // The report names the length, never the value.
+        assertThat(log).doesNotContain(shortSecret);
+    }
+
+    @Test
+    void anEmptySecretIsRefusedUnderTheDemoProfile(CapturedOutput output) {
+        // BLOODLINK_JWT_SECRET= (set, but to nothing) overrides the placeholder default
+        // with "", so even a local profile has no key to sign with.
+        assertThatThrownBy(() -> start("", "demo"))
+            .satisfies(failure -> assertThat(rootCause(failure))
+                .isInstanceOf(InsecureJwtSecretException.class)
+                .hasMessageContaining("empty"));
+
+        assertThat(output.getOut() + output.getErr())
+            .contains("APPLICATION FAILED TO START")
+            .contains("is empty");
+    }
+
+    @Test
+    void exactly32BytesStartsUnderProd() {
+        try (ConfigurableApplicationContext context = start("k".repeat(32), "prod")) {
+            assertThat(context.getBean(JwtService.class)).isNotNull();
+        }
     }
 
     // ---------- tolerated: the placeholder on a local-only profile, loudly ----------

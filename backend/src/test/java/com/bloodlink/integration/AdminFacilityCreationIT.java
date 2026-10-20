@@ -50,15 +50,8 @@ import jakarta.persistence.EntityManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Business Rule 19 end to end: an administrator adding a blood bank or a hospital,
- * through the real endpoints, security filter chain and PostgreSQL database — which
- * is where V14's case-insensitive unique index and audit-log constraints live, and
- * so the only place they can be proven.
- *
- * Shares bloodlink_test with the other integration tests and the same guarantee:
- * {@code @Transactional}, so every facility, account and audit entry written here is
- * rolled back when each method ends, and re-running is always safe. Run with:
- * <pre>{@code .\mvnw.cmd test -Dtest=AdminFacilityCreationIT}</pre>
+ * Business Rule 19 end to end, where V14's case-insensitive index and audit constraints live.
+ * @Transactional on bloodlink_test; run -Dtest=AdminFacilityCreationIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -155,10 +148,11 @@ class AdminFacilityCreationIT {
             .andExpect(status().isCreated())
             .andReturn());
 
-        // Nothing was written to blood_inventory for it...
+        // No stock batch was written for it (blood_inventory_batches has held all stock
+        // since V19)...
         entityManager.flush();
         Number rows = (Number) entityManager
-            .createNativeQuery("select count(*) from blood_inventory where blood_bank_id = :id")
+            .createNativeQuery("select count(*) from blood_inventory_batches where blood_bank_id = :id")
             .setParameter("id", bankId)
             .getSingleResult();
         assertThat(rows.longValue()).isZero();

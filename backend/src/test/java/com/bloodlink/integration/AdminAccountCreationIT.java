@@ -41,38 +41,8 @@ import com.bloodlink.repository.UserRepository;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Admin-managed account creation (Business Rule 14), end to end: the real HTTP
- * endpoint, the real security filter chain, the real password encoder and a real
- * PostgreSQL database.
- *
- * Two of these tests cannot be written anywhere else, and they are the reason this
- * class exists rather than more cases in {@code AdminUserServiceTest}:
- * <ul>
- *   <li><b>The password actually works.</b> The unit test proves the generated
- *       password verifies against the stored hash. This one takes the password out
- *       of the creation response and signs the new account in with it over
- *       {@code POST /api/auth/login} — through Spring Security, the phone-number
- *       lookup and BCrypt, exactly as the new staff member will. The bug this guards
- *       against (a hash that is stored happily and matches nothing) has happened in
- *       this project once already, from a hand-written hash, and it was invisible
- *       until someone tried to log in.</li>
- *   <li><b>Only an administrator may create accounts.</b> The rule lives in
- *       SecurityConfig's URL matcher, not in any method a unit test can call, so the
- *       only way to prove a donor, hospital-staff or bank-staff token is refused is
- *       to send one.</li>
- * </ul>
- *
- * <h2>Running this test</h2>
- * Like {@link BloodRequestLifecycleIT}, excluded from the ordinary
- * {@code .\mvnw.cmd test} run by Surefire's {@code *IT.java} naming convention, and
- * run explicitly with:
- * <pre>{@code .\mvnw.cmd test -Dtest=AdminAccountCreationIT}</pre>
- *
- * It shares that class's {@code bloodlink_test} fixture database and its guarantee:
- * this class is {@code @Transactional}, so every row it writes is rolled back when
- * each method ends and re-running it is always safe. That guarantee is the whole
- * point of the convention in CLAUDE.md — it is inherited by being transactional,
- * not by being one particular class.
+ * Business Rule 14 end to end: the generated password really signs the new account in, and only an ADMIN
+ * may create accounts (SecurityConfig). @Transactional on bloodlink_test; run -Dtest=AdminAccountCreationIT.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -180,10 +150,7 @@ class AdminAccountCreationIT {
 
     @Test
     void aDonorAccountCannotBeCreatedThroughTheAdminEndpoint() throws Exception {
-        // Donors self-register (Business Rule 8); that path also writes the linked
-        // Donor row this endpoint has no fields for. The console never offers this
-        // option — the server refuses it anyway, because a disabled option in a form
-        // is a courtesy, not a control.
+        // Donors self-register (Business Rule 8); the server refuses DONOR even though the console never offers it.
         mockMvc.perform(createRequest(seededAdminToken(), new CreateStaffAccountPayload(
                 "Should Not Exist", uniqueLocalPhone(), uniqueEmail(), Role.DONOR, null, null
             )))
@@ -236,9 +203,7 @@ class AdminAccountCreationIT {
             "First Holder", phone, uniqueEmail(), Role.ADMIN, null, null
         ));
 
-        // The same number, typed the other accepted way (Business Rule 13). Comparing
-        // the raw string would let one number belong to two accounts, and phone is
-        // the login credential — the second account could never be told from the first.
+        // The same number typed the other accepted way (Business Rule 13) must be refused as a duplicate.
         String sameNumberInternational = "+232 " + phone.substring(1, 3) + " " + phone.substring(3);
 
         mockMvc.perform(createRequest(adminToken, new CreateStaffAccountPayload(
@@ -297,9 +262,7 @@ class AdminAccountCreationIT {
     }
 
     /**
-     * Every non-administrator role gets the same answer, from SecurityConfig's URL
-     * rule rather than from the service — so no account is created and the request
-     * never reaches AdminUserService at all.
+     * Every non-admin role is refused by SecurityConfig's URL rule, before AdminUserService is reached.
      */
     private void assertCreationForbiddenFor(String token) throws Exception {
         long accountsBefore = userRepository.count();
@@ -342,9 +305,7 @@ class AdminAccountCreationIT {
     }
 
     /**
-     * An administrator to act as, seeded directly through the repository — the
-     * chicken-and-egg this feature is built around: the first administrator on any
-     * deployment is always created outside the application.
+     * An administrator seeded directly, since the first admin is always created outside the application.
      */
     private String seededAdminToken() throws Exception {
         User admin = staffAccount("System Administrator", Role.ADMIN);
@@ -382,15 +343,8 @@ class AdminAccountCreationIT {
     }
 
     /**
-     * A distinct number in the local format — a leading 0 and exactly eight digits,
-     * the length Business Rule 13 requires.
-     *
-     * A per-run starting point from the clock, then a counter: several accounts are
-     * created inside a single test here, and two of them landing on one number would
-     * fail on the unique phone constraint — which is checked before the transaction
-     * rolls back — as a confusing 409 rather than as the thing the test was about.
-     * Counting guarantees no two numbers in a run collide; the clock keeps separate
-     * runs apart.
+     * A distinct local-format number (0 plus eight digits): a clock-based start per run, then a counter,
+     * so no two numbers collide within or across runs.
      */
     private String uniqueLocalPhone() {
         long value = (PHONE_RUN_BASE + PHONE_SEQUENCE.incrementAndGet()) % 1_000_000L;

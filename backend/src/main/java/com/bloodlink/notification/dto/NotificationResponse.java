@@ -7,13 +7,8 @@ import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.enums.NotificationType;
 
 /**
- * One notification, in the single shape every delivery route uses.
- *
- * The same record is returned by GET /api/notifications and pushed down the
- * WebSocket, so a client renders a live arrival and a page-load fetch with exactly
- * the same code. If the two ever diverged, a notification would look different
- * depending on whether the socket happened to be connected when it was created,
- * which is precisely the inconsistency real-time delivery is supposed to remove.
+ * One notification in the single shape both GET /api/notifications and the WebSocket push use,
+ * so live and page-load notifications render the same.
  */
 public record NotificationResponse(
     UUID id,

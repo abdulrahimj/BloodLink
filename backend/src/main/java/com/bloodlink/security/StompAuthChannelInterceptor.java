@@ -18,31 +18,8 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 
 /**
- * Establishes who a WebSocket client is, at the moment it opens its STOMP session.
- *
- * The browser cannot set an Authorization header on a WebSocket handshake — the
- * WebSocket API simply has no way to do it — so the JWT arrives one step later, as
- * a header on the STOMP CONNECT frame instead. That is the only frame this
- * inspects; every later frame on the session inherits the principal set here.
- *
- * A missing or invalid token fails the CONNECT outright rather than being allowed
- * through as an anonymous session. That is the opposite of how
- * {@link JwtAuthenticationFilter} treats a bad token over HTTP, and deliberately:
- * an unauthenticated HTTP request can still legitimately be served a public
- * endpoint, whereas an unidentified socket has no purpose at all here — every
- * message this server pushes is addressed to one named recipient.
- *
- * A suspended account is refused here too, for the same reason
- * {@link JwtAuthenticationFilter} checks it on every REST request: the token stays
- * cryptographically valid long after an administrator turns the account off. This
- * only stops a *new* CONNECT — a socket already open when the suspension happens
- * keeps receiving pushes until it disconnects, since closing an open session would
- * need a registry of live sessions this class does not keep. That gap is
- * considerably narrower than doing nothing: it closes the moment the tab is
- * reloaded, reconnects (this client auto-reconnects every five seconds), or is
- * closed, and every push it could still receive is an ordinary notification, never
- * a way to act on anything — no @MessageMapping handler accepts a message from a
- * client on this server.
+ * Identifies a WebSocket client from the JWT on its STOMP CONNECT frame (browsers cannot set a handshake header).
+ * A missing, invalid or suspended account's token fails the CONNECT; open sockets are not closed on suspension.
  */
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {

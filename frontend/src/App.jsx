@@ -8,45 +8,12 @@ import HospitalPortal from './pages/HospitalPortal.jsx';
 import AdminConsole from './pages/AdminConsole.jsx';
 import { clearSession, getUser, isSignedIn, updateSessionUser } from './auth/session.js';
 
-/* ================================================================
-   BloodLink — app shell
-
-   Routes between the public landing page, the two auth screens, and, once
-   signed in, a role-appropriate view. Routing is on the URL hash because
-   that is what the mockups' own links already use (#login, #register) —
-   no router dependency needed for a handful of screens. All four portals
-   are wired now; SignedInPlaceholder remains only as the fallback for a
-   role the backend might add before a screen exists for it.
-
-   The root URL (no hash) is the landing page for a signed-out visitor —
-   BloodLinkLanding's own Login/Register buttons are plain <a href="#login">
-   / <a href="#register"> links, so clicking them is indistinguishable from
-   typing the hash directly and needs no wiring here beyond rendering the
-   page. A signed-in visitor never sees it: the role-dashboard check below
-   runs first and returns before route is ever consulted, exactly as it did
-   before this page existed — a returning user's own hash (if any) is not
-   even read in that case.
-
-   ADMIN now lands on the Admin Console rather than the Blood Bank portal.
-   That was a stopgap from before the console existed — of the two, the
-   Blood Bank portal was where an administrator had actual authority — and
-   it is retired now that the console itself does real account management
-   and reporting. The trade-off worth knowing: an administrator can no
-   longer reach the Blood Bank/Hospital portals' bank-picker flow (approving
-   or fulfilling a request, adding stock) by simply signing in, since routing
-   here is by role rather than by an in-app switcher between portals. Those
-   actions are all still reachable over the API exactly as before; only the
-   one-click UI path from a fresh sign-in has moved.
-   ================================================================ */
+/* BloodLink — app shell: hash-routed landing page, login/register, and each role's portal once signed in
+   (ADMIN goes to the Admin Console). No router dependency for a handful of screens. */
 
 /**
- * Reads the current screen from the hash.
- *
- * An empty hash — the bare root URL — is the landing page, not login: that is
- * the one behavioural change from before this page existed. '#login' and
- * '#register' are unchanged, and so is the fallback for anything else, which
- * stays 'login' exactly as it always has (an unrecognised hash is not treated
- * as the root).
+ * Reads the current screen from the hash: empty is the landing page, '#register' register,
+ * anything else login.
  */
 function readRoute() {
   if (window.location.hash === '#register') return 'register';
@@ -80,12 +47,8 @@ export default function App() {
   }
 
   /**
-   * Called by Profile Settings after the user saves a new name or email
-   * (Business Rule 16). Updates both copies of the signed-in user: this state,
-   * so every portal's header and avatar re-render with the new name at once, and
-   * the stored session, so a refresh does not bring the old name back. The token
-   * itself is untouched — the server builds the caller's identity from its id and
-   * role, never from the name inside it.
+   * After Profile Settings saves a new name or email (Business Rule 16), updates this state and the stored session;
+   * the token is untouched.
    */
   function handleUserUpdated(changes) {
     const stored = updateSessionUser(changes);
@@ -119,9 +82,7 @@ export default function App() {
 }
 
 /**
- * Stand-in for the role dashboards, which are a later phase.
- * It exists so this phase can be verified end to end: reaching this screen proves
- * a token was issued, stored, and carries the role the backend assigned.
+ * Fallback screen for a role with no portal yet; reaching it proves a token was issued and stored.
  */
 function SignedInPlaceholder({ user, onSignOut }) {
   return (

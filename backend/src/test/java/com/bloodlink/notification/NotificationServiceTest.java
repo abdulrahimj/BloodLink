@@ -10,7 +10,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -35,13 +38,12 @@ import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService.AppealReach;
 import com.bloodlink.notification.dto.NotificationResponse;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
+import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
-import com.bloodlink.web.error.ConflictException;
-import com.bloodlink.web.error.NotFoundException;
 
 /**
  * Covers the decisions this service makes that a screen cannot show you were wrong
@@ -60,11 +62,14 @@ class NotificationServiceTest {
     private static final UUID BANK_ID = UUID.randomUUID();
     private static final UUID OTHER_BANK_ID = UUID.randomUUID();
     private static final UUID HOSPITAL_ID = UUID.randomUUID();
+    private static final Clock CLOCK = Clock.fixed(Instant.now(), ZoneOffset.UTC);
+    private static final LocalDate TODAY = LocalDate.now(CLOCK);
 
     @Mock private NotificationRepository notificationRepository;
     @Mock private UserRepository userRepository;
     @Mock private DonorRepository donorRepository;
-    @Mock private BloodInventoryRepository bloodInventoryRepository;
+    @Mock private BloodInventoryBatchRepository batchRepository;
+    @Mock private ContributionAllocationRepository allocationRepository;
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private BloodRequestDeclineRepository declineRepository;
     @Mock private NotificationPublisher publisher;
@@ -74,7 +79,10 @@ class NotificationServiceTest {
     @BeforeEach
     void setUp() {
         service = new NotificationService(
-            notificationRepository, userRepository, donorRepository, bloodInventoryRepository,
+            notificationRepository, userRepository, donorRepository,
+            // Real, over the mocked batch repository: the request alert asks for banks
+            // holding enough USABLE units, as of TODAY (Business Rule 24).
+            new BatchStockService(batchRepository, allocationRepository, new StockPolicy(CLOCK)),
             bloodBankRepository, declineRepository, publisher
         );
     }
@@ -347,9 +355,7 @@ class NotificationServiceTest {
 
     @Test
     void theRecoveryWindowsLastDayIsStillIneligible() {
-        // Business Rule 2 says "more than 90 days", so day 90 is inside the window
-        // and day 91 is the first day out of it. An off-by-one here would prompt a
-        // donor a day early, which is the whole failure this rule exists to prevent.
+        // "More than 90 days": day 90 is inside the window, day 91 the first day out.
         when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
             .thenReturn(List.of(donorWhoGave(user("Day 90"), 90)));
         echoSavedNotifications();
@@ -396,9 +402,7 @@ class NotificationServiceTest {
 
     @Test
     void thePreviewCountsWhatTheSendWouldReachAndWritesNothing() {
-        // The confirmation dialog promises a number; sending must honour exactly it.
-        // The two are computed by one shared method precisely so they cannot drift,
-        // and this is the test that would fail if someone split them apart again.
+        // The preview's promised number must be exactly who is sent to; this fails if the shared calculation is split.
         when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE)).thenReturn(List.of(
             donor(user("Never donated")),
             donorWhoGave(user("Gave 200 days ago"), 200),
@@ -437,12 +441,8 @@ class NotificationServiceTest {
     }
 
     /**
-     * The preview for a blood group nobody has registered as reports zero eligible
-     * AND zero in recovery. That pair is what tells the confirmation dialog "no
-     * donors registered" apart from "all donors recovering" (see
-     * frontend/src/lib/appealReach.js) — so it is asserted here rather than
-     * assumed: if the preview ever folded the two cases into one figure, the dialog
-     * would go back to saying everyone is eligible while offering nobody to appeal to.
+     * A group nobody registered as reports zero eligible and zero in recovery, which lets the dialog say
+     * "no donors registered" rather than "all eligible" (see appealReach.js).
      */
     @Test
     void aPreviewForAGroupWithNoRegisteredDonorsReportsZeroEligibleAndZeroInRecovery() {
@@ -462,7 +462,7 @@ class NotificationServiceTest {
     @Test
     void aNewRequestAlertsOnlyTheBanksThatCouldCoverIt() {
         User capableStaff = user("Aminata Kamara");
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID));
         when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
             .thenReturn(List.of(capableStaff));
@@ -481,7 +481,7 @@ class NotificationServiceTest {
 
     @Test
     void aRequestNoBankCanCoverStillAlertsEveryBank() {
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of());
         when(userRepository.findByRole(Role.BLOOD_BANK_STAFF))
             .thenReturn(List.of(user("Aminata Kamara"), user("Mohamed Bangura")));
@@ -515,9 +515,7 @@ class NotificationServiceTest {
     }
 
     /**
-     * Business Rule 20's partial case. The hospital is told the figures rather than
-     * a state, because "partially fulfilled" alone leaves a ward having to go and
-     * look up the only two numbers it can act on: what arrived, and what has not.
+     * Business Rule 20's partial case: the hospital is told what arrived and what is still to come.
      */
     @Test
     void aPartialContributionTellsTheHospitalHowManyUnitsArrivedAndHowManyAreLeft() {
@@ -542,9 +540,7 @@ class NotificationServiceTest {
     // ---------- REQUEST_PROGRESS (Business Rule 20) ----------
 
     /**
-     * The alert that stops two banks covering the same gap: every bank still
-     * watching the request hears what is left — except the one that just gave, which
-     * already knows.
+     * Every bank still watching hears what is left, except the one that just gave.
      */
     @Test
     void aContributionTellsTheOtherBanksWhatIsStillNeeded() {
@@ -605,9 +601,7 @@ class NotificationServiceTest {
             .thenReturn(List.of(user("Isatu Turay")));
         echoSavedNotifications();
 
-        // Under Business Rule 11 a request only reaches REJECTED once every bank has
-        // declined it, so this message is sent once and means the request is closed.
-        // Rejection also leaves no fulfilling bank, so it cannot name one.
+        // REJECTED is reached only once every bank declined (Business Rule 11), so this is sent once and names no bank.
         service.notifyRequestStatusChange(request(RequestStatus.REJECTED, null));
 
         assertThat(capturedRows().get(0).getMessage())
@@ -641,7 +635,7 @@ class NotificationServiceTest {
     @Test
     void oneRecipientReachedByTwoBanksIsWrittenToOnce() {
         User shared = user("Aminata Kamara");
-        when(bloodInventoryRepository.findBankIdsHoldingAtLeast(BloodType.O_NEGATIVE, 4))
+        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID, OTHER_BANK_ID));
         when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
             .thenReturn(List.of(shared));

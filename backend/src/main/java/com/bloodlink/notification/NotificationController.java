@@ -16,19 +16,8 @@ import com.bloodlink.notification.dto.UnreadCountResponse;
 import com.bloodlink.security.AuthenticatedUser;
 
 /**
- * The REST half of notification delivery — what the bell icon reads on page load,
- * and how it is cleared.
- *
- * This exists alongside the WebSocket push rather than being replaced by it. A
- * socket only carries what arrives while it is open, so a donor opening the app
- * after two days offline would otherwise see an empty bell over a database full of
- * appeals addressed to them. The socket keeps a screen current; these endpoints are
- * what make it correct in the first place.
- *
- * Every route is scoped to the caller by their token. SecurityConfig requires only
- * a valid token on this path — deliberately, because all four roles receive
- * notifications — so "whose notifications" is decided here and in NotificationService,
- * never by a path or query parameter a client could change.
+ * The REST half of notifications: what the bell reads on page load and how it is cleared,
+ * so nothing missed while offline is lost. Every route is scoped to the caller's token.
  */
 @RestController
 @RequestMapping("/api/notifications")
@@ -47,11 +36,7 @@ public class NotificationController {
     }
 
     /**
-     * Just the badge number.
-     *
-     * A separate endpoint from the listing above because the two are wanted at
-     * different moments: the count is needed on every page load, the list only when
-     * someone actually opens the bell.
+     * Just the badge number, separate because it is needed on every page load and the list only when the bell opens.
      */
     @GetMapping("/unread-count")
     public UnreadCountResponse unreadCount(@AuthenticationPrincipal AuthenticatedUser principal) {
@@ -59,11 +44,7 @@ public class NotificationController {
     }
 
     /**
-     * "Mark all as read" — clears the badge.
-     *
-     * Declared before the single-notification route below because "read-all" is a
-     * literal path segment and {notificationId} is a UUID: a client asking for
-     * /read-all must reach this method rather than failing to parse as an id.
+     * "Mark all as read"; declared before the {notificationId} route so "read-all" is not parsed as an id.
      */
     @PatchMapping("/read-all")
     public UnreadCountResponse readAll(@AuthenticationPrincipal AuthenticatedUser principal) {
@@ -74,11 +55,7 @@ public class NotificationController {
     }
 
     /**
-     * Marks one notification read. PATCH rather than PUT: this changes one flag on
-     * the notification and never replaces its message, type or timestamp.
-     *
-     * A notification belonging to somebody else is a 404, not a 403 — the caller has
-     * no business learning that the id exists.
+     * Marks one notification read; someone else's notification is a 404, not a 403.
      */
     @PatchMapping("/{notificationId}")
     public NotificationResponse markRead(

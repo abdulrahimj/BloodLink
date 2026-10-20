@@ -24,11 +24,8 @@ import com.bloodlink.admin.report.dto.ReportDtos.DonationReport;
 import com.bloodlink.web.error.GlobalExceptionHandler;
 
 /**
- * The Reports endpoints' parameter handling (Business Rule 23), in the standalone
- * MockMvc style of AdminUserControllerTest: a bad or backwards date is a 400 naming
- * the field before any query runs, and an export is a named CSV attachment. Who may
- * call these at all (ADMIN only; 403 / 401 otherwise) is SecurityConfig's job and is
- * proven end to end in ReportsIT.
+ * The Reports endpoints' parameter handling (Business Rule 23): bad or backwards dates are a 400 naming the field,
+ * exports are named CSV attachments. Access control is proven in ReportsIT.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminReportControllerTest {

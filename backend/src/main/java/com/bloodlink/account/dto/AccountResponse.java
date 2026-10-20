@@ -8,16 +8,8 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
 
 /**
- * The signed-in user's own account, as the Profile Settings screen shows it.
- *
- * Carries the fields the user cannot change (phone, role, facility) as well as the
- * two they can (name, email), because the screen shows both kinds — the first as
- * read-only facts with a note on who can change them, so nobody goes looking for an
- * edit box that is deliberately not there.
- *
- * No password hash, and no account status: the first must never leave the server,
- * and the second is always ACTIVE for anyone able to call this endpoint at all (a
- * suspended account's token is refused before it gets here).
+ * The caller's own account as Profile Settings shows it, including the read-only phone, role and facility.
+ * No password hash, and no status (always ACTIVE for anyone able to call this).
  */
 public record AccountResponse(
     UUID id,
@@ -34,9 +26,8 @@ public record AccountResponse(
 ) {
 
     /**
-     * Flattens the entity for the wire. Touches the lazy bloodBank and hospital
-     * associations, so it must be called inside the transaction that loaded the
-     * User (open-in-view is off) — AccountService's methods all are.
+     * Flattens the entity for the wire; touches lazy bank and hospital associations, so call it
+     * inside the transaction that loaded the User (open-in-view is off).
      */
     public static AccountResponse from(User user) {
         BloodBank bank = user.getBloodBank();

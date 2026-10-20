@@ -66,6 +66,8 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
+
 ### User
 | field | type |
 |---|---|
@@ -114,17 +116,70 @@ are added only by an administrator (Business Rule 19). `name` is unique case-ins
 Seeded, not self-registering: **Makeni Regional Hospital**, **Holy Spirit Hospital**. Further hospitals
 are added only by an administrator (Business Rule 19). `name` is unique case-insensitively (V14, `uq_hospitals_name`).
 
-### BloodInventory
+### BloodInventoryBatch
 | field | type |
 |---|---|
 | id | UUID, PK |
 | blood_bank_id | UUID, FK -> BloodBank |
 | blood_type | enum (as above) |
-| units_available | int |
-| expiry_date | date |
+| units_received | int — > 0 (DB CHECK); fixed once the batch exists |
+| units_remaining | int — between 0 and units_received (DB CHECK); falls as units are issued or written off |
+| expiry_date | date — the last usable day, inclusive; fixed once the batch exists |
+| received_at | timestamp |
 | last_updated | timestamp |
+| donation_id | UUID, FK -> Donation, nullable, unique — set exactly when source is DONATION |
+| source | enum: DONATION, MANUAL (Add New Batch), MIGRATED (converted by V19) |
+| expiry_noticed_at | timestamp, nullable — reserved for a future expiry-alert job; V19 stamps batches already expired at the cutover |
 
-One row per (blood_bank_id, blood_type) — not one row per unit.
+Table `blood_inventory_batches` (V18, the only record of stock since V19) — **one row per batch, each
+with its own expiry date** (Business Rule 24). Usable stock is never stored: it is the sum of
+`units_remaining` over a bank's unexpired batches of a group, computed on read. A V18 trigger refuses
+any change to the identity columns (bank, group, units received, expiry, received_at, donation, source,
+id): FEFO ordering relies on expiry never moving, and a wrong batch is corrected by writing it off
+(`DATA_ENTRY_ERROR`) and re-adding it. Batches are never deleted; a used-up one stays as history with
+0 remaining. One index beyond the keys: `idx_batches_fefo (blood_bank_id, blood_type, expiry_date, id)
+where units_remaining > 0`, serving the FEFO lock, the usable sums and the batch list. Foreign keys are
+NO ACTION throughout. **The stock identity** — `units_received = units_remaining + Σ allocated + Σ written
+off` — holds for every batch; `BloodInventoryBatchRepository.findIdsBreakingStockIdentity` is the
+check (native SQL, pasteable into psql).
+
+The old one-row-per-(bank, group) `blood_inventory` table was renamed by V19 to
+`blood_inventory_pre_batches` (its constraint and index names too), is read and written by nothing, and
+is dropped by V20 (Stage 6).
+
+### ContributionAllocation
+| field | type |
+|---|---|
+| id | UUID, PK |
+| contribution_id | UUID, FK -> BloodRequestContribution (NO ACTION) |
+| batch_id | UUID, FK -> BloodInventoryBatch (NO ACTION) |
+| units_allocated | int — > 0 (DB CHECK) |
+
+Table `contribution_allocations` (V18): which batches each contribution's units came from —
+traceability, one row per batch drawn on, unique on (contribution, batch)
+(`uq_allocation_contribution_batch`, which also serves lookups by contribution), plus
+`idx_allocations_batch` for "where did this batch go". The allocations of a contribution add up to its
+`units_contributed`: enforced in code (`BatchStockService.recordAllocations` refuses otherwise) and
+checked by `ContributionAllocationRepository.findContributionIdsWithMismatchedAllocations`. Contributions
+made before V19 have no allocations (their units left stock before batches existed). **Append-only**
+like the audit log: no setters, `@Immutable`, a bare `Repository`, and V18 triggers refusing UPDATE,
+DELETE and TRUNCATE (including a TRUNCATE reaching it by CASCADE).
+
+### BatchWriteOff
+| field | type |
+|---|---|
+| id | UUID, PK |
+| batch_id | UUID, FK -> BloodInventoryBatch |
+| units | int — > 0 (DB CHECK) |
+| reason | enum: EXPIRED, DAMAGED, FAILED_TESTING, DATA_ENTRY_ERROR, OTHER |
+| note | text, nullable — never blank (stored as NULL), ≤ 500 characters, required for OTHER (DB CHECKs) |
+| written_off_by_user_id | UUID, FK -> User |
+| written_off_at | timestamp |
+
+Table `batch_write_offs` (V18): units discarded, why and by whom — the discard ledger. Append-only by the
+same four means as ContributionAllocation. Written only by the write-off action
+(`BatchWriteOffService`, Business Rule 24), together with the batch's deduction and its STOCK_WRITTEN_OFF
+audit entry in one transaction; read by the batch history endpoint.
 
 ### Donation
 | field | type |
@@ -209,11 +264,12 @@ reach to clear it. See Business Rule 12.
 | field | type |
 |---|---|
 | id | UUID, PK |
-| actor_user_id | UUID, FK -> User — the administrator who acted |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (last two added in V14) |
+| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b) |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3) |
 | target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
+| target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
 | details | text — what changed, in words, as of that moment; never a password |
 | created_at | timestamp |
 
@@ -223,10 +279,14 @@ deleted. Enforced at four levels — no endpoint but GET, `AuditLogRepository` e
 with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the database itself. Every
 foreign key is ON DELETE NO ACTION, so a user or facility that appears in the log can never be deleted.
 **Exactly one target per row, matching its action** — V14's `audit_log_target_matches_action` CHECK
-replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody.
+replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody;
+V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else.
 
 ### Relationships
-User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventory · BloodBank 1–N Donation ·
+User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventoryBatch · Donation 0..1–1 BloodInventoryBatch ·
+BloodInventoryBatch 1–N ContributionAllocation · BloodRequestContribution 1–N ContributionAllocation ·
+BloodInventoryBatch 1–N BatchWriteOff · User 1–N BatchWriteOff · BloodInventoryBatch 1–N AuditLog (as target) ·
+BloodBank 1–N Donation ·
 BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · User 1–N Notification ·
 BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
 BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContribution ·
@@ -254,28 +314,57 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
      when there is nobody to appeal to.
 3. **Stock status thresholds** (per blood group, per blood bank): below 15 units = Critical,
    below 40 units = Low, otherwise Sufficient. Confirm with project owner before changing these numbers.
+   The units judged are **usable** units only (Business Rule 24): stock in expired batches is not
+   counted, so it can never hold a group above a threshold it has really fallen below.
 4. **`Donation.blood_type` is independently recorded, not copied from `Donor.blood_type`.** Blood type
    is re-verified by testing at every donation; the donation record must reflect what was tested at
    that time, not silently follow later edits to the donor's profile.
 5. **BloodRequest status lifecycle** — **superseded by Business Rule 20.** It now reads
    PENDING → PARTIALLY_FULFILLED → FULFILLED (or straight to FULFILLED), or PENDING → REJECTED;
    APPROVED no longer exists. What survives unchanged is the half that always mattered: units
-   leaving a bank must decrement that bank's `BloodInventory.units_available`, in the same
-   transaction as the record of them leaving.
+   leaving a bank must leave its stock in the same transaction as the record of them leaving. Since
+   Business Rule 24 that means: deducted from that bank's usable batches first expiry first out
+   (`BloodInventoryBatch.units_remaining`), with one `ContributionAllocation` row per batch drawn on,
+   in the same transaction as the contribution.
 6. **A hospital's request can be fulfilled by any blood bank**, not only one tied to that hospital —
    there is no fixed hospital-to-blood-bank ownership.
-7. **When new stock accumulates onto an existing BloodInventory row** (same blood bank + blood type),
-   units add together, but the expiry date is kept as the **earlier** of the old and new expiry dates —
-   never extended. A newer batch never masks that some of the combined stock expires sooner.
-   Both paths into inventory go through `InventoryService.addBatch`, which owns this rule: "Add New
-   Batch" on the Inventory screen, and "Record Donation", which folds a donor's units in the same way.
-   A donation's units are given a default expiry of **donation date + 42 days** (`DonationService.SHELF_LIFE_DAYS`),
-   the usual shelf life of red cells in additive solution — a default, not a measured date, since
-   BloodInventory holds one expiry per (bank, group) and cannot carry a per-bag label.
-   **Flagged for review:** confirm 42 days matches the preparation Makeni's labs actually use.
+7. **Superseded by Business Rule 24 (V19): stock is no longer merged, and no batch inherits another's
+   date.** The old rule folded every new batch into one row per (bank, group) and kept the *earlier*
+   expiry date. Because that date could only ever move earlier, a fresh batch added to a row whose
+   date had passed was stamped with the past date, and expired units were counted as stock everywhere
+   (pending item #4). Now **each "Add New Batch" and each recorded donation creates a new batch with
+   its own expiry date**, and nothing is ever merged. What the old rule protected still holds through
+   the per-group figure: a group's `expiryDate` is the earliest expiry among its *usable* batches, so
+   sooner-expiring stock is never hidden by a newer batch — and stops being shown once those units are
+   gone. A donation's batch gets **donation date + 42 days** (`StockPolicy.DONATION_SHELF_LIFE_DAYS`)
+   unless staff enter the date from the bag label. **Flagged for review:** confirm 42 days matches the
+   preparation Makeni's labs actually use.
 8. **A BLOOD_BANK_STAFF user is tied to exactly one blood bank** via a nullable `blood_bank_id` on
-   `User` (null for all other roles). Inventory writes are restricted to that staff member's own bank;
-   ADMIN can write to any bank. There is no self-registration path for HOSPITAL_STAFF,
+   `User` (null for all other roles). **Every action that adds or removes blood units is restricted to
+   active staff of the bank whose shelf it changes, and ADMIN has no way to make any of them** (Stages 3b
+   and 3b-2, the project owner's decision): an administrator has read-only oversight of stock — stock
+   figures, batch lists, batch history, the audit log, reports — and changes none of it, on any bank's
+   behalf. The four such actions, and where each refuses ADMIN with a 403 before anything is read or
+   written:
+   - **Add New Batch** (`PATCH /api/inventory/{bank}/{group}`) and **write-off**
+     (`POST /api/inventory/{bank}/batches/{batch}/write-offs`): SecurityConfig (non-GET
+     `/api/inventory/**` is BLOOD_BANK_STAFF only) and `InventoryService.requireStockChangeAccess`, which
+     also requires the bank in the path to be the caller's own.
+   - **Record Donation** (`POST /api/donations`, which creates a batch): SecurityConfig
+     (`/api/donations/**` is BLOOD_BANK_STAFF only) and `DonationService`.
+   - **CONTRIBUTE** (`PATCH /api/requests/{id}`, which takes units off batches): `RequestService.act`
+     only. That address also carries REJECT, which an ADMIN keeps (declining on a named bank's behalf
+     moves no blood), and a URL rule cannot see which action the body asks for — so the security rule
+     still admits ADMIN to `/api/requests/**` and the service refuses the contribution.
+
+   All four share one rule, `ActingBankResolver.resolveForStockChange`: BLOOD_BANK_STAFF only (checked
+   before anything is read), ACTIVE, assigned to a bank, acting as that bank — it has no ADMIN branch, and
+   no bank id from the request is consulted. `ActingBankResolver.resolve`, under which an ADMIN names a
+   bank to act for, is now used only for actions that move no blood: REJECT, donation appeals and the
+   donor roster. Staff of one bank can never change another bank's stock: a `bloodBankId` they send is
+   ignored and they act as their own bank. Known limit, not addressed: an administrator creates staff
+   accounts and is shown their one-time password (Business Rule 14), so could sign in *as* that staff
+   member; anything done that way is recorded against the staff account. There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
 9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`,
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
@@ -324,8 +413,12 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
     - **Recovery clears a cooldown permanently, at the crossing.** When stock climbs back over the
       threshold that triggered it — 15 for a CRITICAL-triggered row, 30 for a LOW-triggered one —
       the row is **deleted**, by `AppealCooldownPolicy.clearIfRecovered` called from
-      `InventoryService.addBatch`. That is the only path by which stock can rise (fulfilment is the
-      only one by which it falls), so it is the only place an upward crossing can happen.
+      `InventoryService` when a new batch arrives (Add New Batch or Record Donation). That is the only
+      path by which usable stock can rise, so it is the only place an upward crossing can happen. Every
+      figure in this rule is **usable** units (Business Rule 24): expired batches count for nothing, so
+      a bank holding 35 units of which 10 have expired is short (25) and may appeal. Usable stock also
+      falls silently at midnight UTC when a batch expires; nothing reacts to that event yet (an
+      expiry-alert job is future work), but the button reads the new figure on the next load.
       `evaluate` therefore never consults current stock to decide whether a cooldown has ended: a
       row that still exists is one whose shortage was never resolved.
       **A group that recovers and then relapses gets a fresh appeal immediately** — the relapse is a
@@ -400,7 +493,10 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       changes a table the demo seed writes to must be checked against a fresh demo database** — V15
       broke `V904` this way, because a fresh database runs every migration in version order and the
       seed files run last. Demo seed files are disposable, so editing one is acceptable (as V904 was),
-      but it changes the checksum: existing demo databases must be dropped and recreated.
+      but it changes the checksum: existing demo databases must be dropped and recreated. V19 is the
+      latest case: it retired `blood_inventory`, so `V902` was rewritten to seed batches (2–3 per group,
+      the same usable totals — 405 / 458 — plus one expired 5-unit O+ batch at Makeni), and a fresh demo
+      database was booted to prove it.
 14. **An administrator creates staff and administrator accounts through `POST /api/admin/users`;
     the system generates the password and shows it exactly once.** This is the "created by an
     administrator" path Business Rules 8 and 9 always referred to. Before it, those rows were
@@ -468,6 +564,25 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       committed `application.properties.example`, and `.dockerignore` keeps a developer's local
       `application.properties` out of the build — it holds their credentials, and a fresh clone does
       not have one, which previously made the image fail at startup on every machine but its author's.
+      docker-compose is **demo only** (its header says so): it always runs the `demo` profile, and a
+      `BLOODLINK_JWT_SECRET` already set in the shell outranks the one in `.env`.
+    - **A missing or short secret is refused under every profile, local ones included** — an empty
+      value, or fewer than `JwtSecretPolicy.MIN_SECRET_BYTES` (32) UTF-8 bytes after trimming, the 256
+      bits HS256 needs. Checked before the placeholder rule, with its own `InsecureJwtSecretException.Reason`
+      (`MISSING`, `TOO_SHORT`, `PUBLIC_PLACEHOLDER`) and its own failure-analyzer report naming the length
+      found — never the value. The JWT library already refused a short key, but only as a bare
+      `WeakKeyException` stack trace; this makes it a plain explanation. The placeholder (41 bytes) and
+      the test profile's secret pass, so local development is unchanged (`JwtSecretPolicyTest` checks
+      both). The key is still the secret's raw UTF-8 bytes — a Base64 secret is not decoded — because
+      changing the derivation would change every key and sign every user out.
+    - **Setting a real secret** is documented in the README ("Setting a real JWT secret"): 48 random
+      bytes in Base64, generated in PowerShell without being shown, set for the session
+      (`$env:BLOODLINK_JWT_SECRET`) or permanently (`[Environment]::SetEnvironmentVariable(..., 'User')`).
+      Never committed; changing it invalidates every issued token. Every variable the code reads is
+      listed, with its default, in `backend/.env.example` (the backend, which does not itself read a
+      `.env` file), `frontend/.env.example` (Vite) and the root `.env.example` (docker-compose: the
+      secret only). The root `.gitignore` covers `.env`, `.env.*`, `*.env`, every
+      `application-*.properties` except `application-demo.properties`, and key/keystore files.
 16. **Every signed-in user manages their own name, email and password from Profile Settings — and a
     password change requires the current password.** One shared screen
     (`frontend/src/components/ProfileSettings.jsx`) for all four roles, opened from each portal's
@@ -522,6 +637,23 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       +232… to +232…. Blood bank changed from X to Y.") and the time. Only real changes are logged: a
       status set to what it already was, or an edit that changes nothing, records nothing. The generated
       password (Business Rule 14) never appears in an entry. Reads are not logged.
+    - **No administrator action changes stock** (Stages 3b and 3b-2, Business Rule 8). An administrator
+      can no longer add a batch, write one off, record a donation or contribute to a request, so the log
+      never holds a stock change made by an administrator; it records their account and facility actions,
+      and the write-offs made by bank staff. (Record Donation and contributions are not audit-logged at
+      all: their own rows — `donations`, `blood_request_contributions` and `contribution_allocations` —
+      are their record.)
+    - **Widened to stock write-offs (Stage 3 of the batch-stock redesign).** The log also records
+      STOCK_WRITTEN_OFF — units of a batch discarded by blood bank staff of that bank (Business Rule 24;
+      never by an ADMIN since Stage 3b, Business Rule 8) — so its actor is bank staff, not an
+      administrator. Administrators still read these entries on the Audit Log. Each entry points at its batch through
+      `target_batch_id` and at nothing else (V18's one-target rule), and its `details` read like "Wrote off
+      3 units of O+ from a batch at X expiring 2026-10-01 (already expired). Reason: Expired. 7 of 10 units
+      remain in the batch." plus the note when there is one. Written by `AuditLogService.recordStockWrittenOff`
+      (`Propagation.MANDATORY`, stamped with the same clock instant as the write-off). The Admin Audit Log
+      shows these entries: `AuditLogEntryResponse.targetType` is `BATCH`, `targetName` describes the batch
+      ("O+ batch, expiry 2026-10-01 — X", since a batch has no name), and the page labels the action
+      "Written off" (red) with the subject kind "Stock batch" (`AdminConsole.jsx`).
     - **Same transaction as the action.** `AuditLogService.record` is `Propagation.MANDATORY`: it refuses
       to run without the caller's transaction, so an action and its entry commit or roll back together —
       the log can never show a change that did not happen, or miss one that did.
@@ -590,10 +722,10 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
     - **`contactPhone` is only required, never normalised.** It is a display-only facility number (Business
       Rule 13 already excludes `contact_phone`), and a front-desk line may be a landline or carry an extension.
       All three fields are `@NotBlank`, sized to their V1 columns (255 / 255 / 32).
-    - **A new blood bank needs no inventory seeding.** No `BloodInventory` rows are written:
-      `InventoryService.listInventory` already reports all eight groups for every bank, filling a missing
-      row as 0 units — Critical under Business Rule 3 — and the first "Add New Batch" or recorded donation
-      creates the real row.
+    - **A new blood bank needs no inventory seeding.** No stock batches are written:
+      `InventoryService.listInventory` already reports all eight groups for every bank, filling a group
+      with no batch as 0 units — Critical under Business Rule 3 — and the first "Add New Batch" or recorded
+      donation creates its first real batch (Business Rule 24).
     - **Audited like Business Rule 17's actions**: `BLOOD_BANK_CREATED` / `HOSPITAL_CREATED`, in the same
       transaction (`AuditLogService.recordBloodBankCreated` / `recordHospitalCreated`, both
       `Propagation.MANDATORY`), naming the administrator, pointing at the new facility through
@@ -624,12 +756,21 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       `units`). It deducts the acting bank's stock immediately, writes a `BloodRequestContribution`
       row, and updates the status — all in one transaction, so units can never leave stock without
       being recorded or be recorded without leaving stock. `REJECT` is unchanged (Business Rule 11).
+      **Only active staff of the contributing bank may CONTRIBUTE; an ADMIN is refused (403)** before
+      the request is locked (Stage 3b-2, Business Rule 8), while an ADMIN may still REJECT on a named
+      bank's behalf.
+      Since Business Rule 24 the deduction is **first expiry, first out** from the bank's usable
+      batches of that group (`BatchStockService.issue`, `FefoAllocator`), and one `ContributionAllocation`
+      row per batch drawn on records where the units came from; the allocations add up to the
+      contribution's units, enforced before anything is written. Expired batches are never issued.
     - **Units are capped at what is still outstanding, not refused.** Between the operator reading
       the screen and pressing the button another bank may have covered part of it; that is not their
       mistake to be punished for, so the server records what is genuinely wanted and reports it back.
-      **More units than the bank actually holds is refused** (409 naming both figures) — that is a
-      mistake about its own shelf, and silently issuing fewer than typed would leave the operator
-      believing they had sent more.
+      **More units than the bank actually holds is refused** (409) — that is a mistake about its own
+      shelf, and silently issuing fewer than typed would leave the operator believing they had sent
+      more. The 409 names the **usable** units, the units being contributed and the expired units that
+      could not be counted ("Not enough usable O+ in stock — 30 units available, 31 being contributed
+      (10 expired units cannot be issued).").
     - **`fulfilled_by_blood_bank_id` was repurposed, not dropped** — renamed to
       `last_contributed_by_blood_bank_id`, meaning "the bank that contributed most recently". A single
       column cannot name several contributors, so leaving the old name would assert something untrue;
@@ -656,6 +797,21 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       against what is genuinely left. Without it both would read "4 needed", both would deduct 4, and
       a hospital that asked for 4 units would be sent 8. `PartialFulfilmentRaceIT` proves this with
       two real threads, two real transactions, and its own throwaway database.
+      **Since Business Rule 24 there is a second lock, always taken second:** the acting bank's usable
+      batches of the group, by `BloodInventoryBatchRepository.lockUsableBatchesInIssueOrder`, in issue
+      order. Hibernate sends exactly `… where blood_bank_id=? and blood_type=? and units_remaining>0 and
+      expiry_date>=? order by expiry_date,id for no key update` (read back from the SQL log in
+      `BatchStockCutoverIT`). PostgreSQL sorts before it locks, so every transaction locks a bank's
+      batches in the same order; request first, batches second is the only lock order anywhere, so no
+      two transactions can each hold what the other needs. `FOR NO KEY UPDATE` is what Hibernate's
+      PESSIMISTIC_WRITE means on PostgreSQL (the request lock above is the same mode): it is exclusive
+      against every other contributor, and differs from `FOR UPDATE` only in letting another
+      transaction's foreign-key check through, which needs no waiting here. A waiter re-reads the row
+      after the lock is released, so it sees the units genuinely left. `PartialFulfilmentRaceIT` proves
+      this too: one bank with two requests and stock in two batches (exactly one of two 4-unit
+      contributions succeeds), eight threads taking 1 unit each from 5 units over three batches (exactly
+      5 succeed, the shelf ends at 0, no deadlock), and a contribution racing a held batch lock (it
+      waits, then sees the 2 units left and is refused).
     - **`REQUEST_PROGRESS`, a fifth notification type**, goes to every *other* bank still watching a
       request whenever its outstanding figure changes — not the contributing bank (it has the answer
       in its own response) and not a bank that has declined (it can no longer act). Without it two
@@ -749,17 +905,24 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       query; Java only fills in the zero rows an aggregate leaves out (a group, status, urgency, month
       or bank with nothing in it) so every table always lists every row.
     - **Existing rules reused, never copied.** Stock status is `StockStatus.fromUnits` and its
-      thresholds, now public constants (`CRITICAL_BELOW` 15, `LOW_BELOW` 40) passed into the per-bank
-      query (Business Rule 3). Expiring soon is `InventoryService.EXPIRING_SOON_WINDOW_DAYS` (28) with
-      the Inventory screen's own "on or before" test. Eligibility is `Donor.eligibilityCutoff(today)` —
+      thresholds (`CRITICAL_BELOW` 15, `LOW_BELOW` 40), applied per bank and group to the usable units the
+      database sums per (bank, group) (Business Rule 3). Usable, expired and expiring soon are
+      `StockPolicy`'s (Business Rule 24), with `StockPolicy.EXPIRING_SOON_WINDOW_DAYS` (28) and the stock
+      section's "today" from its UTC clock (`ReportSummaryService.stockDate`). Eligibility is `Donor.eligibilityCutoff(today)` —
       now the one place the 90-day cutoff date is computed, used by `Donor.getEligibilityStatus()`, the
       Donors roster (Business Rule 21) and this report alike (Business Rule 2); `ReportsIT` proves the
       database's eligible count equals `isEligibleToDonate()` applied donor by donor.
-    - **Stock matches existing behaviour:** units past their expiry date are counted as stock, as the
-      Inventory screen's totals (`InventoryService.getSummary`) already count them, and are shown separately as "already
-      past expiry" inside the expiring-soon figure. A bank's Critical count includes the groups it
-      has no stock row for at all (zero units), exactly as its own Inventory screen shows them. The
-      status wording is the app's own — Critical / Low / Sufficient.
+    - **Stock is USABLE stock only — reversed by Business Rule 24 (V19).** This section used to count
+      units past their expiry date as stock, because the old Inventory screen did. Now an expired batch
+      is not stock anywhere: its units are excluded from the total, from every group's and bank's figure
+      and from "expiring soon" (usable units expiring within 28 days), and are reported only on their
+      own, as **expired units awaiting discard** (`StockReport.pastExpiryUnits`, a name kept from before
+      so the page needs no change; the CSV says "Expired units awaiting discard (not counted as
+      stock)"). A bank's Critical count includes the groups it has no usable stock of at all (zero
+      units), exactly as its own Inventory screen shows them. The status wording is the app's own —
+      Critical / Low / Sufficient. **Known interim wording, until Stage 4:** the Reports page's note
+      under the expiring card still reads "Includes N units already past expiry" (`AdminReports.jsx`),
+      which is no longer true; the figures it labels are correct.
     - **Requests:** counted by `created_at` within the range. Fulfilment rate = FULFILLED ÷ (FULFILLED +
       REJECTED); PENDING and PARTIALLY_FULFILLED are still open and excluded. With nothing decided the
       rate is null and the page and CSV say **"No data"** — never 0% or NaN. "Filled by more than one
@@ -797,6 +960,86 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       server's own three rules first, which saves a request but is not the control. Plain CSS bars and
       tables — no chart library or other dependency. The CSV is fetched with the token
       (`api/client.js` `apiDownload`) and saved as a file.
+24. **Stock is held batch by batch, each batch with its own expiry date, and only USABLE stock is ever
+    counted, shown as available, judged or issued.** Replaces Business Rule 7's one row per (bank,
+    group) with a single merged date, which counted expired blood as stock everywhere, gave fresh stock
+    stale dates, could not issue earliest-expiry-first, and had no way to record a discard. Schema:
+    `V18` (tables), `V19` (cutover). The definitions, owned by `StockPolicy` (`com.bloodlink.stock`)
+    and used by every screen, rule, alert and report — the frontend is sent results, never the rules:
+    - **Today** is the UTC date from the injected `Clock` (`TimeConfig`, `Clock.systemUTC()`; Sierra Leone
+      is UTC+0, so it is also the local date). Only stock code reads that clock; other `LocalDate.now()`
+      calls are unchanged. Every stock query takes `:today` as a parameter — none reads the database's
+      own `current_date` — so every figure agrees on the date, and tests can move it.
+    - **Expired:** `expiry_date < today`. The expiry date is the **last usable day, inclusive**: a batch is
+      usable through the whole of it and expired from 00:00 UTC the next day.
+    - **Usable:** `expiry_date >= today` with units remaining. A group's usable units are the sum over
+      its usable batches. `InventoryItemResponse.unitsAvailable` is usable units; `expiryDate` is the
+      earliest expiry among usable batches (null if none).
+    - **Expiring soon:** usable and `expiry_date <= today + 28` (`EXPIRING_SOON_WINDOW_DAYS`), today
+      included, counted batch by batch — only the units that really expire soon, never a whole group
+      because its earliest batch does. Already-expired units are never "expiring soon".
+    - **Expired units are shown, never counted:** reported as `expiredUnits` (inventory rows and summary)
+      and `pastExpiryUnits` (Admin Reports), "awaiting discard" — discarded with the write-off action below.
+    - **Writing stock off (Stage 3).** `POST /api/inventory/{bank}/batches/{batch}/write-offs` with
+      `{ units, reason, note? }` takes units off one batch and records why (`BatchWriteOffService`).
+      **Who:** the bank's own active BLOOD_BANK_STAFF only, by the same `InventoryService` rule as Add New
+      Batch (`requireStockChangeAccess`). **ADMIN is refused (403)**, expired batches included (Stage 3b,
+      Business Rule 8), by SecurityConfig and again in that rule, before any bank is looked up or anything
+      written; ADMIN keeps read access to the batch list and history. Hospitals and donors are refused by
+      SecurityConfig (403), no token is a 401, staff naming another bank a 403, and a batch of another
+      bank asked for under the caller's bank is a 404 like a missing one. **What:** `units` from 1 up to the
+      batch's units remaining; `reason` one of EXPIRED, DAMAGED, FAILED_TESTING, DATA_ENTRY_ERROR, OTHER
+      (matched exactly; anything else a 400 on `reason`); `note` optional, ≤ 500 characters, blank stored
+      as none, **required for OTHER** (a 400 on `note`) — `BatchWriteOff.problemWithNote`, one copy shared
+      with the entity. More units than remain, or a batch with none left, is a **409** naming the units
+      left, never silently reduced (the same reasoning as Business Rule 20's "more than the bank holds").
+      **Expired batches may be written off** — the main use. **How:** the batch row is locked with
+      `BloodInventoryBatchRepository.lockById` (PESSIMISTIC_WRITE, i.e. `FOR NO KEY UPDATE`, the mode a
+      contribution's batch lock uses; read back in `BatchWriteOffIT`), and the remaining units are judged
+      only after the lock is granted. A write-off takes that one lock and no other, so it can never deadlock
+      with a contribution (request first, batches second); `PartialFulfilmentRaceIT` races the two for one
+      batch and exactly one wins, never more units out than were there. The deduction, the
+      `batch_write_offs` row and the STOCK_WRITTEN_OFF audit entry (Business Rule 17) are one transaction,
+      all stamped with one instant from the injected `Clock` (the batch's `last_updated` too, via
+      `BloodInventoryBatch.deductUnits(units, at)`). If the batch was usable, usable stock falls and
+      `notifyStockCrossing` runs exactly as after a contribution, so a write-off that takes a group into Low
+      or Critical raises a LOW_STOCK_ALERT; writing off expired units changes no stock figure and alerts
+      nobody. **Answers 201** with `{ writeOff, batch }` — the entry in the batch history's `writeOffs`
+      shape, and the batch as it now stands. Nothing is undone or bulk-discarded: one batch per call.
+    - **New stock is always a new batch.** Add New Batch (`MANUAL`) and Record Donation (`DONATION`,
+      linked by unique `donation_id`, carrying the donation's units) each create one; nothing is merged.
+      **An entered expiry must be today or later and at most 365 days away**
+      (`StockPolicy.MAX_ENTERED_EXPIRY_DAYS`): anything else is a 400 on `expiryDate` with nothing
+      written — Add New Batch's required date and Record Donation's **optional** `expiryDate` alike. With
+      no date, a donation's batch expires donation date + `DONATION_SHELF_LIFE_DAYS` (42, provisional).
+    - **First expiry, first out.** A contribution takes the earliest-expiring usable batch first, then
+      the next (ties by id in PostgreSQL's unsigned uuid order — `FefoAllocator.compareAsPostgres`, so
+      the order Java allocates in is the order the database locks in); see Business Rule 20 for the
+      locks and allocations. Expired or empty batches are never allocated, even if passed in.
+    - **Provenance of migrated batches.** V19 turned every old row with units > 0 into one `MIGRATED`
+      batch reusing the row's id, with received = remaining = the old count and received_at /
+      last_updated = the old last_updated. Its expiry is the old merged "earliest of" date, so it is
+      conservative (may say good units expire sooner, never later) and should be checked against the
+      bag labels; the real per-batch split is not recoverable. Old rows with 0 units became no batch,
+      listed in the migration output (`DB: V19: skipped …`). Batches already expired at the cutover are
+      stamped `expiry_noticed_at`. V19 refuses to run (one transaction, nothing changed) on negative units
+      or a non-empty batch table, verifies per-bank, per-group totals before finishing, and renames the
+      old table to `blood_inventory_pre_batches` (dropped by V20).
+    - **Batch detail is for the bank's own staff and ADMIN only.** `GET /api/inventory/{bank}/batches`
+      (live batches — any units left, expired included — optional `?bloodType=`) and
+      `GET /api/inventory/{bank}/batches/{id}` (one batch: state, days to expiry, source, donation, and
+      where its units went — issues to requests by hospital, and write-offs). SecurityConfig refuses
+      hospitals and donors (403) before the service; staff of another bank are refused in
+      `InventoryService` (403); a batch asked for under the wrong bank is a 404 like a missing one.
+      **Hospitals never see batch-level detail**: their availability view reads the per-group totals
+      only, whose first six JSON fields are unchanged (`InventoryApiContractIT` pins them).
+    - **Known limits:** usable stock falls at midnight UTC with no event, so no low-stock alert fires for
+      an expiry (a nightly expiry job, an "expiring in 3 days" warning and a written-off figure in Admin
+      Reports are future work, deliberately not built); stock edited directly in the database raises no
+      alert (as before). **Interim screens until Stage 4:** the Inventory table's own "Expiring Soon"
+      column still works out its figure in the browser from the group's `expiryDate` and shows the
+      group's whole usable total (the summary card above it is right), and the Admin Reports note
+      described in Business Rule 23.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -814,14 +1057,21 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapters 3, 4 and 5 — ERD and narrative for facilities.** Blood banks and hospitals are no
   longer purely seeded: an administrator creates them (Business Rule 19, V14), names are unique per
   type, and `audit_log` gained `target_blood_bank_id` / `target_hospital_id` with two new actions.
+- **Chapters 3, 4 and 5 — ERD and narrative for stock (Business Rule 24, V18/V19).** `BloodInventory`
+  is replaced by `BloodInventoryBatch` (one row per batch, own expiry date; usable stock derived, not
+  stored), with `ContributionAllocation` (Contribution 1–N, Batch 1–N), `BatchWriteOff` (Batch 1–N,
+  User 1–N), Donation 0..1–1 Batch, and `audit_log.target_batch_id` / STOCK_WRITTEN_OFF. Narrative: why
+  per-batch stock (expired units were counted as stock), the expired / usable / expiring-soon
+  definitions, first-expiry-first-out issuing (a sequence figure), and the "discard stock" use case
+  (Stage 3). Business Rule 7's merging is gone.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility, respond to donation appeals
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view the audit log of administrator actions (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
 
 ## Conventions
@@ -853,7 +1103,9 @@ listed so nothing is forgotten when the chapters are next revised.
     it is a dedicated, *persistent* fixture for the integration tests in `com.bloodlink.integration`
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
-    `AdminUserSearchIT`, `ReportsIT`), every one of which is `@Transactional` and rolls back everything it writes,
+    `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
+    `BatchWriteOffIT`, `AdminStockLockoutIT`),
+    every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
     Never point it at `bloodlink_dev`, and **never add a consumer that is not `@Transactional`** — that,
@@ -861,7 +1113,15 @@ listed so nothing is forgotten when the chapters are next revised.
     convention exists for. A test that genuinely cannot roll back belongs on a database of its own:
     `PartialFulfilmentRaceIT` (Business Rule 20) needs two real committed transactions to race, so it
     creates `bloodlink_race_test` before its Spring context starts and drops it afterwards, touching
-    nothing shared. That is the pattern for any future test in the same position. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
+    nothing shared. That is the pattern for any future test in the same position — and the one
+    `V19CutoverMigrationIT` follows: it must stop the schema at V17 and run real, committed Flyway
+    migrations, so it creates `bloodlink_migration_test` before each test (plain JUnit, no Spring
+    context) and drops it afterwards.
+    **Enforced, not just stated:** an environment variable outranks `application-test.properties`, so a
+    `SPRING_DATASOURCE_URL` left set in a terminal would silently redirect the tests. `IntegrationDatabaseGuard`
+    (test classpath only, registered in `src/test/resources/META-INF/spring.factories`) refuses any start
+    under the `test` profile whose database is not `bloodlink_test` or `bloodlink_race_test`, before a
+    connection is opened. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
     widened deliberately when `AdminAccountCreationIT` was added, since the guarantee comes from the
     rollback, not from there being a single class.)
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.

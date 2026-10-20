@@ -27,12 +27,8 @@ import com.bloodlink.admin.report.dto.ReportDtos.RequestReport;
 import com.bloodlink.admin.report.dto.ReportDtos.StockReport;
 
 /**
- * "View Reports & Analytics" — the administrator use case from CLAUDE.md.
- *
- * Both routes are GET-only aggregates with no path parameter: unlike the Blood
- * Bank Dashboard's per-bank figures or the Hospital Portal's per-hospital ones,
- * an administrator's reports are citywide by definition, so there is nothing
- * here to scope to a caller's own facility.
+ * "View Reports & Analytics": GET-only, citywide aggregates for administrators,
+ * so there is no facility to scope the caller to.
  */
 @RestController
 @RequestMapping("/api/admin/reports")
@@ -65,16 +61,13 @@ public class AdminReportController {
         return adminReportService.userCounts();
     }
 
-    // ---------- the Reports page (Business Rule 23) ----------
-    // Four read-only sections, each with a CSV twin. `from` / `to` are ISO dates
-    // (yyyy-MM-dd), both optional — the last six months by default; a malformed date
-    // is a 400 naming the field (GlobalExceptionHandler.handleTypeMismatch), and
-    // ReportRange.resolve refuses a backwards range or one longer than five years.
+    // ---------- the Reports page (Business Rule 23): four read-only sections, each with a CSV twin ----------
+    // from/to are optional ISO dates (default: six months); malformed, backwards or over-five-year ranges are a 400.
 
-    /** Section 1: stock across every bank, as of today. */
+    /** Section 1: usable stock across every bank, as of today in UTC (StockPolicy). */
     @GetMapping("/summary/stock")
     public StockReport stockSummary() {
-        return reportSummaryService.stock(LocalDate.now());
+        return reportSummaryService.stock(reportSummaryService.stockDate());
     }
 
     /** Section 2: hospital requests raised in the range. */
@@ -103,7 +96,7 @@ public class AdminReportController {
 
     @GetMapping("/summary/stock/export")
     public ResponseEntity<byte[]> exportStock() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = reportSummaryService.stockDate();
         return csv(ReportCsv.stock(reportSummaryService.stock(today), today), ReportCsv.fileName("stock", today));
     }
 

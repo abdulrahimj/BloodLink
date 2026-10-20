@@ -1,10 +1,4 @@
-/* ================================================================
-   BloodLink — wording for the "Send appeal" confirmation
-
-   Kept as plain functions in their own file, rather than inline in the dialog,
-   so the wording can be tested without a browser: `npm test` runs
-   appealReach.test.js with Node's built-in test runner.
-   ================================================================ */
+/* BloodLink — wording for the "Send appeal" confirmation, kept as plain functions so npm test can check it. */
 
 /** "1 donor" / "12 donors". */
 export function donorCount(n) {
@@ -12,23 +6,8 @@ export function donorCount(n) {
 }
 
 /**
- * What an appeal would reach, as the two lines the confirmation dialog shows.
- *
- * `eligible` and `inRecovery` come from GET /api/appeals/reach. Together they
- * separate four situations that need four different sentences:
- *
- *   • Nobody registered at all (both zero). The register has no donors of this
- *     group — a recruitment problem. Saying "every donor is currently eligible"
- *     here, as this once did, contradicts itself: if everyone were eligible there
- *     would be someone to appeal to.
- *   • Donors exist but every one is inside the 90-day recovery window (eligible
- *     zero, recovery above zero). The right answer is to wait, not to recruit, and
- *     the message says how many are recovering.
- *   • Some eligible and some recovering — the filter is named, so a small number
- *     reads as "recovering" rather than "missing".
- *   • Everyone eligible — nothing was held back.
- *
- * @returns {{ heading: string, note: string, nobodyToReach: boolean }}
+ * The confirmation dialog's two lines from GET /api/appeals/reach, telling apart nobody registered,
+ * everyone recovering, some recovering and everyone eligible. Returns { heading, note, nobodyToReach }.
  */
 export function describeAppealReach(bloodType, eligible, inRecovery) {
   const nobodyToReach = eligible === 0;

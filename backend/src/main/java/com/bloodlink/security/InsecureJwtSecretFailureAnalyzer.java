@@ -4,35 +4,48 @@ import org.springframework.boot.diagnostics.AbstractFailureAnalyzer;
 import org.springframework.boot.diagnostics.FailureAnalysis;
 
 /**
- * Presents a refused start (Business Rule 15) the way Spring Boot presents its own
- * configuration mistakes:
- *
- * <pre>
- * ***************************
- * APPLICATION FAILED TO START
- * ***************************
- *
- * Description:
- * ...what is wrong...
- *
- * Action:
- * ...what to do about it...
- * </pre>
- *
- * Without this, the same failure still stops the application — the exception is
- * what does that — but it reaches the log as a BeanCreationException wrapped
- * around the real cause, several screens of stack trace above the one line that
- * matters. The person reading it is deploying the system, possibly not the person
- * who wrote it, and should not have to know which bean to look for.
- *
- * Registered in META-INF/spring.factories, which is how Spring Boot discovers
- * failure analyzers; it has no effect on a start that succeeds. Public because it is
- * instantiated reflectively from that file, from outside this package.
+ * Reports a refused start (Business Rule 15) as Spring Boot's "APPLICATION FAILED TO START" block
+ * instead of a stack trace; registered in META-INF/spring.factories, so public.
  */
 public class InsecureJwtSecretFailureAnalyzer extends AbstractFailureAnalyzer<InsecureJwtSecretException> {
 
+    /**
+     * Picks the description for why the secret was refused; the action is the same fix each time,
+     * with the placeholder getting its own explanation.
+     */
     @Override
     protected FailureAnalysis analyze(Throwable rootFailure, InsecureJwtSecretException cause) {
+        return switch (cause.getReason()) {
+            case MISSING -> weakSecret(cause,
+                "The JWT signing secret (bloodlink.jwt.secret) is empty: BLOODLINK_JWT_SECRET is set, "
+                    + "but to nothing.\n\n"
+                    + "BloodLink cannot sign login tokens without a secret, and refuses to start.");
+            case TOO_SHORT -> weakSecret(cause,
+                "The JWT signing secret (bloodlink.jwt.secret) is " + cause.getSecretBytes()
+                    + " bytes long. HMAC-SHA256 (HS256), which signs every login token, needs at least "
+                    + JwtSecretPolicy.MIN_SECRET_BYTES + " bytes (256 bits).\n\n"
+                    + "A shorter secret can be guessed, and anyone who guesses it can forge a login "
+                    + "token for any account, including an administrator. BloodLink refuses to start "
+                    + "rather than run like that.");
+            case PUBLIC_PLACEHOLDER -> publicPlaceholder(cause);
+        };
+    }
+
+    /** The report for a missing or too-short secret, under any profile. */
+    private static FailureAnalysis weakSecret(InsecureJwtSecretException cause, String description) {
+        String action = "Set the BLOODLINK_JWT_SECRET environment variable to a long, random, private "
+            + "value of at least " + JwtSecretPolicy.MIN_SECRET_BYTES + " bytes, then start again. "
+            + "48 random bytes in Base64 (64 characters) is plenty. To generate one:\n\n"
+            + "    openssl rand -base64 48\n\n"
+            + "or in PowerShell:\n\n"
+            + "    $b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)\n\n"
+            + "The README's \"Setting a real JWT secret\" section shows how to set it. Never commit "
+            + "the real value. Changing it signs every user out.";
+        return new FailureAnalysis(description, action, cause);
+    }
+
+    /** The report for the public placeholder under a profile that is not local-only. */
+    private static FailureAnalysis publicPlaceholder(InsecureJwtSecretException cause) {
         String description = "The JWT signing secret (bloodlink.jwt.secret) is the public placeholder "
             + "value committed to the BloodLink repository, and the active profile(s) "
             + JwtSecretPolicy.describeProfiles(cause.getActiveProfiles())

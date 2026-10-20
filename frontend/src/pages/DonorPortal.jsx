@@ -1,38 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
 import { acceptDonationAppeal } from "../api/appeals.js";
+import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Donor Portal
-
-   Covers the donor use cases from Chapters One & Three:
-     • View donation history and eligibility status
-     • Respond to donation appeals from blood banks
-     • Download recognition certificate
-
-   Typography: Inter throughout — same as the Hospital Portal and
-   Admin Console, so all screens read as one product.
-
-   Wired to GET /api/donors/me and GET /api/donors/me/donations. Layout,
-   styling and structure are the mockup's, unchanged; the DONOR and
-   HISTORY fixtures are replaced with fetched data, and three small
-   additive states were introduced the same way Phase 3 did for the auth
-   screens — a loading placeholder, an error banner, and an ineligible
-   variant of the eligibility banner — all built from tokens already
-   declared in this file, never a new visual language.
-
-   Donation Appeals is now live. The panel is filled from this donor's own
-   DONATION_APPEAL notifications, which arrive over the WebSocket the moment a
-   blood bank sends one and are read back from GET /api/notifications on load
-   for any that came while the browser was closed. Per Business Rule 1 the
-   source named in an appeal is always a blood bank — hospitals request from
-   banks, they never reach a donor directly, and the backend has no path that
-   could produce one saying otherwise. The panel head and layout are the
-   mockup's, unchanged; only the empty fixture became real rows.
-   ================================================================ */
+/* BloodLink — Donor Portal: donation history, eligibility and live donation appeals from blood banks
+   (Business Rule 1), from GET /api/donors/me, /me/donations and the donor's notifications. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -42,9 +17,7 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-/** Parses a "YYYY-MM-DD" LocalDate string as a local calendar date, not UTC
- *  midnight — `new Date("YYYY-MM-DD")` would shift a day in negative-UTC-offset
- *  zones, which is exactly the kind of off-by-one a donation date can't afford. */
+/** Parses "YYYY-MM-DD" as a local date, since new Date("YYYY-MM-DD") would shift a day west of UTC. */
 function parseIsoDate(isoDate) {
   const [year, month, day] = isoDate.split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -74,10 +47,7 @@ function formatHeaderDate(date) {
 }
 
 /**
- * "2 hrs ago" for a recent appeal, a plain date once it is old enough that a
- * relative phrase stops being informative. Takes an Instant (with a time), unlike
- * the LocalDate helpers above — an appeal sent this morning and one sent last week
- * need to be told apart, which a date alone cannot do.
+ * "2 hrs ago" for a recent appeal, a plain date once older; takes an Instant, unlike the date-only helpers above.
  */
 function formatAppealTime(instantIso) {
   const minutes = Math.floor((Date.now() - new Date(instantIso).getTime()) / 60000);
@@ -102,9 +72,7 @@ function initials(fullName) {
 }
 
 /**
- * The one blood-group fact worth badging on the dashboard. O- can go to any
- * patient; AB+ can receive from any donor. Every other group gets no tag,
- * matching how the mockup only ever showed the tag for its one fixture donor.
+ * The one blood-group fact worth a badge: O- is the universal donor, AB+ the universal recipient.
  */
 function bloodGroupTag(bloodType) {
   if (bloodType === "O-") return "Universal Donor";
@@ -113,10 +81,9 @@ function bloodGroupTag(bloodType) {
 }
 
 export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
-  // "dashboard" or "settings" — the Settings sidebar entry opens the shared
-  // Profile Settings screen in the main area, keeping this sidebar, header and
-  // bell (Business Rule 16). Plain state, as every other portal switches views.
+  // "dashboard" or "settings" (shared Profile Settings in the main area, Business Rule 16), as plain state.
   const [view, setView] = useState("dashboard");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profile, setProfile] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -130,9 +97,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
   const [acceptingAppealId, setAcceptingAppealId] = useState(null);
   const [appealFeedback, setAppealFeedback] = useState({});
 
-  // A donor's appeals are exactly their DONATION_APPEAL notifications — the schema
-  // has no separate appeals table, and deliberately so (an appeal is an event, not
-  // a record). Capped at the same handful the panel's fixed height can show.
+  // A donor's appeals are their DONATION_APPEAL notifications (there is no appeals table),
+  // capped at what the panel shows.
   const appeals = notifications.filter((item) => item.type === "DONATION_APPEAL").slice(0, 4);
 
   useEffect(() => {
@@ -161,11 +127,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
     return () => { cancelled = true; };
   }, []);
 
-  // The session already has the name from login/register — shown immediately so the
-  // header never has to wait on this call just to greet the donor. Preferred over
-  // the dashboard's copy because it is the one Profile Settings updates the moment
-  // a new name is saved; the dashboard's was fetched once, on arrival. Both read
-  // the same column, so otherwise they never differ.
+  // The name from the session, shown at once and updated by Profile Settings; the profile's is the fallback.
   const displayName = user?.fullName ?? profile?.fullName ?? "";
   const firstName = displayName.split(" ")[0] || displayName;
 
@@ -201,7 +163,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
   const visibleHistory = history.slice(0, 5);
 
   return (
-    <div className="dn-root">
+    <div className={`dn-root${mobileMenuOpen ? " is-menu-open" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
 
@@ -434,7 +396,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
       `}</style>
 
       {/* ================= SIDEBAR ================= */}
-      <aside className="dn-side">
+      {mobileMenuOpen && <button type="button" className="mobile-menu-backdrop" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
+      <aside className="dn-side" id="dn-sidebar">
         <div className="dn-brand">
           <svg width="28" height="32" viewBox="0 0 34 38" aria-hidden="true">
             <path d="M17 2s13 14 13 22a13 13 0 0 1-26 0C4 16 17 2 17 2z" fill="#C8102E" />
@@ -454,7 +417,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
 
         {/* Dashboard and Settings are wired; the middle four are still the
             mockup's inert entries. */}
-        <nav className="dn-nav">
+        <nav className="dn-nav" onClick={() => setMobileMenuOpen(false)}>
           <button
             type="button" className={view === "dashboard" ? "is-active" : ""}
             aria-current={view === "dashboard" ? "page" : undefined}
@@ -481,6 +444,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
       {/* ================= MAIN ================= */}
       <main className="dn-main">
         <div className="dn-top">
+          <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="dn-sidebar" />
           <div>
             <div className="dn-title">
               {view === "settings" ? "Profile Settings" : `Hello${firstName ? `, ${firstName}` : ""}`}
@@ -576,9 +540,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     )}
                     {visibleHistory.map((h, i) => (
                       <div className="dn-item" key={i}>
-                        {/* Business Rule 4: the group tested at this donation, not the
-                            donor's profile value — the two can differ or the profile
-                            can be unset entirely. */}
+                        {/* The group tested at this donation (Business Rule 4), not the profile value. */}
                         <div className="dn-item-badge dn-item-badge--navy">{h.bloodType}</div>
                         <div className="dn-item-body">
                           <div className="dn-item-main">{formatFullDate(h.donationDate)}</div>
@@ -600,11 +562,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     <div className="dn-panel-title">Donation Appeals</div>
                     <div className="dn-panel-link">From Makeni blood banks</div>
                   </div>
-                  {/* Real appeals, pushed by a blood bank (Business Rule 1: never
-                      sourced from a hospital). The badge carries the donor's own
-                      group rather than one parsed out of the message text —
-                      the message is written for a human, not for a parser, and
-                      an appeal only ever reaches donors of the group it names. */}
+                  {/* Real appeals from blood banks (Business Rule 1); the badge shows the donor's own group,
+                      not one parsed from the message. */}
                   <div className="dn-list">
                     {appeals.length === 0 && (
                       <div className="dn-empty">

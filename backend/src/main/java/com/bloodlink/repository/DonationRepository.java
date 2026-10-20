@@ -16,23 +16,13 @@ public interface DonationRepository extends JpaRepository<Donation, UUID> {
     List<Donation> findByDonorIdOrderByDonationDateDesc(UUID donorId);
 
     /**
-     * One donor's history at one bank only, most recent first, capped at 50 —
-     * backs GET /api/donors/roster/{donorId}/donations. Never another bank's
-     * rows: both ids are matched, so a donor who gave elsewhere too shows
-     * nothing of that here.
+     * One donor's history at one bank only, most recent first, capped at 50; both ids must match.
      */
     List<Donation> findTop50ByDonorIdAndBloodBankIdOrderByDonationDateDesc(UUID donorId, UUID bloodBankId);
 
     /**
-     * How many of the given donors have donated at this bank, in one query
-     * rather than one per row — the "donationsHere" figure on the Donors page.
-     *
-     * Deliberately takes the exact donor ids already on the page (at most
-     * `size`, capped at 100) rather than every donor at the bank: this runs
-     * once per page load, not once per row, which is what keeps
-     * DonorRosterService free of N+1 queries without needing a single fused
-     * query that mixes a fetch join with GROUP BY (see DonorRepository's
-     * roster queries for why that combination was avoided).
+     * How many of the given donors (one page) have donated at this bank, in one query:
+     * the Donors page's donationsHere, avoiding N+1 queries.
      */
     @Query("select don.donor.id as donorId, count(don) as total from Donation don"
         + " where don.bloodBank.id = :bloodBankId and don.donor.id in :donorIds"
@@ -50,34 +40,15 @@ public interface DonationRepository extends JpaRepository<Donation, UUID> {
     long countByBloodBankIdAndDonationDateBetween(UUID bloodBankId, LocalDate start, LocalDate end);
 
     /**
-     * "Registered Donors" stat on the Blood Bank Dashboard.
-     *
-     * There is no direct link from a Donor to a BloodBank in the schema — Donation
-     * is the only bridge — so this counts donors who have given at least once at
-     * this bank, which is the closest honest reading of "linked to this bank"
-     * available from the fixed schema.
+     * "Registered Donors" on the Blood Bank Dashboard: donors who have given at least once at this bank,
+     * since Donation is the only link between a donor and a bank.
      */
     @Query("select count(distinct d.donor.id) from Donation d where d.bloodBank.id = :bloodBankId")
     long countDistinctDonorsByBloodBankId(@Param("bloodBankId") UUID bloodBankId);
 
     /**
-     * How many donations happened in each calendar month from {@code start}
-     * onward, across every blood bank — the aggregate behind the Admin Console's
-     * "Donation Trends" chart.
-     *
-     * A count of donation events, not a sum of units: this follows the same
-     * reading of "donations" already established by
-     * {@link #countByBloodBankIdAndDonationDateBetween}, which backs the Blood
-     * Bank Dashboard's own "Donations" stat as a row count rather than a unit
-     * total. Keeping the two readings consistent means a citywide trend and a
-     * single bank's monthly figure agree on what the word means.
-     *
-     * Native SQL rather than JPQL, because JPQL has no portable way to floor a
-     * date to the first of its month; CLAUDE.md commits this project to
-     * PostgreSQL specifically, so date_trunc costs no portability this project
-     * needs. Months with zero donations are simply absent from the result —
-     * AdminReportService fills them in, the same way InventoryService fills in a
-     * blood group no bank has ever stocked.
+     * Donation counts per calendar month from start onward, citywide, for the Donation Trends chart (not units).
+     * Native SQL for date_trunc; empty months are absent and filled in by AdminReportService.
      */
     @Query(value = """
         select date_trunc('month', donation_date)::date as bucket, count(*) as total
@@ -89,8 +60,7 @@ public interface DonationRepository extends JpaRepository<Donation, UUID> {
     List<MonthlyDonationCount> countMonthlyFrom(@Param("start") LocalDate start);
 
     // ---------- Admin Reports: donations in a date range (Business Rule 23) ----------
-    // donation_date is a plain DATE (no time, no zone), so a month is the same month
-    // everywhere — the UTC grouping the report asks for, with nothing to convert.
+    // donation_date is a plain DATE, so months need no time-zone conversion.
 
     /** Donation count per calendar month between two dates, both inclusive. Months
      *  with none are absent; the service fills them in as zero, as donationTrends does. */

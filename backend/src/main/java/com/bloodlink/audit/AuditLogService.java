@@ -1,5 +1,6 @@
 package com.bloodlink.audit;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
@@ -12,6 +13,7 @@ import com.bloodlink.audit.dto.AuditLogEntryResponse;
 import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AuditAction;
@@ -19,12 +21,8 @@ import com.bloodlink.repository.AuditLogRepository;
 import com.bloodlink.repository.UserRepository;
 
 /**
- * Writes and reads the administrators' audit log — Business Rule 17.
- *
- * Two operations and no third: an entry can be recorded, and the log can be read.
- * There is no method here — and none on AuditLogRepository — that changes or
- * removes an entry, and V12's triggers refuse either at the database even if
- * one were added.
+ * Records and reads the audit log (Business Rule 17); nothing here or in AuditLogRepository changes an entry,
+ * and V12's triggers would refuse it anyway.
  */
 @Service
 public class AuditLogService {
@@ -38,17 +36,8 @@ public class AuditLogService {
     }
 
     /**
-     * Records one administrator action.
-     *
-     * {@code MANDATORY}, not the usual REQUIRED: this refuses to run unless the
-     * caller already has a transaction open. The entry has to commit or roll back
-     * together with the action it describes — an account suspended with no entry,
-     * or an entry for a suspension that then failed, would both make the log say
-     * something untrue. Requiring the caller's transaction, rather than quietly
-     * starting a separate one, makes that impossible to get wrong later.
-     *
-     * The actor is referenced by id without loading their row (getReferenceById):
-     * the log needs the foreign key, not the administrator's details.
+     * Records one administrator action. MANDATORY: it must run in the caller's transaction so the entry and the action
+     * commit or roll back together. The actor is referenced by id without loading the row.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void record(UUID actorId, AuditAction action, User target, String details) {
@@ -57,9 +46,7 @@ public class AuditLogService {
     }
 
     /**
-     * Records a new blood bank as BLOOD_BANK_CREATED (Business Rule 19). MANDATORY
-     * for the same reason as {@link #record}: the bank and its entry commit or roll
-     * back together.
+     * Records a new blood bank as BLOOD_BANK_CREATED (Business Rule 19), in the caller's transaction like record.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void recordBloodBankCreated(UUID actorId, BloodBank bank, String details) {
@@ -75,15 +62,18 @@ public class AuditLogService {
     }
 
     /**
-     * One page of entries, newest first, for the Audit Log page.
-     *
-     * {@code page} and {@code size} have already been validated by
-     * {@link AuditLogController} (page &gt;= 0, 1 &lt;= size &lt;= 100) by the time
-     * this runs. The {@link PageRequest} is built with no {@link
-     * org.springframework.data.domain.Sort} of its own — the newest-first order,
-     * including the id tie-breaker, is fixed in {@code findAllNewestFirst}'s own
-     * JPQL, so there is exactly one place that decides it, not two that could
-     * disagree.
+     * Records a write-off as STOCK_WRITTEN_OFF (Business Rule 24), committing with the write-off and its stock change.
+     * The actor is the bank staff member who discarded the units, never an administrator.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordStockWrittenOff(UUID actorId, BloodInventoryBatch batch, String details, Instant at) {
+        User actor = userRepository.getReferenceById(actorId);
+        auditLogRepository.save(AuditLog.recordStockWrittenOff(actor, batch, details, at));
+    }
+
+    /**
+     * One page of entries, newest first; page and size were validated by AuditLogController.
+     * The order (with id tie-breaker) is fixed only in findAllNewestFirst's JPQL.
      */
     @Transactional(readOnly = true)
     public AuditLogPageResponse list(int page, int size) {

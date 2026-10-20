@@ -1,10 +1,5 @@
-/* ================================================================
-   BloodLink — API client
-
-   One place that knows how to call the Spring Boot API: where it lives,
-   how to attach the JWT, and how to turn a failed response into an error
-   a form can display.
-   ================================================================ */
+/* BloodLink — API client: where the API lives, how the JWT is attached,
+   and how a failed response becomes an error a form can show. */
 
 import { clearSession, getToken } from '../auth/session.js';
 
@@ -13,11 +8,8 @@ import { clearSession, getToken } from '../auth/session.js';
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 
 /**
- * Error carrying the backend's ApiError payload.
- *
- * `message` is always safe to show the user directly — the backend writes those
- * strings for display. `fieldErrors` is present on validation failures (400) and
- * maps a request field name to its message, so a form can mark the offending input.
+ * Error carrying the backend's ApiError: message is safe to show;
+ * fieldErrors (400s) maps field names to messages for the form.
  */
 export class ApiError extends Error {
   constructor(message, status, fieldErrors) {
@@ -29,19 +21,8 @@ export class ApiError extends Error {
 }
 
 /**
- * Performs a JSON request against the API.
- *
- * Attaches the bearer token when one is stored, unless `auth: false` — which the
- * register and login calls use, since sending a stale token to them is meaningless.
- *
- * A 401 on an authenticated call usually means the token expired or was rejected,
- * so the stored session is discarded rather than left to fail every subsequent
- * request. The one exception is a 401 that names a form field: that is the server
- * refusing something the user typed — today, a wrong current password on the
- * Profile Settings password form (Business Rule 16) — not refusing the session.
- * Signing the user out for a typo would lose their session over nothing, so the
- * session is only discarded for a 401 with no field errors, which is the only kind
- * the backend's token check (RestAuthenticationEntryPoint) ever sends.
+ * JSON request with the bearer token (unless auth: false). A 401 without field errors discards the session;
+ * a 401 naming a field (e.g. wrong current password) is the user's input, so the session is kept.
  */
 export async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -57,9 +38,8 @@ export async function apiRequest(path, { method = 'GET', body, auth = true } = {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    // fetch only rejects on a network-level failure — server down, DNS, CORS.
-    // Distinguished from an HTTP error so the user is told to check the connection
-    // rather than shown a misleading validation message.
+    // fetch only rejects on a network failure, so the user is told to check the connection
+    // rather than shown a misleading error.
     throw new ApiError('Could not reach the BloodLink server. Check your connection and try again.', 0);
   }
 
@@ -72,15 +52,8 @@ export async function apiRequest(path, { method = 'GET', body, auth = true } = {
 }
 
 /**
- * Downloads a file the API builds — today, a Reports CSV (Business Rule 23) — and
- * resolves to { blob, fileName }.
- *
- * A plain link cannot do this: the browser would follow it without the bearer
- * token, and every /api/admin route refuses a request without one. So the file is
- * fetched like any other call, with the token, and handed back as a Blob for the
- * caller to save. The file name is the server's, from Content-Disposition, so it
- * names the section and dates exactly as the server built them. A failure is the
- * same ApiError, with the same 401 handling, as apiRequest.
+ * Downloads a file the API builds (a Reports CSV) as { blob, fileName }, fetched with the bearer token
+ * a plain link can't send; the name comes from Content-Disposition. Errors as in apiRequest.
  */
 export async function apiDownload(path) {
   const token = getToken();
@@ -104,10 +77,8 @@ export async function apiDownload(path) {
 }
 
 /**
- * The failure handling every call shares: a 401 discards the session (unless it
- * names a typed field — see apiRequest), and any non-2xx becomes an ApiError
- * carrying the server's message and field errors. Read after the body, because the
- * body is what says which kind of 401 this is.
+ * Shared failure handling: a 401 discards the session unless it names a typed field,
+ * and any non-2xx becomes an ApiError with the server's message and field errors.
  */
 function throwIfFailed(response, payload, sentToken) {
   const rejectsTypedField = payload?.fieldErrors && Object.keys(payload.fieldErrors).length > 0;

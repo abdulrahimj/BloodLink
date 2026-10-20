@@ -23,21 +23,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * When one blood bank last appealed for one blood group, and how short it was at
- * the time — the state behind the Send Appeal button's cooldown (Business Rule 12).
- *
- * One row per (blood_bank, blood_type), overwritten on each send rather than
- * appended to: this is a *current state* row, not a history. Nothing in this
- * project reads past appeals — an appeal lives on as Notification rows in each
- * recipient's bell, as AppealController's own comment explains — and the only
- * question asked of this table is "may this bank appeal for this group right
- * now?", which only the most recent send can answer.
- *
- * {@code triggeredTier} is stored rather than re-derived from current stock,
- * because it records how bad things were *when the appeal went out*. Deriving it
- * later from current units would change a cooldown's length and recovery
- * threshold retroactively every time stock moved, which is the opposite of what
- * a cooldown is for.
+ * When a bank last appealed for a blood group and how short it was then: the cooldown state (Business Rule 12).
+ * One current-state row per (bank, group), overwritten on each send; triggeredTier is stored so its terms never shift.
  */
 @Entity
 @Table(

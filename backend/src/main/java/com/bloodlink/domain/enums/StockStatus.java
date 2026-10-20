@@ -1,9 +1,8 @@
 package com.bloodlink.domain.enums;
 
 /**
- * Derived (never stored) — computed from BloodInventory.unitsAvailable at read
- * time, per blood bank and blood group (CLAUDE.md Business Rule 3).
- * Same pattern as {@link EligibilityStatus}: a fact about the data, not a column.
+ * Derived, never stored: computed at read time from a bank's usable units of one group
+ * (Business Rules 3 and 24), like EligibilityStatus.
  */
 public enum StockStatus {
     SUFFICIENT(0),
@@ -16,9 +15,7 @@ public enum StockStatus {
     public static final int LOW_BELOW = 40;
 
     /**
-     * How bad this level is, low to high. Declared explicitly rather than relying on
-     * the enum's own ordinal, so reordering the constants for any reason cannot
-     * silently invert which of two levels counts as worse.
+     * How bad this level is, declared explicitly so reordering the constants cannot invert which is worse.
      */
     private final int severity;
 
@@ -41,15 +38,8 @@ public enum StockStatus {
     }
 
     /**
-     * True when this level is worse than {@code other} — Sufficient -> Low, Low ->
-     * Critical, or Sufficient -> Critical in one step.
-     *
-     * This is what "crossed into Low/Critical" means for the low-stock alert: the
-     * alert fires when a stock level deteriorates past a threshold, not merely when
-     * it sits below one. Without the comparison, every deduction from an already-low
-     * group would raise a fresh alert and staff would learn to ignore all of them;
-     * with it, one alert is raised per crossing and the next comes only if things
-     * get worse again.
+     * True when this level is worse than other; the low-stock alert fires on such a crossing,
+     * not on every deduction from an already-low group.
      */
     public boolean isWorseThan(StockStatus other) {
         return this.severity > other.severity;

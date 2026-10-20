@@ -25,10 +25,8 @@ import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.DonationRepository;
 
 /**
- * Covers the one thing easy to get backwards in getDashboard: every figure is
- * scoped to this bank, including the pending-request count, which is counted over
- * the same "unclaimed, or already ours" scope the requests panel lists (Business
- * Rule 6) rather than citywide.
+ * Every dashboard figure is scoped to this bank, including the open-request count,
+ * which uses the same scope the requests panel lists.
  */
 @ExtendWith(MockitoExtension.class)
 class BloodBankServiceTest {
@@ -55,7 +53,7 @@ class BloodBankServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank));
 
         when(inventoryService.listInventory(BANK_ID)).thenReturn(List.of(
-            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE, false)
+            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE)
         ));
 
         when(donationRepository.countByBloodBankIdAndDonationDateBetween(any(), any(), any())).thenReturn(12L);

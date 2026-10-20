@@ -3,16 +3,8 @@ package com.bloodlink.donor.dto;
 import com.bloodlink.domain.enums.EligibilityStatus;
 
 /**
- * Eligibility as the Donors page shows it (Business Rule 21) — deliberately not
- * the same enum {@link EligibilityStatus} already uses elsewhere.
- *
- * {@code EligibilityStatus} is {@code ELIGIBLE}/{@code INELIGIBLE}, and renaming
- * it to fit this screen's wording would ripple into every other place that
- * already reads it (the donor's own dashboard, the Record Donation lookup).
- * This is a second, narrow vocabulary for one screen, not a second calculation:
- * {@link #from(EligibilityStatus)} is the only place that translates between
- * them, and it is fed by {@code Donor.getEligibilityStatus()} — the single
- * place the 90-day rule (Business Rule 2) is ever evaluated.
+ * Eligibility in the Donors page's wording (Business Rule 21), translated only by from(EligibilityStatus)
+ * from Donor.getEligibilityStatus(); a second vocabulary, not a second calculation.
  */
 public enum BankDonorEligibility {
 

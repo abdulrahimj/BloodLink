@@ -28,11 +28,8 @@ import com.bloodlink.repository.DonationRepository.MonthlyDonationCount;
 import com.bloodlink.repository.UserRepository;
 
 /**
- * Both reports share one rule this class exists to pin down: a month or a status
- * with nothing recorded against it must still appear, at zero, rather than be
- * missing from the response — the same "always present, zero when empty" contract
- * InventoryService already gives every blood group. Missing rows and empty rows
- * mean different things to a chart, and only one of them is true here.
+ * Both reports must list every month or status, at zero when empty,
+ * since missing and empty rows mean different things to a chart.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminReportServiceTest {
@@ -69,9 +66,7 @@ class AdminReportServiceTest {
         assertThat(counts.total()).isEqualTo(63);
     }
 
-    /** A plain implementation rather than a Mockito mock: both projections are
-     *  pure data with no behaviour to stub, so a real, tiny object is simpler
-     *  and more honest here than mocking an interface that has nothing to fake. */
+    /** A plain record rather than a Mockito mock, since the projection is pure data. */
     private record FakeMonthlyDonationCount(LocalDate bucket, long total) implements MonthlyDonationCount {
         @Override public LocalDate getBucket() { return bucket; }
         @Override public long getTotal() { return total; }

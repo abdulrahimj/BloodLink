@@ -48,20 +48,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Covers what the Admin Console's user table actually needs to be trustworthy:
- * every role's facility link mapped correctly (or honestly absent), and the one
- * safety rail on suspension — an administrator cannot lock themselves out with
- * no one left to undo it.
- *
- * And, since Business Rule 14, account creation: which role may be created here,
- * which facility each role must and must not carry, and — the one this class was
- * most careful about — that the password handed to the administrator actually
- * verifies against the hash that was stored. That assertion runs the real
- * BCryptPasswordEncoder rather than a mock, because the failure it exists to catch
- * is precisely the one a mock cannot see: a hash that looks like a hash, is stored
- * without complaint, and matches nothing. This project has had that bug once
- * already, from a hand-written hash, and it surfaced only as an account that would
- * not log in.
+ * The Admin Console's user rules: facility links per role, no self-suspension, and account creation (Business Rule 14).
+ * Uses the real BCryptPasswordEncoder to prove the handed-out password verifies against the stored hash.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminUserServiceTest {
@@ -144,9 +132,7 @@ class AdminUserServiceTest {
         });
     }
 
-    /** Stubbed one facility at a time, not both together: this class runs under
-     *  Mockito's default strict stubs, which report a stub no test used — and that
-     *  strictness is worth keeping. */
+    /** Stubbed one facility at a time, so Mockito's strict stubs still report unused stubs. */
     private void stubHospitalExists() {
         Hospital hospital = new Hospital();
         hospital.setId(HOSPITAL_ID);
@@ -222,9 +208,7 @@ class AdminUserServiceTest {
 
     @Test
     void aDonorAccountCannotBeCreatedHere() {
-        // Donors self-register (Business Rule 8), and that path also writes the
-        // linked Donor row this endpoint has no fields for. A DONOR User without
-        // one would break every donor screen, so it is refused, not half-created.
+        // Donors self-register with a Donor row this endpoint cannot create, so DONOR is refused, not half-created.
         assertThatThrownBy(() -> create(payload(Role.DONOR, null, null)))
             .isInstanceOf(InvalidFieldException.class)
             .hasMessageContaining("registration");
@@ -291,10 +275,7 @@ class AdminUserServiceTest {
 
     @Test
     void aDuplicatePhoneIsRefusedAndNothingIsWritten() {
-        // Checked against the NORMALISED number (Business Rule 13): the payload
-        // types it the local way, and the account it collides with is stored the
-        // international way. Comparing the raw string would let the same person
-        // hold two accounts on one number.
+        // Checked against the normalised number (Business Rule 13), so one number typed two ways is still a duplicate.
         when(userRepository.existsByPhone("+23276900005")).thenReturn(true);
 
         assertThatThrownBy(() -> create(payload(Role.ADMIN, null, null)))
@@ -335,10 +316,7 @@ class AdminUserServiceTest {
         CreatedAccountResponse created = create(payload(Role.ADMIN, null, null));
         User saved = savedUser();
 
-        // The assertion this whole class exists for. Not "a hash was stored" —
-        // a hash that verifies nothing looks exactly the same in the database.
-        // This runs the real BCrypt comparison, which is what the login endpoint
-        // will run when the new staff member types the password they were given.
+        // The key assertion: the real BCrypt comparison login will run, not merely that a hash was stored.
         assertThat(passwordEncoder.matches(created.temporaryPassword(), saved.getPasswordHash())).isTrue();
 
         // And the plaintext is not what was stored: the hash is a BCrypt digest
@@ -578,9 +556,7 @@ class AdminUserServiceTest {
 
     @Test
     void anAdministratorMayReactivateTheirOwnAccount() {
-        // The guard is specifically against locking yourself out — reactivating
-        // your own (already-active, in practice) account carries no such risk
-        // and must not be swept up by the same rule.
+        // The guard is only against locking yourself out; reactivating your own account must still work.
         User self = donor();
         self.setId(ADMIN_ID);
         when(userRepository.findById(ADMIN_ID)).thenReturn(Optional.of(self));

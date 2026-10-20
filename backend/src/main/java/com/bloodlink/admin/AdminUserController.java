@@ -29,12 +29,8 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
- * "Manage User Accounts" — the administrator use case from CLAUDE.md.
- *
- * SecurityConfig restricts all of /api/admin/** to ADMIN, so there is no
- * role-scoping to do here the way RequestController or InventoryController have
- * to: every caller who reaches these methods is already an administrator, and
- * every account in the system is fair game to list or act on.
+ * "Manage User Accounts": SecurityConfig restricts /api/admin/** to ADMIN,
+ * so every caller is an administrator and every account may be listed or acted on.
  */
 @RestController
 @RequestMapping("/api/admin/users")
@@ -47,20 +43,8 @@ public class AdminUserController {
     }
 
     /**
-     * One page of accounts for the console's User Accounts table, searched, filtered
-     * and sorted in the database.
-     *
-     * Every parameter is optional and checked against a fixed list before the service
-     * sees it; a bad value is a 400 naming the field, never silently corrected:
-     * <ul>
-     *   <li>{@code page} 0-based (default 0); {@code size} default 13 (the most rows
-     *       that fit the console on a 768px-tall screen without scrolling), max 100.</li>
-     *   <li>{@code q} matches name, email or phone (any part, either phone format).</li>
-     *   <li>{@code role} and {@code status} are exact filters, the enums' own names.</li>
-     *   <li>{@code sort} is name, role, createdAt or status; {@code direction} asc or desc.</li>
-     * </ul>
-     * No @Validated on this class — see AppealController.reach for why that would route
-     * these constraints through the wrong exception handler.
+     * One page of accounts, searched, filtered and sorted in the database; a bad parameter value is a 400.
+     * page (0-based), size (default 13, max 100), q, role, status, sort, direction; no @Validated (see AppealController).
      */
     @GetMapping
     public AdminUserPageResponse list(
@@ -92,21 +76,8 @@ public class AdminUserController {
     }
 
     /**
-     * Creates a staff or administrator account — Business Rule 14.
-     *
-     * 201 with the created account plus its generated password, the same status
-     * registration returns for the same reason: a new resource exists that did not
-     * before. The password in that body is the only time it is ever readable; see
-     * CreatedAccountResponse for why it is returned at all and why it cannot be
-     * fetched again.
-     *
-     * DONOR is refused by the service rather than by this signature. Donors
-     * self-register (Business Rule 8), and that flow also writes the linked Donor
-     * row this endpoint has no fields for.
-     *
-     * No role check here: SecurityConfig gates the whole /api/admin/** prefix on
-     * ADMIN, so a hospital or bank staff token never reaches this method — it is
-     * refused in the filter chain with a 403 (RestAccessDeniedHandler).
+     * Creates a staff or administrator account (Business Rule 14): 201 with the generated password, shown only once.
+     * DONOR is refused by the service; non-admin tokens never get here (SecurityConfig, 403).
      */
     @PostMapping
     public ResponseEntity<CreatedAccountResponse> create(
@@ -119,12 +90,8 @@ public class AdminUserController {
     }
 
     /**
-     * Changes another account's phone and facility — Business Rule 17.
-     *
-     * A separate sub-resource rather than more fields on PATCH /{userId}: that route
-     * sets status and nothing else, and the Suspend/Activate buttons rely on it
-     * staying exactly that. Role is not changeable here (see EditAccountPayload),
-     * and neither is the caller's own account (see AdminUserService.editAccount).
+     * Changes another account's phone and facility (Business Rule 17); its own route so the status PATCH stays as is.
+     * Role is not changeable here, and neither is the caller's own account.
      */
     @PatchMapping("/{userId}/details")
     public AdminUserResponse editDetails(
@@ -136,12 +103,8 @@ public class AdminUserController {
     }
 
     /**
-     * Activates or suspends one account.
-     *
-     * PATCH rather than PUT: this changes one field (status) and never touches
-     * the rest of the account. A suspension takes effect immediately rather than
-     * at the next login — see JwtAuthenticationFilter, which checks status on
-     * every request, and AuthService, which refuses it again at sign-in.
+     * Activates or suspends one account (status only).
+     * A suspension takes effect immediately: JwtAuthenticationFilter checks status on every request.
      */
     @PatchMapping("/{userId}")
     public AdminUserResponse updateStatus(

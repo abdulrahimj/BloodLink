@@ -1,19 +1,8 @@
 import React, { useState } from "react";
 import { login } from "../api/auth.js";
 
-/* ================================================================
-   BloodLink — Login
-
-   Rebuilt in the shared design system: Inter throughout, navy brand
-   panel carried over from the portal sidebars, red primary action
-   matching the Register button on the public landing page.
-
-   Wired to POST /api/auth/login. The layout, styling and fields are
-   the mockup's, unchanged; only the submit behaviour is real:
-   the inputs became controlled, the wrapper became a <form> so Enter
-   submits, and two on-brand states were added — an error banner and a
-   busy submit button — because a form with no feedback cannot be used.
-   ================================================================ */
+/* BloodLink — Login, in the shared design system, wired to POST /api/auth/login
+   with an error banner and a busy button added to the mockup. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 
@@ -29,9 +18,8 @@ export default function Login({ onSignedIn }) {
   const [submitting, setSubmitting] = useState(false);
 
   /**
-   * Authenticates against the API and hands the session up to the app shell.
-   * The token itself is stored by login() — see api/auth.js — so nothing
-   * credential-shaped stays in this component's state after submit.
+   * Authenticates and hands the session to the app shell; login() stores the token,
+   * so no credential stays in component state.
    */
   async function handleSubmit(event) {
     event.preventDefault();

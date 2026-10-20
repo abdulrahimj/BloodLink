@@ -1,10 +1,8 @@
 package com.bloodlink.web.error;
 
 /**
- * The caller is authenticated and authorised for this URL pattern, but the specific
- * resource does not exist for them — e.g. an ADMIN token hitting /api/donors/me,
- * where no Donor row exists because administrators are not donors.
- * Mapped to HTTP 404 by GlobalExceptionHandler.
+ * Authorised for the URL but the resource doesn't exist for this caller
+ * (e.g. an ADMIN on /api/donors/me); mapped to 404.
  */
 public class NotFoundException extends RuntimeException {
 

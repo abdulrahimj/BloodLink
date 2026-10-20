@@ -7,20 +7,19 @@ import com.bloodlink.domain.enums.AppealAvailability;
 import com.bloodlink.domain.enums.StockStatus;
 
 /**
- * One blood group's stock at one bank — a row of GET /api/inventory/{bloodBankId}.
- *
- * A bank always reports all eight groups, even ones it has never stocked: those
- * come back with unitsAvailable 0, null expiryDate/lastUpdated, and status
- * CRITICAL (0 is below the 15-unit floor), matching what both mockups assume —
- * a fixed eight-row table, never a partial one.
+ * One group's stock at one bank; all eight groups always reported (never-stocked: 0 units, Critical).
+ * The first six fields are a contract (InventoryApiContractIT); unitsAvailable is usable units only.
  */
 public record InventoryItemResponse(
     String bloodType,
+    /** Units in batches not yet expired: what this bank can issue now. */
     int unitsAvailable,
+    /** The earliest expiry date among usable batches with units left; null if none. */
     LocalDate expiryDate,
+    /** The most recent change to any of this group's batches; null if never stocked. */
     Instant lastUpdated,
+    /** Business Rule 3's badge, judged on {@code unitsAvailable}. */
     StockStatus status,
-
     /**
      * Whether this bank may appeal for this group right now, and if not, why
      * (Business Rule 12) — the state of the row's Send Appeal button.
@@ -39,6 +38,5 @@ public record InventoryItemResponse(
      * recovering past the threshold that triggered it. The server owns this
      * decision.
      */
-    AppealAvailability appealAvailability,
-    boolean appealAccepted
+    AppealAvailability appealAvailability
 ) {}

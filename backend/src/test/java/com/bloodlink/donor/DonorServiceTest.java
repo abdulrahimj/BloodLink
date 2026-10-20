@@ -30,9 +30,8 @@ import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Covers the arithmetic CLAUDE.md pins down exactly: eligibility (Business Rule 2),
- * and that Donation.bloodType — not Donor.bloodType — is what history reports
- * (Business Rule 4).
+ * Eligibility arithmetic (Business Rule 2), and history reporting Donation.bloodType,
+ * not Donor.bloodType (Business Rule 4).
  */
 @ExtendWith(MockitoExtension.class)
 class DonorServiceTest {

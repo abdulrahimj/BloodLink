@@ -7,51 +7,8 @@ import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
-/* ================================================================
-   BloodLink — Blood Bank Dashboard (home view)
-
-   Covers the blood bank / lab staff use cases:
-     • Monitor stock levels across all eight blood groups
-     • Review and act on incoming hospital requests
-     • Track donations recorded at this facility
-
-   Stock figures are the Makeni Regional share of the citywide
-   total shown on the Hospital Portal, so the two screens agree.
-
-   Wired to GET /api/inventory/{bloodBankId}, GET
-   /api/blood-banks/{bloodBankId}/dashboard, and — for the requests panel —
-   GET /api/requests plus PATCH /api/requests/{id}. Layout, styling and
-   structure are the mockup's, unchanged; the STOCK/REQUESTS fixtures are
-   replaced with fetched data, and a loading/error pair was added using the
-   same idiom as the Donor Portal (tokens already in this file, nothing new).
-
-   The panel is the blood bank half of Figure 3.5, and its buttons are real:
-   Contribute and Decline on any request that still needs units. Contributing
-   moves units out of this bank's stock immediately, so the whole screen is
-   reloaded afterwards — the inventory table and the "Available Units" card
-   both change with it.
-
-   Since Business Rule 20 the panel is cooperative rather than competitive: a
-   request stays here while any units are outstanding, however many other
-   banks have already given some, and this bank can contribute again. Each row
-   shows how far along the request is ("2 of 4 units received"), because the
-   only number that decides what to do next is how many are still missing.
-
-   Decline goes through a confirmation step first. It is the one action here
-   the operator cannot take back: the request leaves this bank's queue for
-   good (Business Rule 11), and a bank that has declined cannot later
-   contribute to the same request. That consequence is invisible from the
-   button, so it is spelled out before the click is submitted.
-
-   The screen is also live. A WebSocket session (see realtime/useNotifications)
-   feeds the bell in the header, and two of the notification types it carries
-   change what the rest of the page should be showing: a NEW_REQUEST means a
-   row belongs in the requests panel, and a LOW_STOCK_ALERT means a figure in
-   the inventory table has moved. Both trigger the same full reload the action
-   buttons already use, so the panels are refreshed from the API rather than
-   patched from the notification's wording — the alert is what says something
-   changed, never what the new state is.
-   ================================================================ */
+/* BloodLink — Blood Bank Dashboard (home view): stock, incoming requests (Contribute / confirmed Decline,
+   Business Rule 20) and donations. Live notifications trigger a full reload, never a patch. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -73,23 +30,17 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
 
-  // Which request is mid-action, and the last action failure — both keyed to one
-  // row so a refusal ("not enough O- in stock") appears against the request it
-  // belongs to instead of as a page-level error.
+  // Which request is mid-action and the last failure, both shown against that row.
   const [actingOn, setActingOn] = useState(null);
   const [actionError, setActionError] = useState(null);
 
-  // The request awaiting a confirmed Reject, or null when the dialog is closed.
-  // The whole request is held rather than just its id so the dialog can name what
-  // is about to be turned down without looking it back up.
+  // The request awaiting a confirmed Reject (null when closed), held whole so the dialog can name it.
   const [confirmingReject, setConfirmingReject] = useState(null);
   const cancelRejectRef = useRef(null);
 
   /**
-   * Loads the three calls behind this screen together. Extracted from the effect
-   * so an action can reuse it: approving or fulfilling changes the stat cards,
-   * and fulfilling changes the inventory table too, so the honest refresh is the
-   * whole screen rather than patching the one row that was clicked.
+   * Loads the screen's three calls together; reused after an action, since contributing changes the cards
+   * and the stock table.
    */
   const load = useCallback(async () => {
     const [inventory, dashboardData, requestList] = await Promise.all([
@@ -101,13 +52,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }, [bloodBankId]);
 
   /**
-   * Reloads and applies, without touching the page-level loading or error state.
-   *
-   * Used by the live notification handler below, where the reload is something the
-   * screen did on its own rather than something the operator asked for: blanking a
-   * populated dashboard to "Loading…" because a notification arrived, or replacing
-   * it with an error banner because one background refresh failed, would both be
-   * far more disruptive than briefly showing figures a few seconds out of date.
+   * Reloads without touching the page-level loading or error state, for background refreshes
+   * triggered by notifications.
    */
   const refresh = useCallback(async () => {
     try {
@@ -120,17 +66,11 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
     }
   }, [load]);
 
-  // The header bell, plus the live trigger for the refresh above. Notifications
-  // about this bank's own stock and about newly raised hospital requests are the
-  // two that make what is on screen out of date; a request status change is this
-  // bank's own action echoed back, and the panel has already been reloaded by the
-  // click that caused it.
+  // The header bell, plus live refreshes for notifications that make the screen out of date:
+  // this bank's stock and new hospital requests.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
-      // REQUEST_PROGRESS is the Business Rule 20 one: another bank has contributed
-      // to a request this bank is also looking at, so the units outstanding on that
-      // row — and the cap on its own units box — have just changed. Reloading is
-      // what stops two banks each setting out to cover the same shrinking gap.
+      // REQUEST_PROGRESS (Business Rule 20): another bank contributed, so outstanding units and this row's cap changed.
       if (notification.type === "NEW_REQUEST" || notification.type === "LOW_STOCK_ALERT"
           || notification.type === "REQUEST_PROGRESS") {
         refresh();
@@ -157,13 +97,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }, [load]);
 
   /**
-   * While the reject dialog is open: Escape closes it, and focus moves to Cancel.
-   *
-   * Cancel rather than the confirm button deliberately — this is a destructive,
-   * irreversible action, so the keyboard's default landing spot should be the way
-   * out of it, not the way through. Escape is wired at the document because the
-   * dialog is not a native <dialog> element and would otherwise only hear the key
-   * while something inside it happens to hold focus.
+   * While the reject dialog is open, Escape closes it and focus lands on Cancel, the safe default
+   * for an irreversible action.
    */
   useEffect(() => {
     if (!confirmingReject) return;
@@ -177,16 +112,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }, [confirmingReject]);
 
   /**
-   * Contributes units to a request, or declines it (Business Rule 20).
-   *
-   * bloodBankId is passed through for the ADMIN case, where the backend needs to
-   * be told which bank is acting; for BLOOD_BANK_STAFF it is ignored server-side
-   * in favour of their own assigned bank, so sending it is harmless.
-   *
-   * A 409 here is an ordinary outcome, not a bug — another bank completed the
-   * request a moment ago, or the stock moved since the panel was drawn — so the
-   * message is shown against the row and the screen is reloaded to show the real
-   * state.
+   * Contributes to or declines a request (Business Rule 20); bloodBankId matters only for an ADMIN.
+   * A 409 is an ordinary outcome, shown against the row before the screen reloads.
    */
   async function handleAction(requestId, action, units = null) {
     setActingOn(requestId);
@@ -216,9 +143,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   }
 
   /**
-   * Confirmed Reject. The dialog closes first so the panel is visible while the
-   * request goes out — the row's own busy state and any refusal message belong
-   * behind it, not stacked under a dialog the operator has already finished with.
+   * Confirmed Reject: the dialog closes first so the row's busy state and any refusal are visible.
    */
   function handleConfirmReject() {
     const requestId = confirmingReject.id;
@@ -627,25 +552,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
 }
 
 /**
- * One row of "Incoming Hospital Requests", with everything this bank can do about
- * it — Business Rule 20.
- *
- * The row shows progress rather than a yes/no state, because a request can now be
- * part way there: "2 of 4 units received" with the contributing banks named. A bank
- * that has already given some units still sees the request while any remain
- * outstanding, and can give again — which is why the Contribute control stays put
- * after a contribution instead of turning into a "done" state.
- *
- * The units box is capped at whichever is smaller, what the request still needs or
- * what this bank actually holds of that group, and starts at that number: the
- * common case is "give what I can", and the operator lowers it if they want to keep
- * some back. The cap is a courtesy — the server caps against the outstanding figure
- * itself, and refuses more units than the bank holds — but a box that lets someone
- * type 40 when 2 are wanted invites a refusal it could have prevented.
- *
- * Stock is read from the same `stock` rows the table on the left of this screen is
- * drawn from, never a second lookup, so the number the box allows and the number
- * the operator can see are always the same number.
+ * One incoming request row (Business Rule 20): progress ("2 of 4 units received"), a units box capped at
+ * the smaller of outstanding and this bank's stock (read from the same stock rows), Contribute and Decline.
  */
 function IncomingRequest({ request: r, bloodBankId, stock, busy, error, onContribute, onDecline }) {
   const outstanding = r.unitsOutstanding;
@@ -655,10 +563,7 @@ function IncomingRequest({ request: r, bloodBankId, stock, busy, error, onContri
 
   const [units, setUnits] = useState(mostWeCanGive);
 
-  // Both figures move under the operator: another bank contributing shrinks
-  // `outstanding`, and this bank's own contribution shrinks its stock. Whenever the
-  // ceiling changes, the box follows it rather than keeping a number that is no
-  // longer allowed.
+  // When the cap changes (another bank contributed, or stock fell), the units box follows it.
   useEffect(() => { setUnits(mostWeCanGive); }, [mostWeCanGive]);
 
   const ourUnits = r.contributions
@@ -725,44 +630,14 @@ function IncomingRequest({ request: r, bloodBankId, stock, busy, error, onContri
 }
 
 /**
- * Asks before a Decline is submitted — confirmed rather than submitted straight
- * from the button because the operator cannot undo their own decline, and the
- * request vanishing from their queue is a surprising thing to trigger with a
- * stray click (Business Rule 11: a decline is per bank, so what actually
- * happens elsewhere depends on what the other bank does, not on this click
- * alone — not this bank's own staff's decision to make, so the dialog no
- * longer says anything about it).
- *
- * The warning shown is one of two, decided from what this bank can already see
- * about the request and its own stock, not a separate lookup:
- *   • Ordinary case (Routine or Urgent, or an Emergency this bank genuinely
- *     cannot cover) — a plain confirmation with no mention of risk this bank
- *     cannot actually change by acting differently.
- *   • Emergency AND this bank currently holds enough units of the requested
- *     group to fulfil it — a stronger warning naming that specifically, because
- *     here declining is a choice not to help with a request this bank could
- *     have covered, for a patient the EMERGENCY level says cannot wait.
- * "Enough units" reads the same unitsAvailable figure the Inventory screen and
- * dashboard table already show (passed in as `stock`), not a second calculation
- * that could quietly drift from what the operator sees on the rest of the page.
- *
- * Deliberately a styled dialog rather than window.confirm — the browser's own
- * prompt cannot carry the warning with any emphasis, names the page rather than
- * the request, and looks nothing like the rest of the system in a screenshot.
- *
- * Clicking the scrim cancels, matching Escape. The guard on event.target keeps a
- * click that starts inside the dialog and drifts onto the backdrop (selecting the
- * warning text, say) from being read as a dismissal.
+ * Asks before a Decline, which can't be undone: a plain confirmation normally, a stronger warning for an Emergency
+ * this bank could cover. A styled dialog; clicking the scrim or Escape cancels.
  */
 function RejectConfirmation({ request, stock, cancelRef, onCancel, onConfirm }) {
   const units = `${request.unitsRequested} unit${request.unitsRequested > 1 ? "s" : ""}`;
 
-  // The same row the Inventory table and this dashboard's own stock table read
-  // unitsAvailable from — never recomputed, just looked up. Judged against the
-  // units still outstanding rather than the whole request (Business Rule 20):
-  // what this bank is declining is the remainder, which another bank may already
-  // have shrunk, and a bank that can cover what is left is turning down a request
-  // it could finish.
+  // Looks up the same unitsAvailable the stock table shows and judges it against the units still outstanding
+  // (Business Rule 20).
   const matchingStock = stock.find((s) => s.bloodType === request.bloodType);
   const bankCanCoverIt = (matchingStock?.unitsAvailable ?? 0) >= request.unitsOutstanding;
   const isUnhelpedEmergency = request.urgencyLevel === "EMERGENCY" && bankCanCoverIt;

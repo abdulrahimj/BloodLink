@@ -11,14 +11,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import com.bloodlink.web.error.InvalidPhoneNumberException;
 
 /**
- * The format rule every phone number in the system passes through.
- *
- * These tests matter out of proportion to the size of the class: phone is the login
- * credential, so this function decides whether a real person can get into their own
- * account. The cases below are grouped as accept / convert / reject, and each
- * rejection case names the specific mistake it stands for — a number containing a
- * letter is a different failure from a number of the wrong length, and both were
- * previously accepted and stored.
+ * The format rule every phone passes through, which decides whether a person can sign in.
+ * Grouped as accept / convert / reject, each rejection naming the mistake it stands for.
  */
 class PhoneNumberTest {
 
@@ -84,9 +78,7 @@ class PhoneNumberTest {
         "076900005#,      a stray symbol"
     })
     void anythingOtherThanDigitsAndOneLeadingPlusIsRefused(String typed, String why) {
-        // Refused rather than stripped: a character that does not belong in a phone
-        // number is far more likely a typo than a formatting choice, and "helpfully"
-        // deleting it would store a number the person never gave us.
+        // Refused rather than stripped: a stray character is more likely a typo than formatting.
         assertThatThrownBy(() -> PhoneNumber.normalize(typed))
             .describedAs(why)
             .isInstanceOf(InvalidPhoneNumberException.class)
@@ -108,10 +100,7 @@ class PhoneNumberTest {
         "+447700900005,     a valid number, but not a Sierra Leone one"
     })
     void aNumberOfTheWrongLengthIsRefusedEvenThoughEveryCharacterIsValid(String typed, String why) {
-        // The case a per-character check alone would let through: every one of these
-        // is digits and at most one leading plus, and none of them is a number this
-        // system can store. Catching them here is what stops an unreachable account
-        // being created — one that registered successfully and can never log in.
+        // Valid characters but the wrong length or country: refused so no account is created that can never log in.
         assertThatThrownBy(() -> PhoneNumber.normalize(typed))
             .describedAs(why)
             .isInstanceOf(InvalidPhoneNumberException.class);
@@ -138,9 +127,7 @@ class PhoneNumberTest {
 
     @Test
     void theRejectionMessageShowsBothAcceptedFormats() {
-        // It is displayed verbatim under the phone input, so it has to tell someone
-        // who has just been refused what to type instead — not merely that they were
-        // wrong. Both accepted formats are named.
+        // Shown under the phone input, so it must name both accepted formats.
         assertThatThrownBy(() -> PhoneNumber.normalize("12345"))
             .hasMessageContaining("076900005")
             .hasMessageContaining("+232 76 900 005");

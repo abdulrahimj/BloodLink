@@ -32,11 +32,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.ConflictException;
 
 /**
- * Business Rule 19's service logic in isolation: names are normalised before they
- * are compared or stored, a duplicate is refused before anything is written or
- * logged, a lost race on the unique index still reads as a duplicate, and a real
- * creation is logged against the acting administrator. The database's own half
- * (V14's index and constraints) is proven in AdminFacilityCreationIT.
+ * Business Rule 19's service logic: names normalised, duplicates refused before any write, a lost index race
+ * still a duplicate, and creations audit-logged. The database half is AdminFacilityCreationIT.
  */
 @ExtendWith(MockitoExtension.class)
 class AdminFacilityServiceTest {

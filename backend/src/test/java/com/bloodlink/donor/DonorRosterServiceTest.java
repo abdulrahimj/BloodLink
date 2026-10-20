@@ -42,16 +42,8 @@ import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * DonorRosterService in isolation (Business Rule 21): which repository method
- * a sort choice calls, how a typed search turns into the two LIKE patterns the
- * repository query expects, how eligibility and blood-group filters are
- * translated, how a page's donationsHere figures are batched onto the right
- * donor, and the donation-history endpoint's one-404-either-way rule.
- *
- * ActingBankResolver's own logic (staff vs. ADMIN, unassigned staff, a missing
- * bank id) is covered by ActingBankResolverTest; it is mocked here so this
- * class stays focused on what DonorRosterService itself does with the bank it
- * is handed.
+ * DonorRosterService in isolation (Business Rule 21): sort routing, search patterns, filters, donationsHere batching
+ * and the single 404 for history. ActingBankResolver is mocked (tested in ActingBankResolverTest).
  */
 @ExtendWith(MockitoExtension.class)
 class DonorRosterServiceTest {
@@ -94,9 +86,7 @@ class DonorRosterServiceTest {
         return donor;
     }
 
-    /** Stubs only the sort query a given test actually exercises — strict
-     *  stubbing (MockitoExtension's default) fails a test that stubs the
-     *  other one and never calls it. */
+    /** Stubs only the sort query a test uses, since strict stubbing fails on unused stubs. */
     private void stubEmptyRosterByLastDonation() {
         when(donorRepository.findRosterAtBankByLastDonation(
             any(), any(), any(), any(), any(), any(), any(), any(Pageable.class)))
@@ -118,10 +108,7 @@ class DonorRosterServiceTest {
 
         service.listRoster(0, 20, null, null, null, "lastDonation", requestedByAdmin, staffPrincipal);
 
-        // The seam with ActingBankResolver: whatever the caller named is handed
-        // over unchanged, and this service acts on whatever bank comes back —
-        // here BANK_ID, not the id the caller asked for, since the stub above
-        // always resolves to `bank` regardless of the staff member's own token.
+        // Whatever the caller named goes to ActingBankResolver unchanged, and the service acts on the bank it returns.
         verify(actingBankResolver).resolve(eq(requestedByAdmin), eq(staffPrincipal), any());
         verify(donorRepository).findRosterAtBankByLastDonation(
             eq(BANK_ID), any(), any(), any(), any(), any(), any(), any(Pageable.class));
@@ -191,9 +178,7 @@ class DonorRosterServiceTest {
     void aBarePhoneFragmentWithNoLeadingZeroIsMatchedExactlyAsTyped() {
         stubEmptyRosterByLastDonation();
 
-        // Not a complete number on its own — a staff member recalling the
-        // middle of a number they half-remember. PhoneNumber.normalize would
-        // reject this outright; the search must not.
+        // A partial number a staff member half-remembers; normalize would reject it, the search must not.
         service.listRoster(0, 20, "900", null, null, "lastDonation", null, staffPrincipal);
 
         ArgumentCaptor<String> phonePattern = ArgumentCaptor.forClass(String.class);

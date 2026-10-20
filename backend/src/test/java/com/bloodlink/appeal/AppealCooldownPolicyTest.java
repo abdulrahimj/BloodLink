@@ -27,17 +27,8 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.repository.AppealCooldownRepository;
 
 /**
- * Business Rule 12, at the boundaries where it is easy to get wrong.
- *
- * The rule has two independent ways out of a cooldown — stock recovering past the
- * threshold that triggered it, and the timer simply running out — and they behave
- * differently per tier. Every test here pins one of those edges to the exact unit
- * or the exact hour, because an off-by-one either silences a bank that genuinely
- * needs donors or lets it ask the same people twice in an afternoon.
- *
- * The clock is passed in rather than read inside the policy, so the 5- and
- * 24-hour boundaries are checked exactly instead of approximately, and without a
- * test that takes five hours to run.
+ * Business Rule 12 at its exact boundaries: recovery past the trigger threshold and the timer running out,
+ * per tier. The clock is passed in so the 5h and 24h edges are tested exactly.
  */
 @ExtendWith(MockitoExtension.class)
 class AppealCooldownPolicyTest {
@@ -81,11 +72,7 @@ class AppealCooldownPolicyTest {
     // ---------- rule 1: no shortage, nothing to send ----------
 
     /**
-     * The case that makes the appeal thresholds visibly different from the Business
-     * Rule 3 badge thresholds. A group holding 30-39 units is still labelled "Low"
-     * in the table — Rule 3's Low band runs to 40 — but it cannot be appealed for,
-     * because an appeal needs a real shortage and 30 is where that line sits. No
-     * cooldown is involved: this is refused on stock alone.
+     * 30–39 units shows a "Low" badge but can never be appealed for: refused on stock alone, no cooldown involved.
      */
     @Test
     void unitsFromThirtyToThirtyNineNeverAllowASendEvenWithNoCooldownAtAll() {
@@ -98,9 +85,7 @@ class AppealCooldownPolicyTest {
 
     @Test
     void noShortageBeatsAnActiveCooldownRatherThanBeingMaskedByIt() {
-        // Rule 1 is checked first, so a group that has recovered past 30 reports why
-        // it is unavailable honestly, rather than reporting a cooldown that is
-        // itself no longer in force.
+        // Rule 1 is checked first, so a recovered group reports the real reason, not a cooldown no longer in force.
         assertThat(policy.evaluate(30, cooldown(AppealTier.CRITICAL), after(Duration.ofMinutes(1))))
             .isEqualTo(AppealAvailability.NO_SHORTAGE);
     }
@@ -114,9 +99,7 @@ class AppealCooldownPolicyTest {
     // ---------- recovery clears a cooldown permanently, at the crossing ----------
 
     /**
-     * A CRITICAL cooldown ends the moment stock reaches 15, long before its 5 hours
-     * are up. The shortage it was protecting against is over; the group is merely
-     * Low now, and a Low-tier appeal is a legitimate thing to send.
+     * A CRITICAL cooldown ends when stock reaches 15, well before its 5 hours: the shortage is over.
      */
     @Test
     void aCriticalCooldownIsClearedOnceStockReachesFifteen() {
@@ -185,20 +168,8 @@ class AppealCooldownPolicyTest {
     }
 
     /**
-     * The behaviour this design exists for: a group recovers past its threshold and
-     * then relapses into shortage inside what would have been the original
-     * cooldown's window.
-     *
-     * The relapse is a new shortage and gets its own chance to appeal immediately —
-     * it is not throttled by the tail of a timer belonging to an appeal that has
-     * already done its job. Recovery cleared that cooldown for good, so by the time
-     * stock falls again there is simply nothing left to block on.
-     *
-     * The contrast is the whole point: had recovery been re-derived from current
-     * stock on each check instead of cleared at the crossing, the row would still
-     * be sitting there, and this second shortage would have been met with a
-     * "COOLING_DOWN" from a spent timer — silencing a bank that genuinely needs
-     * donors again.
+     * A group that recovers and then relapses inside the original window may appeal again immediately:
+     * recovery cleared the cooldown, so no spent timer silences the new shortage.
      */
     @Test
     void aGroupThatRecoversThenRelapsesInsideTheWindowCanAppealAgainImmediately() {
@@ -223,10 +194,7 @@ class AppealCooldownPolicyTest {
     }
 
     /**
-     * evaluate() deliberately no longer consults current stock to decide whether a
-     * cooldown has ended. A row that still exists is one whose shortage was never
-     * resolved, so it blocks regardless of what the units happen to read now —
-     * clearing is the crossing's job, not this method's.
+     * evaluate() never ends a cooldown on stock alone: a surviving row blocks, and clearing is the crossing's job.
      */
     @Test
     void evaluateDoesNotEndACooldownItselfOnStockAlone() {
@@ -239,9 +207,7 @@ class AppealCooldownPolicyTest {
     // ---------- rule 2: the timer, when stock never recovers ----------
 
     /**
-     * Five hours exactly is still "no more than 5 hours elapsed", so the cooldown
-     * holds; a second past it, the bank may ask again. Checked either side of the
-     * boundary rather than at one point, because a >= / > slip only shows up here.
+     * Exactly five hours still blocks; a second later it lifts. Checked on both sides to catch a >= / > slip.
      */
     @Test
     void aCriticalCooldownExpiresAfterFiveHoursWhenStockNeverRecovers() {
@@ -311,9 +277,7 @@ class AppealCooldownPolicyTest {
     }
 
     /**
-     * A second appeal overwrites the existing row rather than adding another: the
-     * table holds one current cooldown per (bank, group), and a second row would
-     * leave the button reading whichever the database happened to return first.
+     * A second appeal overwrites the one row per (bank, group) rather than adding another.
      */
     @Test
     void recordingASendReusesTheExistingRowAndRestartsItsClock() {
@@ -333,9 +297,7 @@ class AppealCooldownPolicyTest {
     }
 
     /**
-     * Unreachable through the endpoint, which refuses a no-shortage send long
-     * before this point — but guarded rather than silently writing a row with no
-     * tier, which every later read would then have to defend against.
+     * Unreachable through the endpoint, but guarded rather than storing a row with no tier.
      */
     @Test
     void recordingASendWithNoShortageIsRefusedRatherThanStoringATierlessRow() {

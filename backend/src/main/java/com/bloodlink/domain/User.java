@@ -38,9 +38,8 @@ public class User {
     private String fullName;
 
     /**
-     * Optional for DONOR, required for every other role (Business Rule 18, V13).
-     * Null — never an empty string — when a donor registered without one. Still
-     * unique when present; any number of donors may have none.
+     * Optional for DONOR, required otherwise (Business Rule 18, V13); null, never "", when absent.
+     * Unique when present; any number of donors may have none.
      */
     @Column(name = "email", unique = true)
     private String email;
@@ -59,38 +58,24 @@ public class User {
     private Instant createdAt;
 
     /**
-     * Whether this account may currently sign in and act (V8, added for the Admin
-     * module's activate/suspend use case — not part of the original CLAUDE.md schema
-     * table, the same kind of confirmed addition as {@link #bloodBank} below).
-     *
-     * Defaults to ACTIVE in Java as well as at the database default, so every path
-     * that creates a User — registration today, an admin-managed creation flow
-     * later — starts a new account able to sign in without having to remember to
-     * set this explicitly.
+     * Whether this account may sign in and act (V8, for the Admin module's activate/suspend).
+     * Defaults to ACTIVE in Java and in the database, so every new account can sign in.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private AccountStatus status = AccountStatus.ACTIVE;
 
     /**
-     * Which blood bank this account works at — only ever set for BLOOD_BANK_STAFF
-     * (added in V5, after confirming with the project owner; not part of the
-     * original CLAUDE.md schema table). Null for every other role, and null is also
-     * valid for a not-yet-assigned staff account: there is no admin-managed account
-     * creation flow yet, so InventoryService treats "staff with no bank" as having
-     * access to nothing rather than failing to start up.
+     * The blood bank this account works at, set only for BLOOD_BANK_STAFF (V5); null for every other role.
+     * Staff with no bank have access to nothing.
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "blood_bank_id")
     private BloodBank bloodBank;
 
     /**
-     * Which hospital this account works at — only ever set for HOSPITAL_STAFF
-     * (added in V7, the exact counterpart of {@link #bloodBank} above). Null for
-     * every other role, and null is also valid for a not-yet-assigned staff
-     * account, since there is still no admin-managed account creation flow:
-     * RequestService treats "hospital staff with no hospital" as having access to
-     * nothing rather than failing to start up.
+     * The hospital this account works at, set only for HOSPITAL_STAFF (V7); null for every other role.
+     * Hospital staff with no hospital have access to nothing.
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "hospital_id")

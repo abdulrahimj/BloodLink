@@ -9,13 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.repository.UserRepository;
 
 /**
- * Loads an account for Spring Security's password check at login time.
- *
- * Used only by the login flow — authenticated requests rebuild their principal from
- * the token's claims instead, so this is not on the per-request hot path.
- *
- * The "username" is the phone number, matching the Login screen's single credential
- * field; V2 made users.phone unique so this lookup can only ever match one account.
+ * Loads an account by phone for Spring Security's password check at login only;
+ * authenticated requests rebuild the principal from the token.
  */
 @Service
 public class AuthenticatedUserService implements UserDetailsService {

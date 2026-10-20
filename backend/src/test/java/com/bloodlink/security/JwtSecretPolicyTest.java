@@ -18,14 +18,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import com.bloodlink.security.JwtSecretPolicy.Verdict;
 
 /**
- * The decision behind Business Rule 15, tested exhaustively without starting
- * anything: which secrets and which profiles may run, and which must not.
- *
- * {@code JwtSecretStartupTest} proves the same rule end to end, through a real
- * Spring Boot start. This class exists for the cases too numerous to start an
- * application for each, and for the one check no startup test would ever notice:
- * that the placeholder this code looks for is still, character for character, the
- * one the committed configuration files actually contain.
+ * Business Rule 15's decision tested exhaustively without starting anything (JwtSecretStartupTest does it end to end),
+ * plus that the placeholder still matches the committed configuration files exactly.
  */
 class JwtSecretPolicyTest {
 
@@ -84,9 +78,7 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderIsRefusedUnderTheTestProfile() {
-        // "test" has its own test-only secret in src/test/resources rather than an
-        // exemption — that file is never in the jar, so a server started with this
-        // profile name by mistake would otherwise run on the public placeholder.
+        // "test" has its own test-only secret rather than an exemption, since its file is never in the jar.
         assertThatThrownBy(() -> JwtSecretPolicy.evaluate(PLACEHOLDER, profiles("test")))
             .isInstanceOf(InsecureJwtSecretException.class);
     }
@@ -130,14 +122,111 @@ class JwtSecretPolicyTest {
             .hasMessageContaining("[prod]");
     }
 
+    // ---------- a missing or short secret, refused everywhere ----------
+
+    @ParameterizedTest(name = "an empty secret is refused under profiles \"{0}\"")
+    @ValueSource(strings = { "", "default", "demo", "prod" })
+    void anEmptySecretIsRefusedUnderEveryProfile(String profileList) {
+        // BLOODLINK_JWT_SECRET set to nothing resolves to "", not to the placeholder.
+        // No profile makes "no key at all" acceptable, local ones included.
+        String[] active = profileList.isEmpty() ? profiles() : profileList.split(",");
+
+        for (String empty : new String[] { null, "", "   ", "\n" }) {
+            assertThatThrownBy(() -> JwtSecretPolicy.evaluate(empty, active))
+                .isInstanceOf(InsecureJwtSecretException.class)
+                .hasMessageContaining("empty")
+                .hasMessageContaining("BLOODLINK_JWT_SECRET")
+                .satisfies(e -> assertThat(((InsecureJwtSecretException) e).getReason())
+                    .isEqualTo(InsecureJwtSecretException.Reason.MISSING));
+        }
+    }
+
+    @ParameterizedTest(name = "a 31-byte secret is refused under profiles \"{0}\"")
+    @ValueSource(strings = { "", "default", "demo", "prod", "test" })
+    void aSecretShorterThan32BytesIsRefusedUnderEveryProfile(String profileList) {
+        // One byte under HS256's 256-bit minimum. A short key is weak wherever it
+        // runs, so unlike the placeholder rule, a local profile does not excuse it.
+        String[] active = profileList.isEmpty() ? profiles() : profileList.split(",");
+        String shortSecret = "x".repeat(JwtSecretPolicy.MIN_SECRET_BYTES - 1);
+
+        assertThatThrownBy(() -> JwtSecretPolicy.evaluate(shortSecret, active))
+            .isInstanceOf(InsecureJwtSecretException.class)
+            .hasMessageContaining("31 bytes long")
+            .hasMessageContaining("at least 32 bytes (256 bits)")
+            .hasMessageContaining("BLOODLINK_JWT_SECRET")
+            .satisfies(e -> {
+                InsecureJwtSecretException refusal = (InsecureJwtSecretException) e;
+                assertThat(refusal.getReason()).isEqualTo(InsecureJwtSecretException.Reason.TOO_SHORT);
+                assertThat(refusal.getSecretBytes()).isEqualTo(31);
+            });
+    }
+
+    @Test
+    void exactly32BytesIsEnough() {
+        // The boundary itself: 256 bits is the minimum, so it is accepted.
+        String secret = "y".repeat(JwtSecretPolicy.MIN_SECRET_BYTES);
+
+        assertThat(JwtSecretPolicy.evaluate(secret, profiles("prod"))).isEqualTo(Verdict.ACCEPTED);
+    }
+
+    @Test
+    void theLengthIsMeasuredInBytesNotCharacters() {
+        // Bytes are what become the key. 16 "é" are 16 characters but 32 UTF-8 bytes;
+        // 31 plain letters are 31 characters and 31 bytes.
+        assertThat(JwtSecretPolicy.evaluate("é".repeat(16), profiles("prod"))).isEqualTo(Verdict.ACCEPTED);
+        assertThatThrownBy(() -> JwtSecretPolicy.evaluate("z".repeat(31), profiles("prod")))
+            .isInstanceOf(InsecureJwtSecretException.class);
+    }
+
+    @Test
+    void surroundingWhitespaceDoesNotPadAShortSecretPastTheMinimum() {
+        // 20 real characters plus 20 spaces of padding is still a 20-byte secret.
+        String padded = " ".repeat(10) + "a".repeat(20) + " ".repeat(10);
+
+        assertThatThrownBy(() -> JwtSecretPolicy.evaluate(padded, profiles("prod")))
+            .isInstanceOf(InsecureJwtSecretException.class)
+            .hasMessageContaining("20 bytes long");
+    }
+
+    @Test
+    void aRefusalNeverRepeatsTheSecretItself() {
+        // The message reaches the startup log. It may name the length, never the value.
+        String shortSecret = "SuperSecretShortValue123";
+
+        assertThatThrownBy(() -> JwtSecretPolicy.evaluate(shortSecret, profiles("prod")))
+            .isInstanceOf(InsecureJwtSecretException.class)
+            .satisfies(e -> assertThat(e.getMessage()).doesNotContain(shortSecret));
+    }
+
+    @Test
+    void thePlaceholderItselfIsLongEnoughSoLocalDevelopmentKeepsStarting() {
+        // The length rule runs first everywhere, so a placeholder shortened below the minimum would break local starts.
+        assertThat(PLACEHOLDER.getBytes(StandardCharsets.UTF_8).length)
+            .isGreaterThanOrEqualTo(JwtSecretPolicy.MIN_SECRET_BYTES);
+    }
+
+    @Test
+    void theIntegrationTestSecretIsLongEnough() throws IOException {
+        // The "test" profile supplies its own secret; it must pass the same minimum,
+        // or every integration test would fail to start.
+        String properties;
+        try (InputStream in = getClass().getResourceAsStream("/application-test.properties")) {
+            assertThat(in).as("application-test.properties on the test classpath").isNotNull();
+            properties = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        Matcher line = Pattern.compile("^bloodlink\\.jwt\\.secret=(.*?)\\s*$", Pattern.MULTILINE).matcher(properties);
+
+        assertThat(line.find()).as("bloodlink.jwt.secret line in application-test.properties").isTrue();
+        assertThat(JwtSecretPolicy.evaluate(line.group(1), profiles("test"))).isEqualTo(Verdict.ACCEPTED);
+    }
+
     // ---------- the placeholder the code looks for is the one the files contain ----------
 
     @Test
     void thePlaceholderMatchesTheDefaultInTheCommittedPropertiesTemplate() throws IOException {
-        // If someone edits the default in application.properties.example and not
-        // the constant, this check would silently stop recognising the placeholder
-        // — every start would look like "a real secret" and pass. This test is
-        // what turns that silent failure into a failed build.
+        // If the default in application.properties.example drifts from the constant, the check would silently stop
+        // recognising it; this fails the build instead.
         String template;
         try (InputStream in = getClass().getResourceAsStream("/application.properties.example")) {
             assertThat(in).as("application.properties.example on the classpath").isNotNull();
@@ -154,9 +243,7 @@ class JwtSecretPolicyTest {
 
     @Test
     void thePlaceholderMatchesTheValueInTheCommittedEnvExample() throws IOException {
-        // The same drift, for the file docker-compose users copy. Read from the
-        // repository root: Maven runs tests with the backend module as the working
-        // directory, and .env.example sits one level above it.
+        // The same drift check for .env.example at the repository root (one level above the backend module).
         Path envExample = Path.of("..", ".env.example");
         assertThat(envExample).as(".env.example at the repository root").exists();
 

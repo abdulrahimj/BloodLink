@@ -7,12 +7,8 @@ public enum NotificationType {
     NEW_REQUEST,
     REQUEST_STATUS_CHANGE,
     /**
-     * The units still outstanding on a request changed, because some bank
-     * contributed to it — sent to the other banks that can still act on it
-     * (Business Rule 20, V15). Without it, two banks both looking at "4 units
-     * needed" can each cover the whole amount and one of them issues units nobody
-     * needed. Distinct from REQUEST_STATUS_CHANGE, which goes to the hospital that
-     * raised the request rather than to the banks working on it.
+     * A request's outstanding units changed after a contribution, sent to the other banks still able to act
+     * (Business Rule 20, V15) so two banks don't both cover the same gap. The hospital gets REQUEST_STATUS_CHANGE.
      */
     REQUEST_PROGRESS
 }

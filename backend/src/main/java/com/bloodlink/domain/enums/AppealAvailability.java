@@ -1,18 +1,8 @@
 package com.bloodlink.domain.enums;
 
 /**
- * Whether a blood bank may send a donation appeal for one blood group right now,
- * and if not, why not (Business Rule 12).
- *
- * Derived, never stored — computed from current stock and the bank's cooldown row
- * at read time, the same pattern {@link StockStatus} and {@link EligibilityStatus}
- * already follow.
- *
- * The reason is carried rather than a bare boolean because the Send Appeal button
- * has to say something different in each case: a group with no shortage is simply
- * not appealable, while one in cooldown reads "Appeal Sent." — the second tells
- * the operator their own earlier click worked, which a shared "disabled" state
- * would hide.
+ * Whether a bank may send an appeal for one group now, and if not why (Business Rule 12); derived, never stored.
+ * Carries the reason so the button can say "Appeal Sent." during a cooldown rather than just disabling.
  */
 public enum AppealAvailability {
 

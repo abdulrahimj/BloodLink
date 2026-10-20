@@ -1,5 +1,6 @@
 package com.bloodlink.donation.dto;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 import com.bloodlink.domain.enums.BloodType;
@@ -11,13 +12,8 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 
 /**
- * POST /api/donations — a blood bank recording a donation it has just taken.
- *
- * Carries no donation date. The date is always today, set by the server: this
- * records a donation as it happens, and letting a client name the date would
- * open a gap between Donation.donationDate and the Donor.lastDonationDate the
- * same action writes — two fields that must agree, since Business Rule 2's
- * whole eligibility calculation hangs off the second one.
+ * POST /api/donations: a donation being recorded as it happens; no date field, the server uses today
+ * so Donation.donationDate and Donor.lastDonationDate always agree.
  */
 public record RecordDonationPayload(
 
@@ -25,24 +21,14 @@ public record RecordDonationPayload(
     UUID donorId,
 
     /**
-     * The group as tested today, and the reason this field exists at all.
-     *
-     * Business Rule 4: blood type is re-verified by testing at every donation,
-     * and the donation records what that test said. It is required rather than
-     * optional precisely so it cannot quietly fall back to the donor's stored
-     * profile group — a donor typed wrongly once would otherwise have that error
-     * copied onto every donation they ever make, and into the stock issued from
-     * it. The staff member must state today's result.
+     * The group as tested today (Business Rule 4), required so it never falls back to the donor's profile group.
      */
     @NotBlank(message = "The tested blood group is required")
     @Pattern(regexp = BloodType.LABEL_PATTERN, message = "Enter a valid blood group, e.g. \"O+\"")
     String bloodType,
 
     /**
-     * Bounded at 10 as a typo guard, not a clinical rule: one whole-blood
-     * donation is a single unit, and an apheresis session a small number, so a
-     * three-digit figure here is a slipped keystroke that would otherwise be
-     * added straight into issuable stock.
+     * Capped at 10 as a typo guard, not a clinical rule: a three-digit figure is a slipped keystroke.
      */
     @NotNull(message = "Units donated is required")
     @Min(value = 1, message = "At least 1 unit must be recorded")
@@ -50,10 +36,14 @@ public record RecordDonationPayload(
     Integer unitsDonated,
 
     /**
-     * Which bank took the donation. Ignored for BLOOD_BANK_STAFF — their bank
-     * comes from their own User row, never from the body — and required only for
-     * ADMIN, who belongs to no single bank. The same split ActingBankResolver
-     * already applies to inventory writes and donation appeals.
+     * Ignored: the bank is always the recording staff member's own (resolveForStockChange; Business Rule 8).
+     * Kept so a client that still sends it is not refused.
      */
-    UUID bloodBankId
+    UUID bloodBankId,
+
+    /**
+     * Optional last usable day from the bag label; default donation date + 42 days.
+     * If given, today to 365 days away (StockPolicy), else a 400; checked in DonationService.
+     */
+    LocalDate expiryDate
 ) {}

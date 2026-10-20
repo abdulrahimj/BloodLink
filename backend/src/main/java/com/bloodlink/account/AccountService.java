@@ -22,33 +22,15 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * The signed-in user's own account: reading it, editing their name and email, and
- * changing their password — Business Rule 16. The same for every role, including
- * DONOR and ADMIN; nothing here branches on who is asking.
- *
- * Every method acts on the caller's own id, taken from their token by the
- * controller. None accepts a user id from the request, so there is no way to aim
- * one of these at somebody else's account — an administrator managing other
- * accounts does that through /api/admin/users, which is a different set of powers.
- *
- * <h2>What cannot be changed here, by anyone</h2>
- * Phone (the login credential), role, facility (Business Rules 8 and 9) and status.
- * Those arrive only as administrator decisions. A request that tries to set any of
- * them is refused whole, with a 400 naming the field — never partly applied, and
- * never quietly ignored with a 200 that would tell the client it worked.
+ * The caller's own account for every role (Business Rule 16): read it, edit name and email, change password.
+ * Acts only on the id from the token; phone, role, facility and status are refused whole with a 400 naming the field.
  */
 @Service
 public class AccountService {
 
     /**
-     * Why each field that is recognisably someone else's decision was refused. Checked
-     * in this order, so a request carrying several reports the most important first.
-     * Anything not listed gets a generic refusal instead — the point is that nothing
-     * unrecognised is ever accepted, not that every possible name has its own sentence.
-     *
-     * The phone message says only that it cannot be changed here, not "ask an
-     * administrator": no endpoint lets anyone edit a phone after an account exists,
-     * an administrator included, so pointing at one would be pointing at nothing.
+     * Why each administrator-managed field is refused, checked in this order so the most important is reported first.
+     * Anything unlisted gets a generic refusal; the phone message points at no admin edit because none exists.
      */
     private static final Map<String, String> ADMIN_MANAGED_FIELDS = Map.of(
         "phone", "Your phone number is how you sign in, so it cannot be changed here.",
@@ -75,21 +57,8 @@ public class AccountService {
     }
 
     /**
-     * Changes the caller's full name and email.
-     *
-     * No current-password check, deliberately: neither field is a credential. Name
-     * is what the sidebar shows; email is a contact address and a unique identifier,
-     * but nothing signs in with it (phone is the login), so changing it cannot lock
-     * the owner out or hand the account to someone else. The password is the one
-     * thing that can, and it has its own method below.
-     *
-     * Normalised the way registration normalises them — name trimmed, email trimmed
-     * and lower-cased — so "Isatu@Example.com" and "isatu@example.com" remain one
-     * address and the unique constraint means what it says.
-     *
-     * Email follows the account's role (Business Rule 18): a donor may leave it blank,
-     * which keeps or clears it to none, and a donor's address gets the same strict
-     * format check as registration. Every other role must keep one, as before.
+     * Changes the caller's name and email, normalised as registration does; no current password (not credentials).
+     * Email follows the role (Business Rule 18): a donor may leave it blank, every other role must keep one.
      */
     @Transactional
     public AccountResponse updateMyDetails(UUID userId, UpdateAccountPayload payload) {
@@ -98,9 +67,7 @@ public class AccountService {
         User user = load(userId);
         String email = emailFor(user, payload.email());
 
-        // Only an email that actually changes can collide — re-saving your own address
-        // must not be refused as "already registered" by you — and no email never
-        // collides with anything.
+        // Only an email that actually changes can collide: re-saving your own is fine, and no email never collides.
         if (email != null && !email.equals(user.getEmail()) && userRepository.existsByEmail(email)) {
             throw new ConflictException("An account already exists for this email address.");
         }
@@ -111,21 +78,8 @@ public class AccountService {
     }
 
     /**
-     * Changes the caller's password, after they prove they know the current one.
-     *
-     * The order of checks is deliberate:
-     *   1. Refuse anything that is not a password field, before touching the hash.
-     *   2. Verify the current password against the stored BCrypt hash — with the
-     *      encoder's own matches(), which is the comparison login itself relies on.
-     *      Wrong: 401 (IncorrectCurrentPasswordException), and nothing is written.
-     *   3. Refuse a "new" password identical to the current one. It would succeed
-     *      and change nothing, and someone who believes they have just rotated a
-     *      password they suspect was seen deserves to be told that they have not.
-     *   4. Hash and store. The plaintext is never stored, logged or returned.
-     *
-     * Tokens already issued stay valid until they expire — JWTs are stateless, and
-     * this does not change that. What it does guarantee is that the next sign-in
-     * needs the new password, and that nobody changes it without the old one.
+     * Changes the password after verifying the current one (401 if wrong, nothing written); an unchanged one is refused.
+     * Only the BCrypt hash is stored; tokens already issued stay valid until they expire.
      */
     @Transactional
     public void changeMyPassword(UUID userId, ChangePasswordPayload payload) {
@@ -145,17 +99,8 @@ public class AccountService {
     }
 
     /**
-     * Refuses a request that carried any property besides the ones this endpoint
-     * accepts. The payload records capture those properties rather than letting the
-     * JSON mapper drop them, precisely so this can refuse them.
-     *
-     * Reports one field — the most important present — as a 400 on that field, the
-     * same shape Bean Validation uses, so the form can show it. A value of null
-     * still counts: {@code "phone": null} is an attempt to clear the phone, not an
-     * absence of one.
-     *
-     * @param allowed the fields this endpoint does accept, named in the message when
-     *                something else was sent
+     * Refuses (400 on that field) any property this endpoint does not accept; the payloads capture them so this can.
+     * A null value still counts: "phone": null is an attempt to clear the phone.
      */
     private static void rejectUnrecognised(Map<String, Object> unrecognised, String... allowed) {
         if (unrecognised == null || unrecognised.isEmpty()) {
@@ -168,9 +113,8 @@ public class AccountService {
             }
         }
 
-        // A password sent to the details endpoint (or a name sent to the password
-        // endpoint) is a client aiming at the wrong form, not an attack — say where
-        // it belongs. Sorted so the same request always reports the same field.
+        // A field sent to the wrong endpoint is a client using the wrong form, so say where it belongs.
+        // Sorted so the same request always reports the same field.
         String field = new TreeSet<>(unrecognised.keySet()).first();
         throw new InvalidFieldException(
             field,
@@ -179,13 +123,8 @@ public class AccountService {
     }
 
     /**
-     * The email to store for this account, by its role (Business Rule 18).
-     *
-     * A donor's goes through the same shared function registration uses, so the two
-     * cannot disagree about what a valid address is or what "blank" means. Staff and
-     * administrators must have one — V13's users_email_required_for_staff constraint
-     * would refuse the write anyway, but a 400 on the field says it far better than a
-     * database error would.
+     * The email to store by role (Business Rule 18): a donor's goes through registration's shared function.
+     * Staff and administrators must have one; a 400 on the field explains it better than V13's constraint error.
      */
     private static String emailFor(User user, String raw) {
         if (user.getRole() == Role.DONOR) {

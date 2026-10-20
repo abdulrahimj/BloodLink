@@ -36,24 +36,8 @@ import jakarta.persistence.EntityManager;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Business Rule 18 end to end: a donor may register without an email, an email that
- * is given must look real and be unique, and staff/administrator account creation
- * still requires one exactly as before (Business Rule 14).
- *
- * <h2>Two donors without an email do not collide — and why that needs no code</h2>
- * {@link #twoDonorsWithNoEmailBothRegister} shows it through the real endpoint. The
- * database-level tests below show why: V1's unique constraint on users.email uses
- * PostgreSQL's default, standard-SQL NULL semantics — NULL is never equal to NULL —
- * so any number of rows may have no email while two real addresses still cannot
- * match. Nothing in the application works around this, and these tests would fail
- * if the constraint were ever changed to treat NULLs as equal, or removed.
- *
- * Each database test that expects a refused statement is its own method, because a
- * refused statement aborts the PostgreSQL transaction it ran in.
- *
- * Shares bloodlink_test with the other integration tests and the same guarantee —
- * {@code @Transactional}, everything rolled back. Run with:
- * <pre>{@code .\mvnw.cmd test -Dtest=DonorOptionalEmailIT}</pre>
+ * Business Rule 18 end to end: donors may omit email, given emails must be real and unique, staff still need one.
+ * Two donors without email don't collide thanks to V1's NULLS DISTINCT unique constraint. Rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -180,9 +164,7 @@ class DonorOptionalEmailIT {
 
     @Test
     void theEmailUniqueConstraintTreatsNullsAsDistinct() {
-        // Read back from the database itself: a plain UNIQUE, which in PostgreSQL means
-        // NULLS DISTINCT. If anyone changed it to NULLS NOT DISTINCT, this definition
-        // would say so and the rest of this class would start failing too.
+        // Read back from the database: a plain UNIQUE, i.e. NULLS DISTINCT in PostgreSQL.
         Object definition = entityManager.createNativeQuery(
             "select pg_get_constraintdef(oid) from pg_constraint where conname = 'users_email_key'")
             .getSingleResult();

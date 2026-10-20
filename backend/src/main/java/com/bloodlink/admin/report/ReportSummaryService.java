@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -27,63 +28,57 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.domain.enums.UrgencyLevel;
-import com.bloodlink.inventory.InventoryService;
-import com.bloodlink.repository.BloodInventoryRepository;
+import com.bloodlink.repository.BloodBankRepository;
+import com.bloodlink.repository.BloodInventoryBatchRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.BloodTypeCount;
 import com.bloodlink.repository.DonationRepository;
 import com.bloodlink.repository.DonorRepository;
+import com.bloodlink.stock.StockPolicy;
 
 /**
- * The four sections of the Admin Reports page (Business Rule 23): stock, requests,
- * donations and donors, citywide.
- *
- * Every count and sum comes from an aggregate query (COUNT / SUM / GROUP BY); this
- * class never loads rows to count them. What it does in Java is fill in the gaps an
- * aggregate leaves — a blood group, status, urgency or month with nothing in it comes
- * back absent and is reported as zero, so every table always shows every row — and
- * apply the existing rules to those few aggregate numbers:
- * <ul>
- *   <li>stock status: {@link StockStatus#fromUnits} and its thresholds (Business Rule 3);</li>
- *   <li>expiring soon: InventoryService's 28-day window, its "on or before" test;</li>
- *   <li>eligibility: {@link Donor#eligibilityCutoff} (Business Rule 2).</li>
- * </ul>
- * Read-only throughout, and nothing in any response identifies a donor.
+ * The four citywide sections of the Admin Reports page (Business Rule 23), every figure from an aggregate query.
+ * Java only zero-fills gaps and applies the existing stock, expiry and eligibility rules; nothing identifies a donor.
  */
 @Service
 public class ReportSummaryService {
 
-    private static final int BLOOD_GROUPS = BloodType.values().length;
-
-    private final BloodInventoryRepository inventoryRepository;
+    private final BloodInventoryBatchRepository batchRepository;
+    private final BloodBankRepository bloodBankRepository;
     private final BloodRequestRepository requestRepository;
     private final DonationRepository donationRepository;
     private final DonorRepository donorRepository;
+    private final StockPolicy stockPolicy;
 
     ReportSummaryService(
-        BloodInventoryRepository inventoryRepository,
+        BloodInventoryBatchRepository batchRepository,
+        BloodBankRepository bloodBankRepository,
         BloodRequestRepository requestRepository,
         DonationRepository donationRepository,
-        DonorRepository donorRepository
+        DonorRepository donorRepository,
+        StockPolicy stockPolicy
     ) {
-        this.inventoryRepository = inventoryRepository;
+        this.batchRepository = batchRepository;
+        this.bloodBankRepository = bloodBankRepository;
         this.requestRepository = requestRepository;
         this.donationRepository = donationRepository;
         this.donorRepository = donorRepository;
+        this.stockPolicy = stockPolicy;
     }
 
     /**
-     * Section 1 — stock across every bank, as of {@code today}.
-     *
-     * Each blood group's citywide total is classified with Business Rule 3's own
-     * thresholds; each bank's Critical/Low counts use them too, in the database, and a
-     * group a bank has no stock row for counts as Critical (zero units), exactly as
-     * that bank's inventory page shows it. Units past their expiry date are counted as
-     * stock, as InventoryService.getSummary counts them; how many is reported separately.
+     * Section 1: usable stock across every bank as of today (Business Rules 23, 24); expired units reported separately.
+     * Group totals and each bank's Critical/Low counts use Business Rule 3's thresholds; a group with no stock is Critical.
      */
+    /** The date the stock section is reported as of: today in UTC, from StockPolicy's
+     *  clock, the same "today" every Inventory screen judges expiry by. */
+    public LocalDate stockDate() {
+        return stockPolicy.today();
+    }
+
     @Transactional(readOnly = true)
     public StockReport stock(LocalDate today) {
-        Map<BloodType, Long> unitsByGroup = byBloodType(inventoryRepository.sumUnitsByBloodType());
+        Map<BloodType, Long> unitsByGroup = byBloodType(batchRepository.sumUsableUnitsByBloodType(today));
         List<StockGroupRow> groups = Arrays.stream(BloodType.values())
             .map(type -> {
                 long units = unitsByGroup.getOrDefault(type, 0L);
@@ -92,32 +87,46 @@ public class ReportSummaryService {
             .toList();
         long totalUnits = groups.stream().mapToLong(StockGroupRow::units).sum();
 
-        List<StockBankRow> banks = inventoryRepository
-            .summariseStockByBank(StockStatus.CRITICAL_BELOW, StockStatus.LOW_BELOW).stream()
-            .map(row -> new StockBankRow(
-                row.getBankName(),
-                row.getTotalUnits(),
-                (int) (row.getCriticalRows() + (BLOOD_GROUPS - row.getStockedGroups())),
-                (int) row.getLowRows()))
+        // Usable units per (bank, group), summed in the database; at most 8 per bank.
+        Map<UUID, Map<BloodType, Long>> unitsByBank = batchRepository.sumUsableUnitsByBankAndBloodType(today).stream()
+            .collect(Collectors.groupingBy(BloodInventoryBatchRepository.BankGroupUnits::getBankId,
+                Collectors.toMap(BloodInventoryBatchRepository.BankGroupUnits::getBloodType,
+                    BloodInventoryBatchRepository.BankGroupUnits::getUsableUnits)));
+
+        // Every bank is listed, a bank with no stock at all as eight Critical groups.
+        List<StockBankRow> banks = bloodBankRepository.findAllByOrderByNameAsc().stream()
+            .map(bank -> {
+                Map<BloodType, Long> groupUnits = unitsByBank.getOrDefault(bank.getId(), Map.of());
+                long bankTotal = 0;
+                int critical = 0;
+                int low = 0;
+                for (BloodType type : BloodType.values()) {
+                    long units = groupUnits.getOrDefault(type, 0L);
+                    bankTotal += units;
+                    StockStatus status = StockStatus.fromUnits((int) units);
+                    if (status == StockStatus.CRITICAL) {
+                        critical++;
+                    } else if (status == StockStatus.LOW) {
+                        low++;
+                    }
+                }
+                return new StockBankRow(bank.getName(), bankTotal, critical, low);
+            })
             .toList();
 
         return new StockReport(
             totalUnits,
-            inventoryRepository.sumUnitsExpiringOnOrBefore(today.plusDays(InventoryService.EXPIRING_SOON_WINDOW_DAYS)),
-            inventoryRepository.sumUnitsPastExpiry(today),
-            InventoryService.EXPIRING_SOON_WINDOW_DAYS,
+            batchRepository.sumUsableUnitsExpiringOnOrBefore(today, StockPolicy.expiringSoonCutoff(today)),
+            batchRepository.sumExpiredUnits(today),
+            StockPolicy.EXPIRING_SOON_WINDOW_DAYS,
             groups,
             banks
         );
     }
 
     /**
-     * Section 2 — hospital requests raised within the range.
-     *
-     * "Decided" means FULFILLED or REJECTED: a PENDING or PARTIALLY_FULFILLED request
-     * is still open (Business Rule 20) and says nothing yet about success. The
-     * fulfilment rate is fulfilled / decided, and null when nothing was decided — the
-     * page shows "No data" rather than a misleading 0% or a division by zero.
+     * Section 2: requests raised within the range; fulfilment rate = fulfilled / (fulfilled + rejected),
+     * null (shown as "No data") when nothing has been decided.
      */
     @Transactional(readOnly = true)
     public RequestReport requests(ReportRange range) {
@@ -182,9 +191,8 @@ public class ReportSummaryService {
     }
 
     /**
-     * Section 4 — registered donors (every Donor row) and how many can donate today.
-     * {@code eligible} is counted in the database against {@link Donor#eligibilityCutoff}
-     * for today; everyone else is inside the 90-day recovery period.
+     * Section 4: registered donors and how many are eligible today (Donor.eligibilityCutoff);
+     * everyone else is in the 90-day recovery period.
      */
     @Transactional(readOnly = true)
     public DonorReport donors(LocalDate today) {

@@ -2,9 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  // sockjs-client is a browser build that still references Node's `global`.
-  // Vite does not define it, so without this the SockJS import throws
-  // "global is not defined" the moment a portal mounts and the socket never opens.
+  // sockjs-client references Node's global, which Vite doesn't define; without this the socket never opens.
   define: {
     global: 'globalThis',
   },

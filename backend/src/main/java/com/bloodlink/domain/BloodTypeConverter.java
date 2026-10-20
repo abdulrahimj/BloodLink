@@ -6,9 +6,7 @@ import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
 /**
- * Persists {@link BloodType} as its clinical label ("A+", "O-", ...) so the
- * stored values match CLAUDE.md exactly. Applied automatically to every
- * BloodType attribute.
+ * Persists BloodType as its clinical label ("A+", "O-"), applied automatically to every BloodType attribute.
  */
 @Converter(autoApply = true)
 public class BloodTypeConverter implements AttributeConverter<BloodType, String> {

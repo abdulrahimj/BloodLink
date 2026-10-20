@@ -23,41 +23,15 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.notification.dto.NotificationResponse;
 import com.bloodlink.repository.BloodBankRepository;
-import com.bloodlink.repository.BloodInventoryRepository;
 import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
-import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Everything that produces a Notification, and the read side the bell icon uses.
- *
- * Each notification type in the agreed schema has its trigger method here, and each
- * is called from the service that owns the event rather than the other way round —
- * InventoryService and RequestService know when stock moved or a request received
- * units; this class knows who should hear about it and how to say it. Keeping the
- * "who and how" in one place is what stops the wording and the recipient rules
- * drifting apart across call sites.
- *
- * REQUEST_STATUS_CHANGE has two triggers rather than one ({@link
- * #notifyRequestStatusChange} and {@link #notifyRequestPartlyFilled}), because
- * since Business Rule 20 a request can move without reaching a new resting state —
- * but both speak to the same audience, the hospital that raised it, which is what
- * makes them one type.
- *
- * Every trigger does the same two things in the same order: write a Notification
- * row per recipient (the durable record, readable later over REST), then hand it to
- * {@link NotificationPublisher} for a live push to any of that recipient's open
- * sockets. The push is an accelerator and may reach nobody; the row is the record
- * and always exists. That ordering is why a donor who was offline during an appeal
- * still finds it waiting on their dashboard.
- *
- * Business Rule 1 is enforced structurally rather than by a check: the only method
- * that writes a DONATION_APPEAL takes a BloodBank, and there is no overload, field
- * or code path anywhere in this class that could put a hospital's name in front of
- * a donor.
+ * Everything that produces a Notification, plus the bell's read side; each trigger writes a row per recipient
+ * first, then pushes it live. Appeals take only a BloodBank, so a hospital never appears to a donor (Business Rule 1).
  */
 @Service
 public class NotificationService {
@@ -65,7 +39,7 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final DonorRepository donorRepository;
-    private final BloodInventoryRepository bloodInventoryRepository;
+    private final BatchStockService batchStockService;
     // Both only for notifyRequestProgress: which banks exist, and which of them
     // have declined the request and so are no longer watching it.
     private final BloodBankRepository bloodBankRepository;
@@ -76,7 +50,7 @@ public class NotificationService {
         NotificationRepository notificationRepository,
         UserRepository userRepository,
         DonorRepository donorRepository,
-        BloodInventoryRepository bloodInventoryRepository,
+        BatchStockService batchStockService,
         BloodBankRepository bloodBankRepository,
         BloodRequestDeclineRepository declineRepository,
         NotificationPublisher publisher
@@ -84,15 +58,13 @@ public class NotificationService {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
         this.donorRepository = donorRepository;
-        this.bloodInventoryRepository = bloodInventoryRepository;
+        this.batchStockService = batchStockService;
         this.bloodBankRepository = bloodBankRepository;
         this.declineRepository = declineRepository;
         this.publisher = publisher;
     }
 
-    // ================================================================
-    // Read side — what the bell icon and its dropdown are built from
-    // ================================================================
+    // ==================== Read side: what the bell icon and its dropdown are built from ====================
 
     /** This user's recent notifications, newest first. Never anyone else's: the
      *  caller's id comes from their token, and there is no id parameter to tamper with. */
@@ -119,11 +91,7 @@ public class NotificationService {
     }
 
     /**
-     * Marks one notification read — used when a donor or staff member opens the
-     * item the notification points at.
-     *
-     * The lookup is by (id, recipient) together, so pointing this at another user's
-     * notification id is a 404 rather than a successful write on their row.
+     * Marks one notification read, looked up by (id, recipient) so another user's id is a 404.
      */
     @Transactional
     public NotificationResponse markRead(UUID notificationId, UUID userId) {
@@ -182,25 +150,11 @@ public class NotificationService {
         return notificationRepository.markAllReadForRecipient(userId);
     }
 
-    // ================================================================
-    // LOW_STOCK_ALERT
-    // ================================================================
+    // ======================================== LOW_STOCK_ALERT ========================================
 
     /**
-     * Raises a low-stock alert when a change to one bank's stock has pushed a blood
-     * group down past a Business Rule 3 threshold — into Low (below 40 units) or
-     * Critical (below 15).
-     *
-     * Called with the unit count on either side of the change, not just the new one,
-     * because the alert is about a crossing and not about a level. A group that was
-     * already Critical and drops two units further is still Critical: staff have
-     * been told, and repeating it on every subsequent issue would bury the crossings
-     * that are actually news. {@link StockStatus#isWorseThan} is the whole test — an
-     * increase in units can never satisfy it, so restocking is silent.
-     *
-     * Recipients are the staff of that bank alone. A shortage at Makeni Regional is
-     * not Holy Spirit's alert to act on, and the two banks' queues are kept separate
-     * everywhere else in the system.
+     * Alerts that bank's staff when a stock change crosses a Business Rule 3 threshold (Low < 40, Critical < 15),
+     * judged on usable units; only a crossing to a worse level counts, so restocking and further drops are silent.
      */
     @Transactional
     public void notifyStockCrossing(BloodBank bank, BloodType bloodType, int unitsBefore, int unitsAfter) {
@@ -228,23 +182,11 @@ public class NotificationService {
         );
     }
 
-    // ================================================================
-    // DONATION_APPEAL
-    // ================================================================
+    // ======================================== DONATION_APPEAL ========================================
 
     /**
-     * How far an appeal for one blood group reaches: the donors it goes to, and the
-     * ones held back because they are still inside their recovery window.
-     *
-     * The field names are deliberately tense-neutral, because the same record
-     * answers both "how many would this reach?" before sending and "how many did
-     * it reach?" after. Those two numbers must be the same number, and sharing one
-     * record is part of how that stays true.
-     *
-     * The second figure is not decoration. Without it a bank that appeals and
-     * reaches three people cannot tell whether only three donors have that group —
-     * a recruitment problem — or whether twenty do and most gave recently, which
-     * needs patience instead. Those call for opposite responses.
+     * How far an appeal reaches: eligible donors and those held back in recovery; tense-neutral so the preview
+     * and the send share one record, and the second figure explains a small reach.
      */
     public record AppealReach(int eligible, int inRecovery) {}
 
@@ -252,23 +194,8 @@ public class NotificationService {
     private record AppealAudience(List<User> recipients, int inRecovery) {}
 
     /**
-     * Works out who an appeal for one blood group may go to.
-     *
-     * The single place that answer is computed, so the count a staff member is
-     * shown before confirming and the set of donors actually written to on confirm
-     * cannot disagree. Two separate implementations would be free to drift, and the
-     * direction that matters — a preview that undercounts, or worse, a send that
-     * reaches someone the preview excluded — is exactly the one nobody would notice.
-     *
-     * Eligibility is asked of {@link Donor#isEligibleToDonate()} rather than
-     * recomputed from a date here, so this and the "You are eligible" banner on the
-     * donor's own dashboard remain the same judgement.
-     *
-     * Filtered in memory rather than as a cutoff in the query, for the same reason:
-     * Business Rule 2 is a moving date, and a JPQL clause would be a second copy of
-     * the rule free to drift from the entity's. At this scale — one city's donor
-     * register — reading the group and discarding the ineligible costs a few rows;
-     * a filter that silently diverged would cost a donor's safety.
+     * The single place an appeal's audience is computed, so the preview count and the send cannot disagree.
+     * Eligibility comes from Donor.isEligibleToDonate(), filtered in memory so the rule is never copied into a query.
      */
     private AppealAudience appealAudienceFor(BloodType bloodType) {
         List<Donor> matchingGroup = donorRepository.findByBloodTypeWithUser(bloodType);
@@ -281,12 +208,7 @@ public class NotificationService {
     }
 
     /**
-     * How far an appeal for this group would reach, without sending anything.
-     *
-     * Backs the confirmation step on the Blood Inventory screen: a staff member
-     * about to appeal should know whether they are reaching twelve donors or none
-     * before they commit, not afterwards. Read-only — no Notification row is
-     * written and nothing is pushed.
+     * How far an appeal for this group would reach, read-only: nothing is written or pushed.
      */
     @Transactional(readOnly = true)
     public AppealReach previewAppealReach(BloodType bloodType) {
@@ -295,25 +217,8 @@ public class NotificationService {
     }
 
     /**
-     * Sends a blood bank's appeal to every *eligible* donor recorded as having the
-     * group it needs, and reports how far it reached.
-     *
-     * Business Rule 1 in one method: an appeal originates from a blood bank and the
-     * message names that bank as its source. A hospital short of blood raises a
-     * BloodRequest against the banks; it never reaches a donor directly, and there
-     * is no argument to this method through which it could.
-     *
-     * Business Rule 2 is the second gate, and it is a safety rule rather than a
-     * targeting preference. A donor inside their 90-day recovery window must never
-     * be prompted toward another donation: the appeal is a call to act, and putting
-     * one in front of someone whose body has not recovered invites exactly the harm
-     * the window exists to prevent. Being able to see their group is needed is not
-     * worth that risk, so they are skipped outright — not shown a softened version.
-     *
-     * Eligibility is asked of {@link Donor#isEligibleToDonate()} rather than
-     * recomputed from a date here, so this filter and the "You are eligible" banner
-     * on the donor's own dashboard are the same judgement. If they could disagree,
-     * the failure would be silent and in the dangerous direction.
+     * Sends a bank's appeal to every eligible donor of the group (Business Rule 1: always from a bank)
+     * and reports its reach. Donors in recovery are skipped outright, a safety rule (Business Rule 2).
      */
     @Transactional
     public AppealReach sendDonationAppeal(BloodBank bank, BloodType bloodType, String note) {
@@ -332,23 +237,11 @@ public class NotificationService {
         return new AppealReach(audience.recipients().size(), audience.inRecovery());
     }
 
-    // ================================================================
-    // NEW_REQUEST
-    // ================================================================
+    // ========================================== NEW_REQUEST ==========================================
 
     /**
-     * Tells blood bank staff that a hospital has raised a request they could take.
-     *
-     * "Could take" is read as holding enough units of that group to cover it right
-     * now — those are the banks able to act on it this minute, and alerting a bank
-     * that plainly cannot help is the kind of noise that trains people to ignore the
-     * bell.
-     *
-     * When no bank holds enough, every bank's staff are told instead. That is not a
-     * contradiction of the rule above but the case it exists for: an unfillable
-     * request is the most urgent thing on the board, it already appears in every
-     * bank's queue under Business Rule 6, and a silent one would be a request nobody
-     * had been told about precisely because nobody could easily satisfy it.
+     * Alerts staff of banks holding enough usable units to cover a new request (Business Rule 24);
+     * if none does, every bank is told, since an unfillable request is the most urgent.
      */
     @Transactional
     public void notifyNewRequest(BloodRequest request) {
@@ -360,7 +253,7 @@ public class NotificationService {
             request.getPatientReference() == null ? "" : " For " + request.getPatientReference() + "."
         );
 
-        List<UUID> capableBankIds = bloodInventoryRepository.findBankIdsHoldingAtLeast(
+        List<UUID> capableBankIds = batchStockService.bankIdsWithUsableUnitsAtLeast(
             request.getBloodType(), request.getUnitsRequested()
         );
 
@@ -373,29 +266,11 @@ public class NotificationService {
         dispatch(recipients, message, NotificationType.NEW_REQUEST);
     }
 
-    // ================================================================
-    // REQUEST_STATUS_CHANGE
-    // ================================================================
+    // ===================================== REQUEST_STATUS_CHANGE =====================================
 
     /**
-     * Tells the hospital that raised a request what has happened to it — units
-     * received, the whole amount covered, or the request closed.
-     *
-     * Addressed to the staff of that hospital only. Under Business Rule 9 a hospital
-     * sees nothing of another hospital's requests, and an outcome notification is
-     * part of the request, so the same boundary applies here.
-     *
-     * The partial case is the one Business Rule 20 added, and it says the figures
-     * rather than a state: a ward told only "partially fulfilled" still has to go
-     * and look up how much arrived, and how much is still coming, which is the only
-     * thing it actually needs to know to plan around.
-     *
-     * A rejection says what it costs, because the hospital's next move depends on
-     * it: every blood bank declined it while nothing had been contributed, so
-     * waiting for one to pick it up is not an option and a new request has to be
-     * raised. (A request that has received units never reaches this state — see
-     * Business Rule 20 — so this message can never appear about blood that partly
-     * arrived.)
+     * Tells the raising hospital's staff (only) what happened: units received with figures (Business Rule 20),
+     * fully covered, or rejected by every bank, meaning a new request is needed.
      */
     @Transactional
     public void notifyRequestStatusChange(BloodRequest request) {
@@ -411,9 +286,7 @@ public class NotificationService {
             case PARTIALLY_FULFILLED -> null; // said by notifyRequestPartlyFilled, which knows the figures
             case REJECTED -> ("%s was declined by every blood bank, so it is now closed. "
                 + "Please submit a new request if the blood is still needed.").formatted(subject);
-            // PENDING is the state a request is created in, and the state it stays in
-            // when a decline is not the last one outstanding. Nothing to tell the
-            // hospital either way: the request is exactly as live as it was.
+            // PENDING (created, or a decline that was not the last): nothing to tell the hospital.
             case PENDING -> null;
         };
 
@@ -429,14 +302,8 @@ public class NotificationService {
     }
 
     /**
-     * Tells the hospital that some of its requested units have arrived, and how many
-     * are still to come (Business Rule 20).
-     *
-     * Separate from {@link #notifyRequestStatusChange} because it needs the figures
-     * that only the contribution itself knows, and because it is genuinely different
-     * news: the request has not reached a new resting state, it has moved. A
-     * contribution that completes the request is not announced here — that is a
-     * fulfilment, and the hospital hears it as one.
+     * Tells the hospital some units arrived and how many are still to come (Business Rule 20);
+     * a contribution that completes the request is announced as a fulfilment instead.
      */
     @Transactional
     public void notifyRequestPartlyFilled(
@@ -461,29 +328,11 @@ public class NotificationService {
         );
     }
 
-    // ================================================================
-    // REQUEST_PROGRESS
-    // ================================================================
+    // ======================================== REQUEST_PROGRESS ========================================
 
     /**
-     * Tells the *other* blood banks that the units outstanding on a request have
-     * changed — Business Rule 20.
-     *
-     * This is what stops cooperative fulfilment turning into duplicated fulfilment.
-     * Every bank sees every open request now, so without this two banks can each be
-     * looking at "4 units needed", each set out to cover all four, and the second
-     * one issue units nobody needed — real blood off a real shelf, for a request
-     * that was already covered.
-     *
-     * Who hears it:
-     *   • Not the contributing bank. It performed the act; its own screen already
-     *     shows the result, and telling it what it just did is noise.
-     *   • Not a bank that has declined this request. It has given its final answer
-     *     and the request is not in its queue — an alert about it would be about
-     *     something that bank can no longer act on.
-     *   • Every other bank's staff, including when the contribution completed the
-     *     request. "Nothing more is needed" is precisely the message a bank about to
-     *     issue its own units needs most.
+     * Tells the other banks a request's outstanding units changed (Business Rule 20), so two don't cover the same gap.
+     * Not the contributing bank, not banks that declined; everyone else, including when it was completed.
      */
     @Transactional
     public void notifyRequestProgress(
@@ -514,22 +363,11 @@ public class NotificationService {
         dispatch(recipients, message, NotificationType.REQUEST_PROGRESS);
     }
 
-    // ================================================================
-    // Shared plumbing
-    // ================================================================
+    // ======================================== Shared plumbing ========================================
 
     /**
-     * Writes one Notification row per recipient and queues each for live delivery.
-     *
-     * Recipients are de-duplicated by user id first. Nothing in the callers above
-     * should produce the same person twice, but the new-request path unions the
-     * staff lists of several banks, and a duplicate there would show one hospital's
-     * request twice in the same bell — cheap to prevent, tedious to notice.
-     *
-     * Rows are saved together, then published one by one. The publish is deferred
-     * until this transaction commits (see NotificationPublisher), so a failure after
-     * this point takes the notifications down with the event that caused them rather
-     * than leaving alerts on screens for something that was rolled back.
+     * Writes one Notification row per recipient (de-duplicated by user id) and queues each for live delivery
+     * after commit, so a rollback takes the notifications with it.
      */
     private void dispatch(List<User> recipients, String message, NotificationType type) {
         dispatch(recipients, message, type, null, null);
