@@ -154,6 +154,8 @@ public class SecurityConfig {
 
                 // Every role receives notifications, so this only needs a valid token;
                 // scoping to the recipient happens in the service layer.
+                .requestMatchers(HttpMethod.POST, "/api/notifications/*/accept")
+                    .hasRole(Role.DONOR.name())
                 .requestMatchers("/api/notifications/**").authenticated()
 
                 // --- The caller's own account (Business Rule 16) ---

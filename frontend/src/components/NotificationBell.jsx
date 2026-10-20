@@ -49,6 +49,7 @@ const TYPE_TONE = {
   NEW_REQUEST: 'var(--amber)',
   REQUEST_STATUS_CHANGE: 'var(--navy)',
   DONATION_APPEAL: 'var(--green)',
+  DONATION_APPEAL_ACCEPTED: 'var(--navy)',
 };
 
 /**

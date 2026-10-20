@@ -3,13 +3,17 @@ package com.bloodlink.repository;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.Notification;
+import com.bloodlink.domain.enums.BloodType;
+import jakarta.persistence.LockModeType;
 
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
 
@@ -37,6 +41,30 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
      * that id exists at all.
      */
     Optional<Notification> findByIdAndRecipientId(UUID id, UUID recipientId);
+
+    /** Latest accepted donor appeal per requested group, scoped to the originating bank. */
+    @Query("""
+        select n.bloodType as bloodType, max(n.createdAt) as latestAppealAt
+        from Notification n
+        where n.sourceBloodBank.id = :bloodBankId
+          and n.type = com.bloodlink.domain.enums.NotificationType.DONATION_APPEAL
+          and n.accepted = true
+        group by n.bloodType
+        """)
+    List<AcceptedAppealGroup> findAcceptedAppealGroups(@Param("bloodBankId") UUID bloodBankId);
+
+    interface AcceptedAppealGroup {
+        BloodType getBloodType();
+        Instant getLatestAppealAt();
+    }
+
+    /** Serializes acceptance attempts for this recipient's notification. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select n from Notification n where n.id = :id and n.recipient.id = :recipientId")
+    Optional<Notification> findByIdAndRecipientIdForUpdate(
+        @Param("id") UUID id,
+        @Param("recipientId") UUID recipientId
+    );
 
     /**
      * Clears the badge in one statement — "Mark all read" would otherwise load

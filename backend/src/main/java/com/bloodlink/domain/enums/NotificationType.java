@@ -3,6 +3,7 @@ package com.bloodlink.domain.enums;
 public enum NotificationType {
     LOW_STOCK_ALERT,
     DONATION_APPEAL,
+    DONATION_APPEAL_ACCEPTED,
     NEW_REQUEST,
     REQUEST_STATUS_CHANGE,
     /**

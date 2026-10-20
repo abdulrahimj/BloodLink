@@ -59,6 +59,18 @@ export function useNotifications({ onNotification } = {}) {
     return () => { cancelled = true; };
   }, []);
 
+  // WebSocket delivery is immediate when a session is connected, but the REST
+  // notification row is the durable source of truth. Re-read it periodically so
+  // a staff member with a dropped or unavailable socket still sees a donor's
+  // acceptance without having to reload the portal.
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      reload().catch(() => {});
+    }, 30_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [reload]);
+
   // The live session. Opened once per signed-in screen and closed on unmount —
   // signing out unmounts the portal, which is what disconnects the socket.
   useEffect(() => {
@@ -101,5 +113,14 @@ export function useNotifications({ onNotification } = {}) {
     }
   }, []);
 
-  return { notifications, unreadCount, connected, markAllRead, reload };
+  /** Applies a server-returned notification after an action such as appeal acceptance. */
+  const updateNotification = useCallback((notification) => {
+    const previous = notifications.find((item) => item.id === notification.id);
+    if (previous && !previous.read && notification.read) {
+      setUnreadCount((count) => Math.max(0, count - 1));
+    }
+    setNotifications((current) => current.map((item) => item.id === notification.id ? notification : item));
+  }, [notifications]);
+
+  return { notifications, unreadCount, connected, markAllRead, reload, updateNotification };
 }

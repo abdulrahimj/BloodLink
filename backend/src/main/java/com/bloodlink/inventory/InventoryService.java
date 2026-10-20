@@ -95,6 +95,7 @@ public class InventoryService {
         Map<BloodType, AppealCooldown> cooldownsByType = appealCooldownRepository
             .findByBloodBankId(bloodBankId).stream()
             .collect(Collectors.toMap(AppealCooldown::getBloodType, cooldown -> cooldown));
+        Map<BloodType, Instant> acceptedAppealTimes = notificationService.acceptedAppealTimes(bloodBankId);
 
         // One instant for the whole table, so two rows can never be judged against
         // clock readings milliseconds apart — a cosmetic difference here, but the
@@ -102,7 +103,8 @@ public class InventoryService {
         Instant now = Instant.now();
 
         return List.of(BloodType.values()).stream()
-            .map(type -> toResponse(type, byType.get(type), cooldownsByType.get(type), now))
+            .map(type -> toResponse(type, byType.get(type), cooldownsByType.get(type), now,
+                acceptedAppealTimes.get(type)))
             .toList();
     }
 
@@ -208,7 +210,10 @@ public class InventoryService {
         AppealCooldown cooldown =
             appealCooldownPolicy.clearIfRecovered(bloodBankId, bloodType, saved.getUnitsAvailable());
 
-        return toResponse(bloodType, saved, cooldown, Instant.now());
+        Instant acceptedAt = cooldown == null
+            ? null
+            : notificationService.acceptedAppealTimes(bloodBankId).get(bloodType);
+        return toResponse(bloodType, saved, cooldown, Instant.now(), acceptedAt);
     }
 
     /**
@@ -248,7 +253,7 @@ public class InventoryService {
      * conclusions about whether an appeal is allowed.
      */
     private InventoryItemResponse toResponse(
-        BloodType type, BloodInventory row, AppealCooldown cooldown, Instant now
+        BloodType type, BloodInventory row, AppealCooldown cooldown, Instant now, Instant acceptedAppealAt
     ) {
         int units = row == null ? 0 : row.getUnitsAvailable();
         return new InventoryItemResponse(
@@ -257,7 +262,8 @@ public class InventoryService {
             row == null ? null : row.getExpiryDate(),
             row == null ? null : row.getLastUpdated(),
             StockStatus.fromUnits(units),
-            appealCooldownPolicy.evaluate(units, cooldown, now)
+            appealCooldownPolicy.evaluate(units, cooldown, now),
+            cooldown != null && acceptedAppealAt != null && !acceptedAppealAt.isBefore(cooldown.getLastSentAt())
         );
     }
 

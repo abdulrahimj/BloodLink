@@ -3,6 +3,7 @@ package com.bloodlink.domain;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.NotificationType;
 
 import jakarta.persistence.Column;
@@ -37,6 +38,14 @@ public class Notification {
     @JoinColumn(name = "recipient_user_id", nullable = false)
     private User recipient;
 
+    /** The sending bank and requested group, populated for donor appeal rows. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "source_blood_bank_id")
+    private BloodBank sourceBloodBank;
+
+    @Column(name = "blood_type", length = 3)
+    private BloodType bloodType;
+
     @Column(name = "message", nullable = false, columnDefinition = "text")
     private String message;
 
@@ -46,6 +55,12 @@ public class Notification {
 
     @Column(name = "is_read", nullable = false)
     private boolean read = false;
+
+    @Column(name = "accepted", nullable = false)
+    private boolean accepted = false;
+
+    @Column(name = "acceptance_alert_sent", nullable = false)
+    private boolean acceptanceAlertSent = false;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

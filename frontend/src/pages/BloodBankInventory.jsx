@@ -4,6 +4,7 @@ import { getAppealReach, sendDonationAppeal } from "../api/appeals.js";
 import { lookupDonorByPhone, recordDonation } from "../api/donations.js";
 import { formatDateTime, formatFullDate, formatHeaderDate } from "../lib/dates.js";
 import { describeAppealReach, donorCount } from "../lib/appealReach.js";
+import { appealButtonLabel as getAppealButtonLabel, appealButtonText as getAppealButtonText } from "../lib/appealStatus.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
@@ -98,20 +99,14 @@ function canSendAppeal(item) {
  * happened there to report.
  */
 function appealButtonText(item) {
-  return item.appealAvailability === "COOLING_DOWN" ? "Appeal Sent." : "Send Appeal";
+  return getAppealButtonText(item);
 }
 
 /** The same distinction for screen readers, spelled out — a disabled control
  *  still needs to say why it is disabled, and "Appeal Sent." alone does not
  *  carry that without the visual context of the row it sits in. */
 function appealButtonLabel(item) {
-  if (item.appealAvailability === "COOLING_DOWN") {
-    return `An appeal for ${item.bloodType} was sent recently — not available yet`;
-  }
-  if (item.appealAvailability === "NO_SHORTAGE") {
-    return `${item.bloodType} is not short enough to appeal for`;
-  }
-  return `Send a donation appeal for ${item.bloodType}`;
+  return getAppealButtonLabel(item);
 }
 
 export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNavigate }) {
@@ -200,7 +195,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   // for why a new request deliberately does not.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
-      if (notification.type === "LOW_STOCK_ALERT") refreshQuietly();
+      if (notification.type === "LOW_STOCK_ALERT"
+          || notification.type === "DONATION_APPEAL_ACCEPTED") refreshQuietly();
     },
   });
 

@@ -20,6 +20,7 @@ public record NotificationResponse(
     String message,
     NotificationType type,
     boolean read,
+    boolean accepted,
     Instant createdAt
 ) {
 
@@ -29,6 +30,7 @@ public record NotificationResponse(
             notification.getMessage(),
             notification.getType(),
             notification.isRead(),
+            notification.isAccepted(),
             notification.getCreatedAt()
         );
     }

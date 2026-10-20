@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
+import { acceptDonationAppeal } from "../api/appeals.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
@@ -125,7 +126,9 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
 
   // The bell, and the appeals panel below it, are both fed from here: one live
   // socket per screen rather than one per feature.
-  const { notifications, unreadCount, connected, markAllRead } = useNotifications();
+  const { notifications, unreadCount, connected, markAllRead, updateNotification } = useNotifications();
+  const [acceptingAppealId, setAcceptingAppealId] = useState(null);
+  const [appealFeedback, setAppealFeedback] = useState({});
 
   // A donor's appeals are exactly their DONATION_APPEAL notifications — the schema
   // has no separate appeals table, and deliberately so (an appeal is an event, not
@@ -167,6 +170,31 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
   const firstName = displayName.split(" ")[0] || displayName;
 
   const isEligible = profile?.eligibilityStatus === "ELIGIBLE";
+
+  async function respondToAppeal(appeal) {
+    if (!isEligible || appeal.accepted || acceptingAppealId) return;
+    setAcceptingAppealId(appeal.id);
+    setAppealFeedback((current) => ({ ...current, [appeal.id]: null }));
+    try {
+      const updated = await acceptDonationAppeal(appeal.id);
+      updateNotification(updated);
+      setAppealFeedback((current) => ({
+        ...current,
+        [appeal.id]: updated.accepted ? "Your response was sent successfully." : "Could not accept this appeal.",
+      }));
+    } catch (err) {
+      if (err.status === 409) {
+        try {
+          setProfile(await getMyDonorProfile());
+        } catch {
+          // Keep the existing profile if refreshing also fails.
+        }
+      }
+      setAppealFeedback((current) => ({ ...current, [appeal.id]: err.message || "Could not accept this appeal. Try again." }));
+    } finally {
+      setAcceptingAppealId(null);
+    }
+  }
   const lastDonation = history[0] ?? null;
   // The panel's CSS clips overflow rather than scrolling it, so it is capped here at
   // the same five rows the mockup's fixture happened to have.
@@ -597,7 +625,19 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                             where an appeal arrived while eligible and the donor has
                             since donated. The appeal stays in their list; the
                             invitation to act on it does not. */}
-                        {isEligible && <button type="button" className="dn-help">Respond</button>}
+                        {appeal.accepted ? (
+                          <span className="dn-pill dn-p-planned" aria-label="Appeal accepted">Accepted</span>
+                        ) : isEligible && (
+                          <button type="button" className="dn-help" disabled={acceptingAppealId !== null}
+                            onClick={() => respondToAppeal(appeal)}>
+                            {acceptingAppealId === appeal.id ? "Sending…" : "Respond"}
+                          </button>
+                        )}
+                        {appealFeedback[appeal.id] && (
+                          <div role="status" className="dn-item-sub" style={{ color: appeal.accepted ? "var(--green)" : "var(--red)" }}>
+                            {appealFeedback[appeal.id]}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

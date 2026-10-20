@@ -40,3 +40,10 @@ export function sendDonationAppeal({ bloodType, note, bloodBankId }) {
     body: { bloodType, note: note ?? null, bloodBankId: bloodBankId ?? null },
   });
 }
+
+/** POST /api/notifications/{notificationId}/accept — accepts a donor's appeal. */
+export function acceptDonationAppeal(notificationId) {
+  return apiRequest(`/api/notifications/${encodeURIComponent(notificationId)}/accept`, {
+    method: 'POST',
+  });
+}

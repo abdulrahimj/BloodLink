@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -98,6 +99,7 @@ class InventoryServiceTest {
         when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(
             List.of(row(BloodType.O_POSITIVE, 89, LocalDate.now().plusDays(10)))
         );
+        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -127,6 +129,7 @@ class InventoryServiceTest {
             row(BloodType.O_POSITIVE, 35, LocalDate.now().plusDays(10)),  // Low badge, no appeal
             row(BloodType.A_NEGATIVE, 12, LocalDate.now().plusDays(10))   // Critical, appealable
         ));
+        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -156,6 +159,7 @@ class InventoryServiceTest {
         cooldown.setTriggeredTier(AppealTier.CRITICAL);
         cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(30)));
         when(appealCooldownRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(cooldown));
+        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -163,6 +167,27 @@ class InventoryServiceTest {
         // Only that group is affected — a cooldown is per (bank, group), so the
         // other seven rows are untouched by it.
         assertThat(itemFor(items, "A-").appealAvailability()).isEqualTo(AppealAvailability.AVAILABLE);
+        assertThat(itemFor(items, "O-").appealAccepted()).isFalse();
+    }
+
+    @Test
+    void aCooldownRowShowsWhenADonorAcceptedItsLatestAppeal() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(
+            List.of(row(BloodType.O_NEGATIVE, 8, LocalDate.now().plusDays(10)))
+        );
+        Instant sentAt = Instant.now().minus(Duration.ofHours(2));
+        AppealCooldown cooldown = new AppealCooldown();
+        cooldown.setBloodType(BloodType.O_NEGATIVE);
+        cooldown.setTriggeredTier(AppealTier.CRITICAL);
+        cooldown.setLastSentAt(sentAt);
+        when(appealCooldownRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(cooldown));
+        when(notificationService.acceptedAppealTimes(BANK_ID))
+            .thenReturn(Map.of(BloodType.O_NEGATIVE, sentAt.plusSeconds(5)));
+
+        List<InventoryItemResponse> items = service.listInventory(BANK_ID);
+
+        assertThat(itemFor(items, "O-").appealAccepted()).isTrue();
     }
 
     /** One row out of the fixed eight, by its clinical label. */
@@ -190,7 +215,6 @@ class InventoryServiceTest {
         cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(20)));
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
-
         AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
 
         // 12 + 3 = 15, exactly the CRITICAL tier's recovery threshold.
@@ -220,6 +244,7 @@ class InventoryServiceTest {
         cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(20)));
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
+        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
 
@@ -249,6 +274,7 @@ class InventoryServiceTest {
             row(BloodType.A_NEGATIVE, 26, LocalDate.now().plusDays(5)),    // low, expiring soon
             row(BloodType.B_NEGATIVE, 11, LocalDate.now().plusDays(1))     // critical, expiring soon
         ));
+        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         InventorySummaryResponse summary = service.getSummary(BANK_ID);
 

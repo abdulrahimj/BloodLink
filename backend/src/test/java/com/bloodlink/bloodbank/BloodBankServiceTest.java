@@ -55,7 +55,7 @@ class BloodBankServiceTest {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank));
 
         when(inventoryService.listInventory(BANK_ID)).thenReturn(List.of(
-            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE)
+            new InventoryItemResponse("O+", 89, null, null, StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE, false)
         ));
 
         when(donationRepository.countByBloodBankIdAndDonationDateBetween(any(), any(), any())).thenReturn(12L);

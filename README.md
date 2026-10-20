@@ -64,7 +64,7 @@ cp src/main/resources/application.properties.example src/main/resources/applicat
 
 Open the new `application.properties` and replace `DB_USERNAME` and `DB_PASSWORD` with your own local PostgreSQL credentials. This file is git-ignored, so your credentials stay on your machine.
 
-The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, set the `BLOODLINK_JWT_SECRET` environment variable. The backend deliberately refuses to start on the placeholder under any profile other than the default and `demo`, so a real deployment cannot run on it by accident.
+The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, set the `BLOODLINK_JWT_SECRET` environment variable. The backend deliberately refuses to start on the placeholder under any profile other than te default and `demo`, so a real deployment cannot run on it by accident.
 
 ### 4. Start the backend
 

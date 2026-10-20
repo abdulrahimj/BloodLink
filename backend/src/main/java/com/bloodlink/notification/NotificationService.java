@@ -2,6 +2,7 @@ package com.bloodlink.notification;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,7 @@ import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -107,6 +109,15 @@ public class NotificationService {
         return notificationRepository.countByRecipientIdAndReadFalse(userId);
     }
 
+    /** Latest appeal send times that have at least one donor acceptance, for one bank. */
+    @Transactional(readOnly = true)
+    public Map<BloodType, Instant> acceptedAppealTimes(UUID bloodBankId) {
+        Map<BloodType, Instant> times = new LinkedHashMap<>();
+        notificationRepository.findAcceptedAppealGroups(bloodBankId).forEach(row ->
+            times.put(row.getBloodType(), row.getLatestAppealAt()));
+        return times;
+    }
+
     /**
      * Marks one notification read — used when a donor or staff member opens the
      * item the notification points at.
@@ -120,6 +131,49 @@ public class NotificationService {
             .orElseThrow(() -> new NotFoundException("No notification found for this id."));
         notification.setRead(true);
         return NotificationResponse.from(notificationRepository.save(notification));
+    }
+
+    /** Records a donor's acceptance of an appeal addressed to their account. */
+    @Transactional
+    public NotificationResponse acceptAppeal(UUID notificationId, UUID userId) {
+        Donor donor = donorRepository.findByUserId(userId)
+            .orElseThrow(() -> new NotFoundException("No donor profile found for this account."));
+        if (!donor.isEligibleToDonate()) {
+            throw new ConflictException("You must be eligible to donate to accept this appeal.");
+        }
+        Notification notification = notificationRepository.findByIdAndRecipientIdForUpdate(notificationId, userId)
+            .filter(row -> row.getType() == NotificationType.DONATION_APPEAL)
+            .orElseThrow(() -> new NotFoundException("No donation appeal found for this id."));
+        boolean acceptanceUpdated = false;
+        if (!notification.isAccepted()) {
+            notification.setAccepted(true);
+            notification.setRead(true);
+            acceptanceUpdated = true;
+        }
+
+        // Also repairs acceptances recorded before staff alerts were deployed. The
+        // lock plus this persisted flag keeps retries idempotent, including when
+        // the donor's first acceptance committed without an alert.
+        if (!notification.isAcceptanceAlertSent()) {
+            BloodBank bank = notification.getSourceBloodBank();
+            if (bank != null && notification.getBloodType() != null) {
+                String message = "%s accepted your appeal for %s.".formatted(
+                    donor.getUser().getFullName(), notification.getBloodType().getLabel()
+                );
+                notification.setAcceptanceAlertSent(true);
+                acceptanceUpdated = true;
+                notificationRepository.save(notification);
+                dispatch(
+                    userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bank.getId()),
+                    message,
+                    NotificationType.DONATION_APPEAL_ACCEPTED
+                );
+            }
+        }
+        if (acceptanceUpdated && !notification.isAcceptanceAlertSent()) {
+            notificationRepository.save(notification);
+        }
+        return NotificationResponse.from(notification);
     }
 
     /** "Mark all as read" — clears this user's badge, and returns how many it cleared. */
@@ -273,7 +327,7 @@ public class NotificationService {
         // shown before confirming is what actually happens on confirm.
         AppealAudience audience = appealAudienceFor(bloodType);
 
-        dispatch(audience.recipients(), message, NotificationType.DONATION_APPEAL);
+        dispatch(audience.recipients(), message, NotificationType.DONATION_APPEAL, bank, bloodType);
 
         return new AppealReach(audience.recipients().size(), audience.inRecovery());
     }
@@ -478,6 +532,13 @@ public class NotificationService {
      * than leaving alerts on screens for something that was rolled back.
      */
     private void dispatch(List<User> recipients, String message, NotificationType type) {
+        dispatch(recipients, message, type, null, null);
+    }
+
+    /** Appeal variant: persist its origin and group so acceptance can be routed safely. */
+    private void dispatch(
+        List<User> recipients, String message, NotificationType type, BloodBank sourceBank, BloodType bloodType
+    ) {
         Map<UUID, User> unique = new LinkedHashMap<>();
         recipients.forEach(user -> unique.putIfAbsent(user.getId(), user));
 
@@ -488,6 +549,8 @@ public class NotificationService {
             notification.setMessage(message);
             notification.setType(type);
             notification.setRead(false);
+            notification.setSourceBloodBank(sourceBank);
+            notification.setBloodType(bloodType);
             rows.add(notification);
         }
 

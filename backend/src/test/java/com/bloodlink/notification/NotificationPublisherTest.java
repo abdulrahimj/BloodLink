@@ -53,7 +53,7 @@ class NotificationPublisherTest {
 
     private static NotificationResponse payload() {
         return new NotificationResponse(
-            UUID.randomUUID(), "Test message", NotificationType.LOW_STOCK_ALERT, false, Instant.now()
+            UUID.randomUUID(), "Test message", NotificationType.LOW_STOCK_ALERT, false, false, Instant.now()
         );
     }
 

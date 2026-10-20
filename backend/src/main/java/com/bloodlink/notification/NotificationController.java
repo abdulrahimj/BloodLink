@@ -6,6 +6,7 @@ import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -85,5 +86,14 @@ public class NotificationController {
         @AuthenticationPrincipal AuthenticatedUser principal
     ) {
         return notificationService.markRead(notificationId, principal.getId());
+    }
+
+    /** Accepts a donation appeal belonging to the authenticated donor. */
+    @PostMapping("/{notificationId}/accept")
+    public NotificationResponse acceptAppeal(
+        @PathVariable UUID notificationId,
+        @AuthenticationPrincipal AuthenticatedUser principal
+    ) {
+        return notificationService.acceptAppeal(notificationId, principal.getId());
     }
 }

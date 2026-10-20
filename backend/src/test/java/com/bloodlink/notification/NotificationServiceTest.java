@@ -1,12 +1,14 @@
 package com.bloodlink.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -38,6 +40,8 @@ import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.NotFoundException;
 
 /**
  * Covers the decisions this service makes that a screen cannot show you were wrong
@@ -104,6 +108,111 @@ class NotificationServiceTest {
         Donor donor = donor(user);
         donor.setLastDonationDate(LocalDate.now().minusDays(daysAgo));
         return donor;
+    }
+
+    @Test
+    void donorAcceptsTheirAppealAndRepeatAcceptanceIsIdempotent() {
+        UUID recipientId = UUID.randomUUID();
+        User recipient = user("Aminata Kamara");
+        recipient.setId(recipientId);
+        Donor donor = donor(recipient);
+        BloodBank sourceBank = bank(BANK_ID, "Holy Spirit Blood Bank");
+        User staff = user("Bank Staff");
+        Notification appeal = new Notification();
+        appeal.setId(UUID.randomUUID());
+        appeal.setRecipient(recipient);
+        appeal.setType(NotificationType.DONATION_APPEAL);
+        appeal.setSourceBloodBank(sourceBank);
+        appeal.setBloodType(BloodType.O_NEGATIVE);
+        when(donorRepository.findByUserId(recipientId)).thenReturn(java.util.Optional.of(donor));
+        when(notificationRepository.findByIdAndRecipientIdForUpdate(appeal.getId(), recipientId))
+            .thenReturn(java.util.Optional.of(appeal));
+        when(notificationRepository.save(appeal)).thenReturn(appeal);
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID)).thenReturn(List.of(staff));
+        echoSavedNotifications();
+
+        NotificationResponse first = service.acceptAppeal(appeal.getId(), recipientId);
+        NotificationResponse second = service.acceptAppeal(appeal.getId(), recipientId);
+
+        assertThat(first.accepted()).isTrue();
+        assertThat(first.read()).isTrue();
+        assertThat(second.accepted()).isTrue();
+        verify(notificationRepository, times(1)).save(appeal);
+        List<Notification> staffAlerts = capturedRows();
+        assertThat(staffAlerts).singleElement().satisfies(alert -> {
+            assertThat(alert.getRecipient()).isEqualTo(staff);
+            assertThat(alert.getType()).isEqualTo(NotificationType.DONATION_APPEAL_ACCEPTED);
+            assertThat(alert.getMessage()).contains("Aminata Kamara", "O-");
+        });
+    }
+
+    @Test
+    void repeatedRequestRepairsAnAcceptanceWithoutAStaffAlert() {
+        UUID recipientId = UUID.randomUUID();
+        User recipient = user("Aminata Kamara");
+        recipient.setId(recipientId);
+        Donor donor = donor(recipient);
+        BloodBank sourceBank = bank(BANK_ID, "Holy Spirit Blood Bank");
+        User staff = user("Bank Staff");
+        Notification appeal = new Notification();
+        appeal.setId(UUID.randomUUID());
+        appeal.setRecipient(recipient);
+        appeal.setType(NotificationType.DONATION_APPEAL);
+        appeal.setAccepted(true); // recorded before staff alerts were deployed
+        appeal.setSourceBloodBank(sourceBank);
+        appeal.setBloodType(BloodType.O_NEGATIVE);
+        when(donorRepository.findByUserId(recipientId)).thenReturn(java.util.Optional.of(donor));
+        when(notificationRepository.findByIdAndRecipientIdForUpdate(appeal.getId(), recipientId))
+            .thenReturn(java.util.Optional.of(appeal));
+        when(notificationRepository.save(appeal)).thenReturn(appeal);
+        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID)).thenReturn(List.of(staff));
+        echoSavedNotifications();
+
+        NotificationResponse response = service.acceptAppeal(appeal.getId(), recipientId);
+
+        assertThat(response.accepted()).isTrue();
+        assertThat(appeal.isAcceptanceAlertSent()).isTrue();
+        assertThat(capturedRows()).singleElement().satisfies(alert -> {
+            assertThat(alert.getRecipient()).isEqualTo(staff);
+            assertThat(alert.getType()).isEqualTo(NotificationType.DONATION_APPEAL_ACCEPTED);
+            assertThat(alert.getMessage()).contains("Aminata Kamara", "O-");
+        });
+    }
+
+    @Test
+    void acceptingAnotherUsersAppealReturnsNotFound() {
+        UUID recipientId = UUID.randomUUID();
+        UUID appealId = UUID.randomUUID();
+        when(donorRepository.findByUserId(recipientId)).thenReturn(java.util.Optional.of(donor(user("Donor"))));
+        when(notificationRepository.findByIdAndRecipientIdForUpdate(appealId, recipientId))
+            .thenReturn(java.util.Optional.empty());
+
+        assertThatThrownBy(() -> service.acceptAppeal(appealId, recipientId))
+            .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void acceptingANonAppealNotificationReturnsNotFound() {
+        UUID recipientId = UUID.randomUUID();
+        UUID appealId = UUID.randomUUID();
+        Notification notification = new Notification();
+        notification.setType(NotificationType.LOW_STOCK_ALERT);
+        when(donorRepository.findByUserId(recipientId)).thenReturn(java.util.Optional.of(donor(user("Donor"))));
+        when(notificationRepository.findByIdAndRecipientIdForUpdate(appealId, recipientId))
+            .thenReturn(java.util.Optional.of(notification));
+
+        assertThatThrownBy(() -> service.acceptAppeal(appealId, recipientId))
+            .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void ineligibleDonorCannotAcceptAnAppeal() {
+        UUID recipientId = UUID.randomUUID();
+        when(donorRepository.findByUserId(recipientId))
+            .thenReturn(java.util.Optional.of(donorWhoGave(user("Donor"), 10)));
+
+        assertThatThrownBy(() -> service.acceptAppeal(UUID.randomUUID(), recipientId))
+            .isInstanceOf(ConflictException.class);
     }
 
     private static BloodRequest request(RequestStatus status, BloodBank fulfiller) {
@@ -208,6 +317,8 @@ class NotificationServiceTest {
         assertThat(rows).hasSize(2);
         assertThat(rows).allSatisfy(row -> {
             assertThat(row.getType()).isEqualTo(NotificationType.DONATION_APPEAL);
+            assertThat(row.getSourceBloodBank().getId()).isEqualTo(BANK_ID);
+            assertThat(row.getBloodType()).isEqualTo(BloodType.O_NEGATIVE);
             // Business Rule 1: the source a donor sees is a blood bank, never a hospital.
             assertThat(row.getMessage()).startsWith("Holy Spirit Blood Bank needs O- donors");
             assertThat(row.getMessage()).endsWith("Drive at the lab on Saturday.");

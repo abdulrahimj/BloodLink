@@ -39,5 +39,6 @@ public record InventoryItemResponse(
      * recovering past the threshold that triggered it. The server owns this
      * decision.
      */
-    AppealAvailability appealAvailability
+    AppealAvailability appealAvailability,
+    boolean appealAccepted
 ) {}
