@@ -13,6 +13,7 @@ import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.enums.BloodType;
+import com.bloodlink.domain.enums.NotificationType;
 import jakarta.persistence.LockModeType;
 
 public interface NotificationRepository extends JpaRepository<Notification, UUID> {
@@ -54,6 +55,20 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
     Optional<Notification> findByIdAndRecipientIdForUpdate(
         @Param("id") UUID id,
         @Param("recipientId") UUID recipientId
+    );
+
+    /** Whether a notice of this type for this bank was already written in [from, to): the daily expiry job's
+     *  duplicate guard (Business Rule 26). */
+    @Query("""
+        select case when count(n) > 0 then true else false end from Notification n
+         where n.type = :type and n.sourceBloodBank.id = :bloodBankId
+           and n.createdAt >= :from and n.createdAt < :to
+        """)
+    boolean existsForBankBetween(
+        @Param("type") NotificationType type,
+        @Param("bloodBankId") UUID bloodBankId,
+        @Param("from") Instant from,
+        @Param("to") Instant to
     );
 
     /**

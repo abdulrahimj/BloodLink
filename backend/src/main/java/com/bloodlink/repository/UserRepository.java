@@ -38,6 +38,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      */
     List<User> findByRoleAndBloodBankId(Role role, UUID bloodBankId);
 
+    /** The same, limited to one account status: the daily expiry notices go to ACTIVE staff only (Business Rule 26). */
+    List<User> findByRoleAndBloodBankIdAndStatus(Role role, UUID bloodBankId, AccountStatus status);
+
     List<User> findByRoleAndHospitalId(Role role, UUID hospitalId);
 
     /**

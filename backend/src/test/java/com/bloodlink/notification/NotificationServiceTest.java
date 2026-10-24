@@ -25,6 +25,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.Hospital;
@@ -643,5 +644,47 @@ class NotificationServiceTest {
         service.notifyNewRequest(request(RequestStatus.PENDING, null));
 
         assertThat(capturedRows()).hasSize(1);
+    }
+
+    // ---------- batch expiry notices: wording (Business Rule 26) ----------
+
+    @Test
+    void theSevenDayReminderNamesTheDateOnceAndListsEachBatch() {
+        BloodBank bank = bank(BANK_ID, "Makeni Regional Blood Bank");
+        LocalDate date = LocalDate.of(2026, 10, 31);
+
+        assertThat(NotificationService.expiryReminderMessage(bank, List.of(
+            BloodInventoryBatch.manual(bank, BloodType.O_POSITIVE, 5, date),
+            BloodInventoryBatch.manual(bank, BloodType.A_NEGATIVE, 1, date))))
+            .isEqualTo("2 batches at Makeni Regional Blood Bank will expire on 31 Oct 2026: O+ (5 units), A- (1 unit).");
+        assertThat(NotificationService.expiryReminderMessage(bank, List.of(
+            BloodInventoryBatch.manual(bank, BloodType.B_POSITIVE, 3, date))))
+            .isEqualTo("1 batch at Makeni Regional Blood Bank will expire on 31 Oct 2026: B+ (3 units).");
+    }
+
+    @Test
+    void aCaughtUpReminderWithSeveralDatesGivesEachBatchItsOwnDate() {
+        BloodBank bank = bank(BANK_ID, "Makeni Regional Blood Bank");
+
+        assertThat(NotificationService.expiryReminderMessage(bank, List.of(
+            BloodInventoryBatch.manual(bank, BloodType.O_POSITIVE, 5, LocalDate.of(2026, 10, 29)),
+            BloodInventoryBatch.manual(bank, BloodType.A_NEGATIVE, 2, LocalDate.of(2026, 10, 31)))))
+            .isEqualTo("2 batches at Makeni Regional Blood Bank will expire within 7 days: "
+                + "O+ (5 units, 29 Oct 2026), A- (2 units, 31 Oct 2026).");
+    }
+
+    @Test
+    void theExpiredNoticeAsksForAWriteOffInTheRightNumber() {
+        BloodBank bank = bank(BANK_ID, "Holy Spirit Blood Bank");
+
+        assertThat(NotificationService.expiredMessage(bank, List.of(
+            BloodInventoryBatch.manual(bank, BloodType.O_POSITIVE, 5, LocalDate.of(2026, 10, 21)),
+            BloodInventoryBatch.manual(bank, BloodType.AB_POSITIVE, 1, LocalDate.of(2026, 10, 22)))))
+            .isEqualTo("2 batches at Holy Spirit Blood Bank have expired and still hold units. Please write them off: "
+                + "O+ (5 units, expired 21 Oct 2026), AB+ (1 unit, expired 22 Oct 2026).");
+        assertThat(NotificationService.expiredMessage(bank, List.of(
+            BloodInventoryBatch.manual(bank, BloodType.O_POSITIVE, 1, LocalDate.of(2026, 10, 21)))))
+            .isEqualTo("1 batch at Holy Spirit Blood Bank has expired and still holds units. Please write it off: "
+                + "O+ (1 unit, expired 21 Oct 2026).");
     }
 }

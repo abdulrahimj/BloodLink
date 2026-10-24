@@ -42,6 +42,8 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
 | REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | units arrive against a request, it is fulfilled, or it closes |
 | REQUEST_PROGRESS | BLOOD_BANK_STAFF at every other bank still watching it | a bank contributes, changing the units outstanding (Business Rule 20) |
+| BATCH_EXPIRY_REMINDER | that bank's **active** BLOOD_BANK_STAFF | the daily job finds batches 7 days from expiry (Business Rule 26) |
+| BATCH_EXPIRED | that bank's **active** BLOOD_BANK_STAFF | the daily job finds expired batches still holding units, every day until written off (Business Rule 26) |
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -67,7 +69,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V23 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25).
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V24 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25; V23 the expiry notice types, Business Rule 26).
 
 ### User
 | field | type |
@@ -130,7 +132,7 @@ are added only by an administrator (Business Rule 19). `name` is unique case-ins
 | last_updated | timestamp |
 | donation_id | UUID, FK -> Donation, nullable, unique — set exactly when source is DONATION |
 | source | enum: DONATION, MANUAL (Add New Batch), MIGRATED (converted by V19) |
-| expiry_noticed_at | timestamp, nullable — reserved for a future expiry-alert job; V19 stamps batches already expired at the cutover |
+| expiry_noticed_at | timestamp, nullable — when the seven-day expiry reminder named this batch (Business Rule 26), so it is sent once; V19 also stamped batches already expired at the cutover (they still get the daily expired notice). Set only by a bulk update of this one column, so `last_updated` is untouched |
 
 Table `blood_inventory_batches` (V18, the only record of stock since V19) — **one row per batch, each
 with its own expiry date** (Business Rule 24). Usable stock is never stored: it is the sum of
@@ -146,7 +148,8 @@ check (native SQL, pasteable into psql).
 
 The old one-row-per-(bank, group) `blood_inventory` table was renamed by V19 to
 `blood_inventory_pre_batches` (its constraint and index names too), is read and written by nothing, and
-is dropped by V23 (Stage 6; renumbered from V20 when Business Rule 25 took V20–V22).
+is dropped by V24 (Stage 6; renumbered from V20 when Business Rule 25 took V20–V22, then from V23 when
+Business Rule 26 took V23).
 
 ### ContributionAllocation
 | field | type |
@@ -257,11 +260,11 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26) |
 | is_read | boolean |
 | created_at | timestamp |
 | accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
-| source_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V21; set on DONATION_APPEAL rows only: the bank that sent the appeal |
+| source_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V21; set on DONATION_APPEAL rows (the bank that sent the appeal) and on BATCH_EXPIRY_REMINDER / BATCH_EXPIRED rows (the bank the batches belong to, Business Rule 26) |
 | blood_type | enum (as above), nullable — added in V21; set on DONATION_APPEAL rows only: the group appealed for |
 | acceptance_alert_sent | boolean, default false — added in V22; true once the sending bank's staff have been told of this row's acceptance |
 
@@ -427,8 +430,9 @@ BloodBank 1–N Notification (as appeal source)
       path by which usable stock can rise, so it is the only place an upward crossing can happen. Every
       figure in this rule is **usable** units (Business Rule 24): expired batches count for nothing, so
       a bank holding 35 units of which 10 have expired is short (25) and may appeal. Usable stock also
-      falls silently at midnight UTC when a batch expires; nothing reacts to that event yet (an
-      expiry-alert job is future work), but the button reads the new figure on the next load.
+      falls silently at midnight UTC when a batch expires; no low-stock alert or cooldown change reacts
+      to that (Business Rule 26's daily notices are about batches, not thresholds), but the button reads
+      the new figure on the next load.
       `evaluate` therefore never consults current stock to decide whether a cooldown has ended: a
       row that still exists is one whose shortage was never resolved.
       **A group that recovers and then relapses gets a fresh appeal immediately** — the relapse is a
@@ -1034,7 +1038,7 @@ BloodBank 1–N Notification (as appeal source)
       listed in the migration output (`DB: V19: skipped …`). Batches already expired at the cutover are
       stamped `expiry_noticed_at`. V19 refuses to run (one transaction, nothing changed) on negative units
       or a non-empty batch table, verifies per-bank, per-group totals before finishing, and renames the
-      old table to `blood_inventory_pre_batches` (dropped by V23).
+      old table to `blood_inventory_pre_batches` (dropped by V24).
     - **Batch detail is for the bank's own staff and ADMIN only.** `GET /api/inventory/{bank}/batches`
       (live batches — any units left, expired included — optional `?bloodType=`) and
       `GET /api/inventory/{bank}/batches/{id}` (one batch: state, days to expiry, source, donation, and
@@ -1044,8 +1048,8 @@ BloodBank 1–N Notification (as appeal source)
       **Hospitals never see batch-level detail**: their availability view reads the per-group totals
       only, whose first six JSON fields are unchanged (`InventoryApiContractIT` pins them).
     - **Known limits:** usable stock falls at midnight UTC with no event, so no low-stock alert fires for
-      an expiry (a nightly expiry job, an "expiring in 3 days" warning and a written-off figure in Admin
-      Reports are future work, deliberately not built); stock edited directly in the database raises no
+      an expiry (staff hear about expiring and expired batches from Business Rule 26's daily notices, which
+      judge no threshold; a written-off figure in Admin Reports is future work, deliberately not built); stock edited directly in the database raises no
       alert (as before). **Interim screens until Stage 4:** the Inventory table's own "Expiring Soon"
       column still works out its figure in the browser from the group's `expiryDate` and shows the
       group's whole usable total (the summary card above it is right), and the Admin Reports note
@@ -1087,10 +1091,53 @@ BloodBank 1–N Notification (as appeal source)
     - **Migration renumbering:** this feature was written as V18–V20 on code older than the batch-stock
       work, colliding with V18/V19 (batch stock, already applied to `bloodlink_dev`) and the V20 reserved for
       dropping `blood_inventory_pre_batches`. It was renumbered V20 / V21 / V22 with contents unchanged, and
-      the drop is now **V23** (Stage 6). None of the three touches stock tables. The applied V18/V19 files,
+      the drop became V23, now **V24** (Stage 6) since Business Rule 26 took V23. None of the three touches stock tables. The applied V18/V19 files,
       the table comment V19 stores on `blood_inventory_pre_batches` and `V19CutoverMigrationIT` still say
       "V20": left as they are, since editing an applied migration changes its checksum and Flyway would then
-      refuse to start on `bloodlink_dev`. V23 replaces the stale comment simply by dropping the table.
+      refuse to start on `bloodlink_dev`. V24 replaces the stale comment simply by dropping the table.
+26. **Every day, a blood bank's active staff are told which of its batches expire in 7 days, and which
+    have expired and still hold units.** The project owner's decisions, final. Schema: `V23` (the two
+    notification types only; no table or column).
+    - **Seven-day reminder (BATCH_EXPIRY_REMINDER), informational only:** a usable batch with units left
+      that is exactly 7 days from its expiry date (`BatchStockService.EXPIRY_REMINDER_DAYS`) is listed
+      once — "2 batches at X will expire on 31 Oct 2026: O+ (5 units), A- (1 unit)." It never tells staff
+      to remove anything. **Separate from Business Rule 24's 28-day "expiring soon"**, which is unchanged.
+    - **Expired notice (BATCH_EXPIRED):** from the day **after** the expiry date (expired under Business
+      Rule 24: `expiry_date < today` UTC), a batch still holding units is listed every day until it has
+      none left — "2 batches at X have expired and still hold units. Please write them off: O+ (5 units,
+      expired 21 Oct 2026), …". Nothing is sent on the expiry date itself, a written-off (or issued-out)
+      batch drops out, and a batch with 0 units is never listed by either notice. Batches V19 stamped as
+      already expired at the cutover are included: they still need writing off.
+    - **At most one notice of each type per bank per UTC day, listing all its batches**, sent to that
+      bank's **ACTIVE** BLOOD_BANK_STAFF only (`UserRepository.findByRoleAndBloodBankIdAndStatus`) — no
+      suspended staff, administrators, hospital staff or donors. (Every other staff alert still goes to
+      every staff account of the bank, suspended included, as before.) Each row is a normal Notification —
+      written first, pushed after commit, re-read by the 30-second poll — with `source_blood_bank_id` set to
+      the bank and `created_at` from the injected Clock.
+    - **The job** (`BatchExpiryNotificationJob`, enabled by `@EnableScheduling` in `SchedulingConfig` — the
+      only scheduled task) runs at `bloodlink.expiry-notifications.cron`, default `0 0 6 * * *` read in UTC,
+      and **also once at startup if today's time has already passed**, so a server that was off at 06:00
+      (a laptop) still sends that day's notices. `bloodlink.expiry-notifications.enabled=false` removes it;
+      `application-test.properties` does, since a startup run would write outside any test transaction.
+      The date judged comes from the injected `Clock`, never the system clock. Each bank is its own
+      transaction (`NotificationService.notifyBatchExpiry`), so one bank failing is logged and the others
+      still run.
+    - **No duplicates, no migration for the record.** In one transaction per bank: lock the bank row
+      (`BloodBankRepository.lockById`), then send a type only if no notice of that type exists for the bank
+      with `created_at` inside today (`NotificationRepository.existsForBankBetween`). So a second run the
+      same day — a restart, or two servers — sends nothing. The reminder's once-per-batch record is the
+      existing `expiry_noticed_at` column (V18, unused until now), stamped by a one-column bulk update so it
+      can never overwrite a concurrent stock change nor touch `last_updated`.
+    - **Catch-up after downtime:** a reminder due on a day the job did not run is sent by the next run, as
+      long as the batch was already in stock on its seventh day before expiry (received on or before
+      expiry − 7, UTC) and is still usable with units. A batch entered with fewer than 7 days left never gets
+      one (staff entered that date themselves). Batches caught up with different dates read "will expire
+      within 7 days" and each carries its own date. A bank with no active staff gets nothing and nothing is
+      stamped, so the reminder still reaches staff assigned later. A missed day's expired notice is not
+      repeated — the next day's lists the same batches.
+    - **Frontend:** no change was needed for the notices to appear — the bell lists every type, with a grey
+      dot for types it has no colour for. Not built (reported, pending a decision): a dot colour for the two
+      types, and refreshing the Inventory screen when one arrives.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1104,8 +1151,9 @@ listed so nothing is forgotten when the chapters are next revised.
   "most recent contributor", and update the status enum: PARTIALLY_FULFILLED in, APPROVED out.
 - **Chapters 3, 4 and 5 — request lifecycle narrative and Figure 3.5.** The approve-then-fulfil
   sequence is gone; a request is now filled by one or more contributions (Business Rule 20).
-- **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15), and a sixth,
-  DONATION_APPEAL_ACCEPTED (Business Rule 25, V21).
+- **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15), a sixth,
+  DONATION_APPEAL_ACCEPTED (Business Rule 25, V21), and a seventh and eighth, BATCH_EXPIRY_REMINDER and
+  BATCH_EXPIRED (Business Rule 26, V23), sent by a daily scheduled job — the first scheduled task in the system.
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for appeal acceptance (Business Rule 25, V20–V22).**
   `Notification` gains `accepted`, `source_blood_bank_id` (BloodBank 1–N Notification), `blood_type` and
   `acceptance_alert_sent`; the donor's "respond to donation appeals" use case now has a real flow.
@@ -1124,7 +1172,7 @@ listed so nothing is forgotten when the chapters are next revised.
 
 - **Donor** — view own profile/history/eligibility, accept donation appeals while eligible (Business Rule 25)
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
@@ -1159,7 +1207,7 @@ listed so nothing is forgotten when the chapters are next revised.
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
-    `BatchWriteOffIT`, `AdminStockLockoutIT`),
+    `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

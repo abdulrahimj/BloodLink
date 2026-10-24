@@ -73,7 +73,8 @@ public class BloodInventoryBatch {
     @Column(name = "source", nullable = false, length = 16, updatable = false)
     private BatchSource source;
 
-    /** Reserved for the future expiry-rollover job; nothing sets it yet. */
+    /** When the seven-day expiry reminder named this batch (Business Rule 26); V19 also stamped batches
+     *  already expired at the cutover. Set only by a bulk update, so last_updated is untouched. */
     @Column(name = "expiry_noticed_at")
     private Instant expiryNoticedAt;
 

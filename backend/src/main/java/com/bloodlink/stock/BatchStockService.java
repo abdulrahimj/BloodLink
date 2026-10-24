@@ -2,6 +2,7 @@ package com.bloodlink.stock;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -132,6 +133,38 @@ public class BatchStockService {
     @Transactional(readOnly = true)
     public List<UUID> bankIdsWithUsableUnitsAtLeast(BloodType bloodType, int units) {
         return batchRepository.findBankIdsWithUsableUnitsAtLeast(bloodType, units, stockPolicy.today());
+    }
+
+    // ---------- daily expiry notices (Business Rule 26) ----------
+
+    /** The reminder comes 7 days before expiry; separate from StockPolicy's 28-day "expiring soon". */
+    public static final int EXPIRY_REMINDER_DAYS = 7;
+
+    /**
+     * Batches due their seven-day reminder: usable, holding units, never reminded, and already in stock on their
+     * seventh day before expiry, so a run missed that day catches them up while a batch added later gets none.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<BloodInventoryBatch> batchesDueExpiryReminder(UUID bloodBankId, LocalDate today) {
+        return batchRepository
+            .findUnremindedUsableExpiringBy(bloodBankId, today, today.plusDays(EXPIRY_REMINDER_DAYS)).stream()
+            .filter(batch -> !LocalDate.ofInstant(batch.getReceivedAt(), ZoneOffset.UTC)
+                .isAfter(batch.getExpiryDate().minusDays(EXPIRY_REMINDER_DAYS)))
+            .toList();
+    }
+
+    /** Expired batches still holding units, oldest expiry first: the ones to write off. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<BloodInventoryBatch> expiredBatchesHoldingUnits(UUID bloodBankId, LocalDate today) {
+        return batchRepository.findExpiredHoldingUnits(bloodBankId, today);
+    }
+
+    /** Records that these batches had their seven-day reminder, so it is never sent again. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void markExpiryReminderSent(List<UUID> batchIds, Instant at) {
+        if (!batchIds.isEmpty()) {
+            batchRepository.markExpiryNoticed(batchIds, at);
+        }
     }
 
     // ---------- issuing ----------

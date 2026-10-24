@@ -47,3 +47,11 @@ bloodlink.jwt.expiration-ms=${BLOODLINK_JWT_EXPIRATION_MS:86400000}
 # the two can never drift apart and leave real-time working where REST does not,
 # or the reverse. The defaults are Vite's dev ports; override for a deployment.
 bloodlink.cors.allowed-origins=${BLOODLINK_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://localhost:5175}
+
+# --- Daily batch expiry notices to blood bank staff (Business Rule 26) ---
+# A Spring cron (second minute hour day-of-month month day-of-week), read in UTC:
+# 06:00 every day by default. If the server starts after that time, it also runs
+# once at startup; a second run on the same day sends nothing. false turns the job
+# off entirely (the integration tests do this).
+bloodlink.expiry-notifications.enabled=${BLOODLINK_EXPIRY_NOTIFICATIONS_ENABLED:true}
+bloodlink.expiry-notifications.cron=${BLOODLINK_EXPIRY_NOTIFICATIONS_CRON:0 0 6 * * *}

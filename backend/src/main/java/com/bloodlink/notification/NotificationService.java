@@ -3,20 +3,27 @@ package com.bloodlink.notification;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.domain.BloodBank;
+import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.NotificationType;
 import com.bloodlink.domain.enums.Role;
@@ -37,6 +44,9 @@ import com.bloodlink.web.error.NotFoundException;
  */
 @Service
 public class NotificationService {
+
+    /** Dates in the expiry notices: "31 Oct 2026", the way the portals show dates. */
+    private static final DateTimeFormatter EXPIRY_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
@@ -233,7 +243,7 @@ public class NotificationService {
         // shown before confirming is what actually happens on confirm.
         AppealAudience audience = appealAudienceFor(bloodType);
 
-        dispatch(audience.recipients(), message, NotificationType.DONATION_APPEAL, bank, bloodType);
+        dispatch(audience.recipients(), message, NotificationType.DONATION_APPEAL, bank, bloodType, null);
 
         return new AppealReach(audience.recipients().size(), audience.inRecovery());
     }
@@ -364,6 +374,80 @@ public class NotificationService {
         dispatch(recipients, message, NotificationType.REQUEST_PROGRESS);
     }
 
+    // =============================== BATCH_EXPIRY_REMINDER and BATCH_EXPIRED ===============================
+
+    /** What one bank's daily run listed: batches in the seven-day reminder and in the expired notice (0 = not sent). */
+    public record ExpiryNotices(int remindedBatches, int expiredBatches) {}
+
+    /**
+     * One bank's daily expiry notices to its active staff (Business Rule 26). At most one of each type per UTC day:
+     * the bank row lock plus a check for that day's notice means a second run sends nothing.
+     */
+    @Transactional
+    public ExpiryNotices notifyBatchExpiry(UUID bloodBankId, Instant now) {
+        BloodBank bank = bloodBankRepository.lockById(bloodBankId)
+            .orElseThrow(() -> new NotFoundException("No blood bank found for this id."));
+        List<User> staff = userRepository.findByRoleAndBloodBankIdAndStatus(
+            Role.BLOOD_BANK_STAFF, bloodBankId, AccountStatus.ACTIVE);
+        if (staff.isEmpty()) {
+            // Nothing is stamped either, so a due reminder still reaches staff assigned later.
+            return new ExpiryNotices(0, 0);
+        }
+
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+        Instant dayStart = today.atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant dayEnd = today.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+
+        List<BloodInventoryBatch> expired = notificationRepository.existsForBankBetween(
+                NotificationType.BATCH_EXPIRED, bloodBankId, dayStart, dayEnd)
+            ? List.of()
+            : batchStockService.expiredBatchesHoldingUnits(bloodBankId, today);
+        if (!expired.isEmpty()) {
+            dispatch(staff, expiredMessage(bank, expired), NotificationType.BATCH_EXPIRED, bank, null, now);
+        }
+
+        List<BloodInventoryBatch> due = notificationRepository.existsForBankBetween(
+                NotificationType.BATCH_EXPIRY_REMINDER, bloodBankId, dayStart, dayEnd)
+            ? List.of()
+            : batchStockService.batchesDueExpiryReminder(bloodBankId, today);
+        if (!due.isEmpty()) {
+            dispatch(staff, expiryReminderMessage(bank, due), NotificationType.BATCH_EXPIRY_REMINDER, bank, null, now);
+            batchStockService.markExpiryReminderSent(due.stream().map(BloodInventoryBatch::getId).toList(), now);
+        }
+
+        return new ExpiryNotices(due.size(), expired.size());
+    }
+
+    /** "2 batches at X will expire on 31 Oct 2026: O+ (5 units), A- (1 unit)." Caught-up batches with
+     *  different dates read "will expire within 7 days" and carry their own dates. */
+    static String expiryReminderMessage(BloodBank bank, List<BloodInventoryBatch> batches) {
+        LocalDate firstDate = batches.get(0).getExpiryDate();
+        boolean oneDate = batches.stream().allMatch(batch -> batch.getExpiryDate().equals(firstDate));
+        String list = batches.stream()
+            .map(batch -> oneDate
+                ? "%s (%s)".formatted(batch.getBloodType().getLabel(), units(batch.getUnitsRemaining()))
+                : "%s (%s, %s)".formatted(batch.getBloodType().getLabel(), units(batch.getUnitsRemaining()),
+                    EXPIRY_DATE.format(batch.getExpiryDate())))
+            .collect(Collectors.joining(", "));
+        return "%s at %s will expire %s: %s.".formatted(
+            batches(batches.size()), bank.getName(),
+            oneDate ? "on " + EXPIRY_DATE.format(firstDate)
+                : "within " + BatchStockService.EXPIRY_REMINDER_DAYS + " days",
+            list);
+    }
+
+    /** "2 batches at X have expired and still hold units. Please write them off: O+ (5 units, expired 21 Oct 2026), …" */
+    static String expiredMessage(BloodBank bank, List<BloodInventoryBatch> batches) {
+        boolean one = batches.size() == 1;
+        String list = batches.stream()
+            .map(batch -> "%s (%s, expired %s)".formatted(batch.getBloodType().getLabel(),
+                units(batch.getUnitsRemaining()), EXPIRY_DATE.format(batch.getExpiryDate())))
+            .collect(Collectors.joining(", "));
+        return "%s at %s %s expired and still %s units. Please write %s off: %s.".formatted(
+            batches(batches.size()), bank.getName(),
+            one ? "has" : "have", one ? "holds" : "hold", one ? "it" : "them", list);
+    }
+
     // ======================================== Shared plumbing ========================================
 
     /**
@@ -371,12 +455,13 @@ public class NotificationService {
      * after commit, so a rollback takes the notifications with it.
      */
     private void dispatch(List<User> recipients, String message, NotificationType type) {
-        dispatch(recipients, message, type, null, null);
+        dispatch(recipients, message, type, null, null, null);
     }
 
-    /** Appeal variant: persist its origin and group so acceptance can be routed safely. */
+    /** Variant recording the bank behind it (and an appeal's group); createdAt null means the row's own now(). */
     private void dispatch(
-        List<User> recipients, String message, NotificationType type, BloodBank sourceBank, BloodType bloodType
+        List<User> recipients, String message, NotificationType type, BloodBank sourceBank, BloodType bloodType,
+        Instant createdAt
     ) {
         Map<UUID, User> unique = new LinkedHashMap<>();
         recipients.forEach(user -> unique.putIfAbsent(user.getId(), user));
@@ -390,6 +475,7 @@ public class NotificationService {
             notification.setRead(false);
             notification.setSourceBloodBank(sourceBank);
             notification.setBloodType(bloodType);
+            notification.setCreatedAt(createdAt);
             rows.add(notification);
         }
 
@@ -401,6 +487,11 @@ public class NotificationService {
      *  the singular case in the middle of composing a sentence. */
     private static String units(int count) {
         return count + (count == 1 ? " unit" : " units");
+    }
+
+    /** "1 batch" / "3 batches". */
+    private static String batches(int count) {
+        return count + (count == 1 ? " batch" : " batches");
     }
 
     /** EMERGENCY -> "Emergency", matching how the portals already render enums. */

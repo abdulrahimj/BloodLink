@@ -10,5 +10,9 @@ public enum NotificationType {
      * A request's outstanding units changed after a contribution, sent to the other banks still able to act
      * (Business Rule 20, V15) so two banks don't both cover the same gap. The hospital gets REQUEST_STATUS_CHANGE.
      */
-    REQUEST_PROGRESS
+    REQUEST_PROGRESS,
+    /** Batches of one bank 7 days from expiry, sent once per batch (Business Rule 26, V23). Informational only. */
+    BATCH_EXPIRY_REMINDER,
+    /** Expired batches of one bank still holding units, daily until written off (Business Rule 26, V23). */
+    BATCH_EXPIRED
 }

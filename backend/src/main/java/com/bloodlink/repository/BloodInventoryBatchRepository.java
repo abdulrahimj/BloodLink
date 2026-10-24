@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -190,6 +191,37 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
         @Param("bloodBankId") UUID bloodBankId,
         @Param("bloodType") BloodType bloodType
     );
+
+    // ---------- daily expiry notices (Business Rule 26) ----------
+
+    /** One bank's usable batches with units expiring on or before {@code latest} and never reminded, in expiry order. */
+    @Query("""
+        select b from BloodInventoryBatch b
+         where b.bloodBank.id = :bloodBankId and b.unitsRemaining > 0 and b.expiryNoticedAt is null
+           and b.expiryDate >= :today and b.expiryDate <= :latest
+         order by b.expiryDate, b.bloodType, b.id
+        """)
+    List<BloodInventoryBatch> findUnremindedUsableExpiringBy(
+        @Param("bloodBankId") UUID bloodBankId,
+        @Param("today") LocalDate today,
+        @Param("latest") LocalDate latest
+    );
+
+    /** One bank's expired batches still holding units, oldest expiry first. */
+    @Query("""
+        select b from BloodInventoryBatch b
+         where b.bloodBank.id = :bloodBankId and b.unitsRemaining > 0 and b.expiryDate < :today
+         order by b.expiryDate, b.bloodType, b.id
+        """)
+    List<BloodInventoryBatch> findExpiredHoldingUnits(
+        @Param("bloodBankId") UUID bloodBankId,
+        @Param("today") LocalDate today
+    );
+
+    /** Stamps the seven-day reminder on these batches, touching no other column (no lost update, no last_updated). */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update BloodInventoryBatch b set b.expiryNoticedAt = :at where b.id in :ids")
+    int markExpiryNoticed(@Param("ids") List<UUID> ids, @Param("at") Instant at);
 
     // ---------- integrity checks ----------
 
