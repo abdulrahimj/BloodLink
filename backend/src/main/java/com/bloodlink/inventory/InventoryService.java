@@ -108,13 +108,14 @@ public class InventoryService {
         Map<BloodType, AppealCooldown> cooldownsByType = appealCooldownRepository
             .findByBloodBankId(bloodBankId).stream()
             .collect(Collectors.toMap(AppealCooldown::getBloodType, cooldown -> cooldown));
+        // When each group's latest donor-accepted appeal went out, so a row can say "Donor Responded".
         Map<BloodType, Instant> acceptedAppealTimes = notificationService.acceptedAppealTimes(bloodBankId);
 
         // One instant for the whole table, so every row is judged against the same clock reading.
         Instant now = Instant.now();
 
         return List.of(BloodType.values()).stream()
-            .map(type -> toResponse(type, byType.get(type), cooldownsByType.get(type), now))
+            .map(type -> toResponse(stock.get(type), cooldownsByType.get(type), now, acceptedAppealTimes.get(type)))
             .toList();
     }
 
@@ -223,7 +224,11 @@ public class InventoryService {
 
         // Read back through the same query every screen uses, so the response matches the next GET.
         GroupStock groupStock = batchStockService.stockForBank(bank.getId()).get(bloodType);
-        return toResponse(groupStock, cooldown, Instant.now());
+        // Only a surviving cooldown can be marked accepted, so skip the lookup when there is none.
+        Instant acceptedAt = cooldown == null
+            ? null
+            : notificationService.acceptedAppealTimes(bank.getId()).get(bloodType);
+        return toResponse(groupStock, cooldown, Instant.now(), acceptedAt);
     }
 
     // ---------- batch-level views: bank staff of that bank, and ADMIN ----------
@@ -274,7 +279,13 @@ public class InventoryService {
                 writeOff.getWrittenOffAt()))
             .toList();
 
-        return toResponse(bloodType, saved, cooldown, Instant.now());
+        return new BatchHistoryResponse(
+            BatchResponse.from(batch, stockPolicy.today()),
+            issues.stream().mapToInt(BatchHistoryResponse.IssueEntry::units).sum(),
+            writeOffs.stream().mapToInt(BatchHistoryResponse.WriteOffEntry::units).sum(),
+            issues,
+            writeOffs
+        );
     }
 
     // ---------- helpers ----------
@@ -327,23 +338,23 @@ public class InventoryService {
 
     /**
      * One table row: usable figures, the Business Rule 3 badge, and the Send Appeal state from AppealCooldownPolicy,
-     * so this screen and the send endpoint always agree.
+     * so this screen and the send endpoint always agree. Accepted = a donor accepted an appeal sent in this cooldown.
      */
     private InventoryItemResponse toResponse(
-        BloodType type, BloodInventory row, AppealCooldown cooldown, Instant now
+        GroupStock stock, AppealCooldown cooldown, Instant now, Instant acceptedAppealAt
     ) {
-        int units = row == null ? 0 : row.getUnitsAvailable();
+        int usable = stock.usableUnits();
         return new InventoryItemResponse(
-            type.getLabel(),
-            units,
-            row == null ? null : row.getExpiryDate(),
-            row == null ? null : row.getLastUpdated(),
-            StockStatus.fromUnits(units),
-            appealCooldownPolicy.evaluate(units, cooldown, now)
+            stock.bloodType().getLabel(),
+            usable,
+            stock.earliestUsableExpiry(),
+            stock.lastUpdated(),
+            StockStatus.fromUnits(usable),
+            appealCooldownPolicy.evaluate(usable, cooldown, now),
+            stock.expiringSoonUnits(),
+            stock.expiredUnits(),
+            stock.batchCount(),
+            cooldown != null && acceptedAppealAt != null && !acceptedAppealAt.isBefore(cooldown.getLastSentAt())
         );
-    }
-
-    private LocalDate earlierOf(LocalDate a, LocalDate b) {
-        return a.isBefore(b) ? a : b;
     }
 }

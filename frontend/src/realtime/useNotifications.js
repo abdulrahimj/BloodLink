@@ -42,10 +42,8 @@ export function useNotifications({ onNotification } = {}) {
     return () => { cancelled = true; };
   }, []);
 
-  // WebSocket delivery is immediate when a session is connected, but the REST
-  // notification row is the durable source of truth. Re-read it periodically so
-  // a staff member with a dropped or unavailable socket still sees a donor's
-  // acceptance without having to reload the portal.
+  // The socket is an accelerator; the REST rows are the record. Re-reading every 30s means a dropped
+  // socket still shows a donor's acceptance (or anything else) without reloading the portal.
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       reload().catch(() => {});

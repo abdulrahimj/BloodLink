@@ -21,22 +21,17 @@ public record InventoryItemResponse(
     /** Business Rule 3's badge, judged on {@code unitsAvailable}. */
     StockStatus status,
     /**
-     * Whether this bank may appeal for this group right now, and if not, why
-     * (Business Rule 12) — the state of the row's Send Appeal button.
-     *
-     * Sent with the stock it is derived from rather than fetched separately, so
-     * the button can never be drawn from one moment's cooldown state over another
-     * moment's units. It is also why the button reflects reality rather than the
-     * last page load: every reload of this endpoint re-derives it, including the
-     * automatic reloads after adding a batch, recording a donation, or sending an
-     * appeal.
-     *
-     * Deliberately not accompanied by a "cooling down until" timestamp. The button
-     * says "Appeal Sent.", not a countdown, and a client handed an expiry instant
-     * would be tempted to enable itself once that instant passed — which would be
-     * wrong, because a cooldown can also be cleared well before it by stock
-     * recovering past the threshold that triggered it. The server owns this
-     * decision.
+     * Whether this bank may appeal for this group now, and if not why (Business Rule 12): the Send Appeal state.
+     * Sent with the stock it derives from and no countdown, since recovery can clear a cooldown early.
      */
-    AppealAvailability appealAvailability
+    AppealAvailability appealAvailability,
+    /** Of {@code unitsAvailable}, the units expiring within the 28-day window. */
+    int expiringSoonUnits,
+    /** Units still on the shelf in expired batches: awaiting discard, and NOT part
+     *  of {@code unitsAvailable}. */
+    int expiredUnits,
+    /** Batches of this group with any units left, expired ones included. */
+    int batchCount,
+    /** True when a donor accepted an appeal sent during this group's current cooldown. */
+    boolean appealAccepted
 ) {}

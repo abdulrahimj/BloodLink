@@ -45,7 +45,7 @@
         </dependency>
 
         <!-- Spring Boot 4 modularised auto-configuration: spring-boot-flyway carries
-        the Flyway auto-configuration that ran migrations on startup pre-4.x. -->
+             the Flyway auto-configuration that ran migrations on startup pre-4.x. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-flyway</artifactId>
@@ -60,8 +60,8 @@
         </dependency>
 
         <!-- JJWT: signs and verifies the stateless access tokens issued by /api/auth/login.
-        Split across three artifacts by design — only jjwt-api is compiled against;
-        impl and jackson are runtime-only service providers. -->
+             Split across three artifacts by design — only jjwt-api is compiled against;
+             impl and jackson are runtime-only service providers. -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
@@ -103,9 +103,9 @@
         </dependency>
 
         <!-- Spring Boot 4's modularised auto-configuration again (see the Flyway
-        comment above): MockMvc's test support — @AutoConfigureMockMvc and
-        friends — moved out of spring-boot-starter-test into its own starter,
-        needed only by BloodRequestLifecycleIT. -->
+             comment above): MockMvc's test support — @AutoConfigureMockMvc and
+             friends — moved out of spring-boot-starter-test into its own starter,
+             needed only by BloodRequestLifecycleIT. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>

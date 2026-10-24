@@ -11,8 +11,8 @@ server.port=${SERVER_PORT:8080}
 # Create the database first:  CREATE DATABASE bloodlink_dev;
 # bloodlink_dev is for running the app. Tests use bloodlink_test only, never this database.
 spring.datasource.url=jdbc:postgresql://localhost:5432/bloodlink_dev
-spring.datasource.username=postgres
-spring.datasource.password=Barrie
+spring.datasource.username=DB_USERNAME
+spring.datasource.password=DB_PASSWORD
 spring.datasource.driver-class-name=org.postgresql.Driver
 
 # --- Flyway (owns the schema) ---

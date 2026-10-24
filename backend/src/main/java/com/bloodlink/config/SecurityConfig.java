@@ -126,6 +126,7 @@ public class SecurityConfig {
 
                 // Every role receives notifications, so this only needs a valid token;
                 // scoping to the recipient happens in the service layer.
+                // Accepting an appeal is a donor's answer (Business Rule 25); matched before the general rule below.
                 .requestMatchers(HttpMethod.POST, "/api/notifications/*/accept")
                     .hasRole(Role.DONOR.name())
                 .requestMatchers("/api/notifications/**").authenticated()

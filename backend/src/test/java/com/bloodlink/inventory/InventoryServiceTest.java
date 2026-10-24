@@ -134,9 +134,7 @@ class InventoryServiceTest {
     @Test
     void listInventoryAlwaysReturnsAllEightGroups() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(
-            List.of(row(BloodType.O_POSITIVE, 89, LocalDate.now().plusDays(10)))
-        );
+        groupsAre(usable(BloodType.O_POSITIVE, 89, TODAY.plusDays(10)));
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -159,10 +157,10 @@ class InventoryServiceTest {
     @Test
     void everyRowCarriesItsAppealButtonStateAndTheTwoThresholdSetsDifferOnPurpose() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(
-            row(BloodType.O_POSITIVE, 35, LocalDate.now().plusDays(10)),  // Low badge, no appeal
-            row(BloodType.A_NEGATIVE, 12, LocalDate.now().plusDays(10))   // Critical, appealable
-        ));
+        groupsAre(
+            usable(BloodType.O_POSITIVE, 35, TODAY.plusDays(10)),  // Low badge, no appeal
+            usable(BloodType.A_NEGATIVE, 12, TODAY.plusDays(10))   // Critical, appealable
+        );
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -206,7 +204,6 @@ class InventoryServiceTest {
         cooldown.setTriggeredTier(AppealTier.CRITICAL);
         cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(30)));
         when(appealCooldownRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(cooldown));
-        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
@@ -217,12 +214,11 @@ class InventoryServiceTest {
         assertThat(itemFor(items, "O-").appealAccepted()).isFalse();
     }
 
+    /** Business Rule 25: a donor accepting the appeal behind a running cooldown marks that row. */
     @Test
     void aCooldownRowShowsWhenADonorAcceptedItsLatestAppeal() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(
-            List.of(row(BloodType.O_NEGATIVE, 8, LocalDate.now().plusDays(10)))
-        );
+        groupsAre(usable(BloodType.O_NEGATIVE, 8, TODAY.plusDays(10)));
         Instant sentAt = Instant.now().minus(Duration.ofHours(2));
         AppealCooldown cooldown = new AppealCooldown();
         cooldown.setBloodType(BloodType.O_NEGATIVE);
@@ -235,6 +231,25 @@ class InventoryServiceTest {
         List<InventoryItemResponse> items = service.listInventory(BANK_ID);
 
         assertThat(itemFor(items, "O-").appealAccepted()).isTrue();
+    }
+
+    /** An acceptance of an older appeal, sent before the current cooldown began, does not count for it. */
+    @Test
+    void anAcceptanceOfAnEarlierAppealDoesNotMarkTheCurrentCooldown() {
+        when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
+        groupsAre(usable(BloodType.O_NEGATIVE, 8, TODAY.plusDays(10)));
+        Instant sentAt = Instant.now().minus(Duration.ofHours(2));
+        AppealCooldown cooldown = new AppealCooldown();
+        cooldown.setBloodType(BloodType.O_NEGATIVE);
+        cooldown.setTriggeredTier(AppealTier.CRITICAL);
+        cooldown.setLastSentAt(sentAt);
+        when(appealCooldownRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(cooldown));
+        when(notificationService.acceptedAppealTimes(BANK_ID))
+            .thenReturn(Map.of(BloodType.O_NEGATIVE, sentAt.minus(Duration.ofDays(3))));
+
+        List<InventoryItemResponse> items = service.listInventory(BANK_ID);
+
+        assertThat(itemFor(items, "O-").appealAccepted()).isFalse();
     }
 
     /** One row out of the fixed eight, by its clinical label. */
@@ -270,7 +285,7 @@ class InventoryServiceTest {
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
 
-        AuthenticatedUser admin = new AuthenticatedUser(UUID.randomUUID(), "+232", "hash", Role.ADMIN);
+        AuthenticatedUser staff = ownBankStaff();
 
         // 12 + 3 = 15, exactly the CRITICAL tier's recovery threshold.
         InventoryItemResponse result = service.addBatch(
@@ -298,7 +313,6 @@ class InventoryServiceTest {
         cooldown.setLastSentAt(Instant.now().minus(Duration.ofMinutes(20)));
         when(appealCooldownRepository.findByBloodBankIdAndBloodType(BANK_ID, BloodType.O_NEGATIVE))
             .thenReturn(Optional.of(cooldown));
-        when(notificationService.acceptedAppealTimes(BANK_ID)).thenReturn(Map.of());
 
         AuthenticatedUser staff = ownBankStaff();
 
@@ -323,11 +337,12 @@ class InventoryServiceTest {
     @Test
     void summaryAggregatesTotalsCompositionAndExpiringSoon() {
         when(bloodBankRepository.findById(BANK_ID)).thenReturn(Optional.of(bank(BANK_ID)));
-        when(bloodInventoryRepository.findByBloodBankId(BANK_ID)).thenReturn(List.of(
-            row(BloodType.A_POSITIVE, 110, LocalDate.now().plusDays(60)),  // sufficient, not expiring soon
-            row(BloodType.A_NEGATIVE, 26, LocalDate.now().plusDays(5)),    // low, expiring soon
-            row(BloodType.B_NEGATIVE, 11, LocalDate.now().plusDays(1))     // critical, expiring soon
-        ));
+        groupsAre(
+            // Sufficient, not expiring soon, and 9 more units in an expired batch.
+            new Group(BloodType.A_POSITIVE, 110, 0, 9, 2, TODAY.plusDays(60), Instant.now()),
+            usable(BloodType.A_NEGATIVE, 26, TODAY.plusDays(5)),    // low, expiring soon
+            usable(BloodType.B_NEGATIVE, 11, TODAY.plusDays(1))     // critical, expiring soon
+        );
 
         InventorySummaryResponse summary = service.getSummary(BANK_ID);
 

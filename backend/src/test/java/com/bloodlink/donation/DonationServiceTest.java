@@ -118,8 +118,8 @@ class DonationServiceTest {
         });
         when(inventoryService.receiveDonation(any(), any()))
             .thenAnswer(inv -> new InventoryItemResponse(
-                inv.getArgument(1), resultingUnits, LocalDate.now().plusDays(30),
-                Instant.now(), StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE
+                ((Donation) inv.getArgument(0)).getBloodType().getLabel(), resultingUnits, LocalDate.now().plusDays(30),
+                Instant.now(), StockStatus.SUFFICIENT, AppealAvailability.NO_SHORTAGE, 0, 0, 1, false
             ));
     }
 

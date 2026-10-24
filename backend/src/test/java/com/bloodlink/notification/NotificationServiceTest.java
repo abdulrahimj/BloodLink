@@ -44,17 +44,14 @@ import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.stock.StockPolicy;
+import com.bloodlink.web.error.ConflictException;
+import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Covers the decisions this service makes that a screen cannot show you were wrong
- * until it is too late: whether a stock alert fires at all, who receives it, and the
- * two rules governing appeals — Business Rule 1, that one can only ever name a blood
- * bank as its source, and Business Rule 2, that one must never reach a donor still
- * inside their recovery window.
- *
- * The recovery-window tests deliberately pin both sides of the boundary. "More than
- * 90 days" is the kind of wording an off-by-one hides inside, and here an off-by-one
- * means prompting a donor to give a day too early.
+ * Whether a stock alert fires and who gets it, and the appeal rules: always from a bank (Business Rule 1),
+ * never to a donor in recovery (Business Rule 2), with both sides of the 90-day boundary pinned.
  */
 @ExtendWith(MockitoExtension.class)
 class NotificationServiceTest {

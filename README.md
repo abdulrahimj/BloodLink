@@ -66,7 +66,7 @@ Open the new `application.properties` and replace `DB_USERNAME` and `DB_PASSWORD
 
 The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, which you should, see [Setting a real JWT secret](#setting-a-real-jwt-secret) below. The backend deliberately refuses to start on the placeholder under any profile other than the default and `demo`, and refuses a secret shorter than 32 bytes under every profile, so a real deployment cannot run on a weak secret by accident.
 
-The login-token signing secret has a public placeholder default that is fine on your own machine (the backend prints a warning at startup to remind you). To use your own, set the `BLOODLINK_JWT_SECRET` environment variable. The backend deliberately refuses to start on the placeholder under any profile other than the default and `demo`, so a real deployment cannot run on it by accident.
+Every environment variable the backend reads, with its default, is listed in [`backend/.env.example`](backend/.env.example); the frontend's are in [`frontend/.env.example`](frontend/.env.example). Spring Boot does not read a `.env` file itself: set the variables in your terminal.
 
 ### 4. Start the backend
 

@@ -133,6 +133,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
 
   const isEligible = profile?.eligibilityStatus === "ELIGIBLE";
 
+  // "Respond" accepts the appeal (Business Rule 25); a 409 means the server found the donor ineligible,
+  // so the profile is re-read and the button disappears.
   async function respondToAppeal(appeal) {
     if (!isEligible || appeal.accepted || acceptingAppealId) return;
     setAcceptingAppealId(appeal.id);
@@ -578,12 +580,8 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                           <div className="dn-item-main">{appeal.message}</div>
                           <div className="dn-item-sub">{formatAppealTime(appeal.createdAt)}</div>
                         </div>
-                        {/* The backend no longer sends appeals to a donor inside
-                            their 90-day recovery window (Business Rule 2), so this
-                            guard is not what keeps them out — it covers the case
-                            where an appeal arrived while eligible and the donor has
-                            since donated. The appeal stays in their list; the
-                            invitation to act on it does not. */}
+                        {/* Appeals no longer reach donors in recovery (Business Rule 2); this hides Respond
+                            if the donor has donated since an appeal arrived. Accepted appeals show a pill (Rule 25). */}
                         {appeal.accepted ? (
                           <span className="dn-pill dn-p-planned" aria-label="Appeal accepted">Accepted</span>
                         ) : isEligible && (

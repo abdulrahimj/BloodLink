@@ -30,14 +30,15 @@ Application Layer Spring Boot: REST API (controllers/services) + WebSocket serve
 Data Layer         PostgreSQL, accessed via Spring Data JPA
 ```
 
-REST is synchronous (requests, CRUD). WebSocket is one-directional server→client push, carrying all
-four Notification types and nothing else — there are no `@MessageMapping` handlers and no
-client→server messages:
+REST is synchronous (requests, CRUD). WebSocket is one-directional server→client push, carrying every
+Notification type and nothing else — there are no `@MessageMapping` handlers and no
+client→server messages (a donor's acceptance of an appeal is a REST call, Business Rule 25):
 
 | type | pushed to | raised when |
 |---|---|---|
 | LOW_STOCK_ALERT | that bank's BLOOD_BANK_STAFF | a stock change drops a group into Low or Critical |
 | DONATION_APPEAL | **eligible** donors (Business Rule 2) whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
+| DONATION_APPEAL_ACCEPTED | BLOOD_BANK_STAFF of the bank that sent the appeal | a donor accepts that appeal (Business Rule 25) |
 | NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
 | REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | units arrive against a request, it is fulfilled, or it closes |
 | REQUEST_PROGRESS | BLOOD_BANK_STAFF at every other bank still watching it | a bank contributes, changing the units outstanding (Business Rule 20) |
@@ -66,7 +67,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V20 dropping `blood_inventory_pre_batches`.
+> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V23 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25).
 
 ### User
 | field | type |
@@ -145,7 +146,7 @@ check (native SQL, pasteable into psql).
 
 The old one-row-per-(bank, group) `blood_inventory` table was renamed by V19 to
 `blood_inventory_pre_batches` (its constraint and index names too), is read and written by nothing, and
-is dropped by V20 (Stage 6).
+is dropped by V23 (Stage 6; renumbered from V20 when Business Rule 25 took V20–V22).
 
 ### ContributionAllocation
 | field | type |
@@ -256,9 +257,17 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15) |
 | is_read | boolean |
 | created_at | timestamp |
+| accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
+| source_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V21; set on DONATION_APPEAL rows only: the bank that sent the appeal |
+| blood_type | enum (as above), nullable — added in V21; set on DONATION_APPEAL rows only: the group appealed for |
+| acceptance_alert_sent | boolean, default false — added in V22; true once the sending bank's staff have been told of this row's acceptance |
+
+V21 back-filled `source_blood_bank_id` / `blood_type` on appeals sent before it by parsing the fixed
+message template ("<bank> needs <group> donors. …"); later appeals are stamped when sent. Index
+`idx_notifications_appeal_bank_type (source_blood_bank_id, blood_type, created_at) where type = 'DONATION_APPEAL'`.
 
 ### AuditLog
 | field | type |
@@ -291,7 +300,8 @@ BloodBank 1–N BloodRequest (as fulfiller) · Hospital 1–N BloodRequest · Us
 BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
 BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContribution ·
 BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
-BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
+BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target) ·
+BloodBank 1–N Notification (as appeal source)
 
 ---
 
@@ -1024,7 +1034,7 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       listed in the migration output (`DB: V19: skipped …`). Batches already expired at the cutover are
       stamped `expiry_noticed_at`. V19 refuses to run (one transaction, nothing changed) on negative units
       or a non-empty batch table, verifies per-bank, per-group totals before finishing, and renames the
-      old table to `blood_inventory_pre_batches` (dropped by V20).
+      old table to `blood_inventory_pre_batches` (dropped by V23).
     - **Batch detail is for the bank's own staff and ADMIN only.** `GET /api/inventory/{bank}/batches`
       (live batches — any units left, expired included — optional `?bloodType=`) and
       `GET /api/inventory/{bank}/batches/{id}` (one batch: state, days to expiry, source, donation, and
@@ -1040,6 +1050,47 @@ BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target)
       column still works out its figure in the browser from the group's `expiryDate` and shows the
       group's whole usable total (the summary card above it is right), and the Admin Reports note
       described in Business Rule 23.
+25. **A donor can accept a donation appeal, and the bank that sent it is told.** "Respond" on the Donor
+    Portal's appeals panel used to do nothing. Schema: `V20`–`V22` (columns on `notifications`, see its
+    schema section); built by the other project member and merged on 2026-10-24.
+    - **`POST /api/notifications/{id}/accept`**, DONOR only (SecurityConfig, matched before the general
+      notifications rule; any other role 403). `NotificationService.acceptAppeal`: the notification must
+      be a DONATION_APPEAL addressed to the caller — another user's id, or any other type, is a 404 like a
+      missing one. Answers with the notification, now `accepted` and `read`.
+    - **An ineligible donor cannot accept (409, nothing written)** — read from `Donor.isEligibleToDonate()`,
+      the same Business Rule 2 calculation every other eligibility gate uses. The Donor Portal hides Respond
+      for an ineligible donor, and on a 409 re-reads the profile so the button disappears.
+    - **Accepting is a statement of intent, nothing more.** It books no slot, reserves no stock and changes
+      no eligibility; the donation is still recorded by bank staff when the donor arrives (Record Donation).
+      Acceptance is not withdrawable.
+    - **Every BLOOD_BANK_STAFF account assigned to the sending bank gets a DONATION_APPEAL_ACCEPTED
+      notification** (the same recipient query as a low-stock alert) ("<donor name> accepted your appeal for O+."), routed by the appeal row's
+      `source_blood_bank_id` — never by parsing the message. Written in the same transaction as the
+      acceptance, like every other notification, then pushed.
+    - **Idempotent, and exactly one staff alert per acceptance.** The row is locked
+      (`NotificationRepository.findByIdAndRecipientIdForUpdate`, PESSIMISTIC_WRITE) and
+      `acceptance_alert_sent` records that the alert went out, so a double click or a retry sends nothing
+      twice; a retry also repairs an acceptance recorded before alerts existed (what V22 did in bulk).
+      An appeal with no `source_blood_bank_id` (one V21 could not attribute) is still accepted, but alerts
+      nobody.
+    - **The Inventory row shows "Donor Responded".** `InventoryItemResponse.appealAccepted` (appended after
+      `batchCount`, so the contract fields Business Rule 24 pins are unchanged) is true when the group has a
+      running cooldown (Business Rule 12) and a donor accepted an appeal sent at or after that cooldown's
+      `last_sent_at` (`NotificationService.acceptedAppealTimes`). The button stays disabled exactly as
+      before — acceptance changes no appeal rule. Wording lives in `frontend/src/lib/appealStatus.js`. The
+      Inventory screen refreshes on a DONATION_APPEAL_ACCEPTED push.
+    - **Every portal re-reads its notifications every 30 seconds** (`useNotifications`), so a staff member
+      whose socket dropped still sees an acceptance — the socket stays an accelerator, the row the record.
+    - **Known limits:** the demo seed's three appeals (`V905`) are inserted after V21's back-fill, so they
+      carry no source bank and accepting one in the demo alerts no staff; an appeal can be accepted however
+      old it is.
+    - **Migration renumbering:** this feature was written as V18–V20 on code older than the batch-stock
+      work, colliding with V18/V19 (batch stock, already applied to `bloodlink_dev`) and the V20 reserved for
+      dropping `blood_inventory_pre_batches`. It was renumbered V20 / V21 / V22 with contents unchanged, and
+      the drop is now **V23** (Stage 6). None of the three touches stock tables. The applied V18/V19 files,
+      the table comment V19 stores on `blood_inventory_pre_batches` and `V19CutoverMigrationIT` still say
+      "V20": left as they are, since editing an applied migration changes its checksum and Flyway would then
+      refuse to start on `bloodlink_dev`. V23 replaces the stale comment simply by dropping the table.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1053,7 +1104,11 @@ listed so nothing is forgotten when the chapters are next revised.
   "most recent contributor", and update the status enum: PARTIALLY_FULFILLED in, APPROVED out.
 - **Chapters 3, 4 and 5 — request lifecycle narrative and Figure 3.5.** The approve-then-fulfil
   sequence is gone; a request is now filled by one or more contributions (Business Rule 20).
-- **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15).
+- **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15), and a sixth,
+  DONATION_APPEAL_ACCEPTED (Business Rule 25, V21).
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for appeal acceptance (Business Rule 25, V20–V22).**
+  `Notification` gains `accepted`, `source_blood_bank_id` (BloodBank 1–N Notification), `blood_type` and
+  `acceptance_alert_sent`; the donor's "respond to donation appeals" use case now has a real flow.
 - **Chapters 3, 4 and 5 — ERD and narrative for facilities.** Blood banks and hospitals are no
   longer purely seeded: an administrator creates them (Business Rule 19, V14), names are unique per
   type, and `audit_log` gained `target_blood_bank_id` / `target_hospital_id` with two new actions.
@@ -1067,9 +1122,9 @@ listed so nothing is forgotten when the chapters are next revised.
 
 ## Actors (roles) and what each can do
 
-- **Donor** — view own profile/history/eligibility, respond to donation appeals
+- **Donor** — view own profile/history/eligibility, accept donation appeals while eligible (Business Rule 25)
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals, view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)

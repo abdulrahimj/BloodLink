@@ -27,6 +27,8 @@ import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.stock.BatchStockService;
+import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -119,9 +121,8 @@ public class NotificationService {
             acceptanceUpdated = true;
         }
 
-        // Also repairs acceptances recorded before staff alerts were deployed. The
-        // lock plus this persisted flag keeps retries idempotent, including when
-        // the donor's first acceptance committed without an alert.
+        // Also repairs acceptances recorded before staff alerts existed; the row lock plus this
+        // persisted flag keeps retries idempotent, so the bank's staff are alerted exactly once.
         if (!notification.isAcceptanceAlertSent()) {
             BloodBank bank = notification.getSourceBloodBank();
             if (bank != null && notification.getBloodType() != null) {

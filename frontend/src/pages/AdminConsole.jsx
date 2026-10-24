@@ -224,16 +224,16 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           color: rgba(255,255,255,.5);
         }
 
-        .ad-nav { display: flex; flex-direction: column; gap: 15px; }
+        .ad-nav { display: flex; flex-direction: column; gap: clamp(2px, .5vh, 5px); }
         .ad-nav button {
-          display: flex; align-items: center; gap: 10px;
+          display: flex; align-items: center; gap: 11px;
           width: 100%; text-align: left;
           background: transparent; border: none; cursor: pointer;
           color: rgba(255,255,255,.86);
           font-family: inherit;
-          font-size: 15px;
+          font-size: clamp(11.5px, 1.72vh, 15px);
           font-weight: 600;
-          padding: 15px;
+          padding: clamp(7px, 1.24vh, 12px) 12px;
           border-radius: 8px;
           transition: background .15s ease, color .15s ease;
         }
