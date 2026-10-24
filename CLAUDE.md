@@ -69,7 +69,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 3 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`, backend only) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8). Still to come: Stage 4 the frontend (including the write-off screen), Stage 5 README/Postman/chapter notes, Stage 6 V24 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25; V23 the expiry notice types, Business Rule 26).
+> **In progress — batch-level stock redesign, Stage 4 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8); Stage 4 built the frontend (the Inventory columns, the batch dialog with history and the write-off form, and the wording fixes — see Business Rule 24's "Frontend"). Still to come: Stage 5 README/Postman/chapter notes, Stage 6 V24 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25; V23 the expiry notice types, Business Rule 26).
 
 ### User
 | field | type |
@@ -667,7 +667,8 @@ BloodBank 1–N Notification (as appeal source)
       (`Propagation.MANDATORY`, stamped with the same clock instant as the write-off). The Admin Audit Log
       shows these entries: `AuditLogEntryResponse.targetType` is `BATCH`, `targetName` describes the batch
       ("O+ batch, expiry 2026-10-01 — X", since a batch has no name), and the page labels the action
-      "Written off" (red) with the subject kind "Stock batch" (`AdminConsole.jsx`).
+      "Written off" (red) with the subject kind "Stock batch" (`AdminConsole.jsx`). Its subtitle reads
+      "Administrator actions and stock write-offs by bank staff" since Stage 4, no longer "Every administrator action".
     - **Same transaction as the action.** `AuditLogService.record` is `Propagation.MANDATORY`: it refuses
       to run without the caller's transaction, so an action and its entry commit or roll back together —
       the log can never show a change that did not happen, or miss one that did.
@@ -934,9 +935,9 @@ BloodBank 1–N Notification (as appeal source)
       so the page needs no change; the CSV says "Expired units awaiting discard (not counted as
       stock)"). A bank's Critical count includes the groups it has no usable stock of at all (zero
       units), exactly as its own Inventory screen shows them. The status wording is the app's own —
-      Critical / Low / Sufficient. **Known interim wording, until Stage 4:** the Reports page's note
-      under the expiring card still reads "Includes N units already past expiry" (`AdminReports.jsx`),
-      which is no longer true; the figures it labels are correct.
+      Critical / Low / Sufficient. The page says so too (Stage 4): "Total usable units", and under the
+      expiring card "Not counted: N units already expired, awaiting write-off" (or "No expired units
+      awaiting write-off") — it used to claim the expiring figure included them.
     - **Requests:** counted by `created_at` within the range. Fulfilment rate = FULFILLED ÷ (FULFILLED +
       REJECTED); PENDING and PARTIALLY_FULFILLED are still open and excluded. With nothing decided the
       rate is null and the page and CSV say **"No data"** — never 0% or NaN. "Filled by more than one
@@ -1050,10 +1051,22 @@ BloodBank 1–N Notification (as appeal source)
     - **Known limits:** usable stock falls at midnight UTC with no event, so no low-stock alert fires for
       an expiry (staff hear about expiring and expired batches from Business Rule 26's daily notices, which
       judge no threshold; a written-off figure in Admin Reports is future work, deliberately not built); stock edited directly in the database raises no
-      alert (as before). **Interim screens until Stage 4:** the Inventory table's own "Expiring Soon"
-      column still works out its figure in the browser from the group's `expiryDate` and shows the
-      group's whole usable total (the summary card above it is right), and the Admin Reports note
-      described in Business Rule 23.
+      alert (as before). The batch list shows batches with units left only, so a batch emptied by issues or
+      write-offs can no longer be opened from the Inventory page (its history is still in the API).
+    - **Frontend (Stage 4).** The Inventory table shows, per group, the server's figures only — usable units,
+      `expiringSoonUnits`, `expiredUnits` (red when above 0) and a "View N batches" button (`batchCount`); the
+      panel head says how many expired units are waiting to be written off. The browser no longer works
+      anything out from dates. The button opens `BloodBankBatches.jsx`: one card per batch (units left of
+      received, expiry date with "Expires in 5 days" / "Expired 3 days ago", state badge, source), expired
+      batches holding units in red with a line asking for a write-off; each card opens its **history**
+      (issues to hospitals, write-offs) and, for bank staff only, the **write-off form**: units (1 to what
+      is left), reason (the five, labelled as the audit log words them, each with a one-line hint), note
+      (500-character counter, required for Other), then a confirmation step saying it cannot be undone.
+      An expired batch's form starts filled in (all its units, reason Expired). 400s land under their field,
+      a 409 shows the server's sentence and re-reads the batch and the totals; success re-reads both. The
+      form's checks live in `lib/batchStock.js` (tested) and mirror the server's; the server still decides.
+      Add New Batch, Record Donation and Write off show only for BLOOD_BANK_STAFF (ADMIN is routed to the
+      Admin Console and never reaches this page; hospitals read the per-group totals only).
 25. **A donor can accept a donation appeal, and the bank that sent it is told.** "Respond" on the Donor
     Portal's appeals panel used to do nothing. Schema: `V20`–`V22` (columns on `notifications`, see its
     schema section); built by the other project member and merged on 2026-10-24.
@@ -1135,9 +1148,9 @@ BloodBank 1–N Notification (as appeal source)
       within 7 days" and each carries its own date. A bank with no active staff gets nothing and nothing is
       stamped, so the reminder still reaches staff assigned later. A missed day's expired notice is not
       repeated — the next day's lists the same batches.
-    - **Frontend:** no change was needed for the notices to appear — the bell lists every type, with a grey
-      dot for types it has no colour for. Not built (reported, pending a decision): a dot colour for the two
-      types, and refreshing the Inventory screen when one arrives.
+    - **Frontend:** the bell lists every type; since Stage 4 the reminder has an amber dot and the expired
+      notice a red one (`NotificationBell.jsx`), and either one arriving re-reads the Inventory page quietly,
+      as a low-stock alert does (`lib/batchStock.js` `refreshesInventory`).
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 

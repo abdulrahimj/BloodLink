@@ -320,13 +320,14 @@ function StockBody({ data }) {
   return (
     <>
       <div className="ar-figures">
-        <Figure value={data.totalUnits.toLocaleString("en-GB")} label="Total units" note="Every blood bank, every group" />
+        <Figure value={data.totalUnits.toLocaleString("en-GB")} label="Total usable units" note="Every blood bank, every group" />
+        {/* pastExpiryUnits are expired units awaiting write-off: counted in no figure here (Business Rule 24). */}
         <Figure
           value={data.expiringSoonUnits.toLocaleString("en-GB")} tone="amber"
           label={`Expiring within ${data.expiringSoonWindowDays} days`}
           note={data.pastExpiryUnits > 0
-            ? `Includes ${countNoun(data.pastExpiryUnits, "unit")} already past expiry`
-            : "None already past expiry"}
+            ? `Not counted: ${countNoun(data.pastExpiryUnits, "unit")} already expired, awaiting write-off`
+            : "No expired units awaiting write-off"}
         />
         <Figure
           value={criticalGroups} tone={criticalGroups > 0 ? "red" : "green"}

@@ -65,7 +65,7 @@ const HEADINGS = {
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
-  [VIEW.AUDIT]: { title: "Audit Log", sub: "Every administrator action, newest first — permanent and read-only" },
+  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions and stock write-offs by bank staff, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
@@ -1505,7 +1505,7 @@ function AuditLogView() {
           </thead>
           <tbody>
             {isAuditLogEmpty(totalElements) && (
-              <tr><td colSpan={5} className="ad-empty">No administrator actions have been recorded yet.</td></tr>
+              <tr><td colSpan={5} className="ad-empty">Nothing has been recorded yet.</td></tr>
             )}
             {entries.map((entry) => {
               const action = AUDIT_ACTION[entry.action] ?? { label: entry.action, tone: "" };

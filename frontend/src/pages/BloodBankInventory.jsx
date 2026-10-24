@@ -8,9 +8,11 @@ import { appealButtonLabel as getAppealButtonLabel, appealButtonText as getAppea
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
+import { refreshesInventory } from "../lib/batchStock.js";
+import BatchDialog from "./BloodBankBatches.jsx";
 
-/* BloodLink — Blood Bank: Blood Inventory (detail view): stock by group, expiry exposure, the per-group table,
-   Add New Batch, Record Donation and Send Appeal on Low/Critical rows, with the live bell. */
+/* BloodLink — Blood Bank: Blood Inventory: usable, expiring and expired stock per group, each group's batches
+   (history, write-off), Add New Batch, Record Donation and Send Appeal on Low/Critical rows, with the live bell. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -65,6 +67,11 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   // What the last appeal did, shown in the header until the next one. Cleared on
   // a reload so a stale "Appeal sent" is not left sitting over refreshed figures.
   const [appealNotice, setAppealNotice] = useState(null);
+  // The group whose batches are open (null when closed); refreshKey tells that list to re-read with the page.
+  const [batchGroup, setBatchGroup] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  // Only a bank's own staff change stock (Business Rule 8); the server refuses anyone else as well.
+  const canChangeStock = user.role === "BLOOD_BANK_STAFF";
 
   // Guards setState after unmount for both fetches; reset on every mount because StrictMode's
   // simulated unmount would otherwise disable load() for good.
@@ -110,16 +117,16 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
       if (!mountedRef.current) return;
       setStock(inventory);
       setSummary(summaryData);
+      setRefreshKey((key) => key + 1);
     } catch {
       // Left as it was; the next alert or a manual reload will try again.
     }
   }
 
-  // The header bell, same session as the Dashboard; only a stock alert refreshes this screen (see the file header).
+  // The header bell, same session as the Dashboard; stock, appeal-response and expiry notices refresh this screen.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
-      if (notification.type === "LOW_STOCK_ALERT"
-          || notification.type === "DONATION_APPEAL_ACCEPTED") refreshQuietly();
+      if (refreshesInventory(notification.type)) refreshQuietly();
     },
   });
 
@@ -128,6 +135,8 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
   const critical = summary?.criticalGroupsCount ?? 0;
   const unitsIssued = summary?.unitsIssuedThisMonth ?? 0;
   const composition = summary?.composition ?? [];
+  const expiredUnits = summary?.expiredUnits ?? 0;
+  const openGroup = stock.find((s) => s.bloodType === batchGroup) ?? null;
 
   /** Re-fetches after "Add New Batch" so every card, chart and row shows what the server stored. */
   async function handleBatchAdded() {
@@ -340,7 +349,19 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         .bi-legend i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
         .bi-legend em { font-style: normal; color: var(--ink-muted); font-weight: 500; }
 
-        .bi-tablepanel { flex: 1 1 auto; min-height: 0; }
+        .bi-tablepanel { flex: 1 1 auto; min-height: 0; overflow: auto; }
+        .bi-expired { color: var(--red); font-weight: 800; }
+        .bi-ok { color: var(--green); }
+        /* Opens the group's batches: outlined navy, so it never competes with the red Send Appeal.
+           Slimmer than Send Appeal, so eight rows that all carry one still fit a 768px-tall screen. */
+        .bi-batchbtn {
+          background: transparent; color: var(--navy);
+          border: 1.5px solid rgba(28,58,94,.3); border-radius: 6px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(9px, 1.28vh, 11.5px); line-height: 1.3;
+          padding: clamp(1px, .3vh, 4px) clamp(7px, .7vw, 11px); white-space: nowrap;
+        }
+        .bi-batchbtn:hover { background: rgba(28,58,94,.06); border-color: var(--navy); }
+        .bi-batchbtn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
         .bi-table { width: 100%; border-collapse: collapse; }
         .bi-table th {
           text-align: left; font-size: clamp(8.5px, 1.22vh, 11px); font-weight: 700; color: var(--ink-muted);
@@ -510,13 +531,17 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
               onMarkAllRead={markAllRead}
             />
             {/* Record Donation sits beside Add New Batch (both add stock), outlined so Add New Batch stays primary. */}
-            <button type="button" className="bi-donatebtn" disabled={loading}
-                    onClick={() => setDonationModalOpen(true)}>
-              <DropletOutlineIcon /> Record Donation
-            </button>
-            <button type="button" className="bi-addbtn" disabled={loading} onClick={() => setBatchModalOpen(true)}>
-              <PlusIcon /> Add New Batch
-            </button>
+            {canChangeStock && (
+              <>
+                <button type="button" className="bi-donatebtn" disabled={loading}
+                        onClick={() => setDonationModalOpen(true)}>
+                  <DropletOutlineIcon /> Record Donation
+                </button>
+                <button type="button" className="bi-addbtn" disabled={loading} onClick={() => setBatchModalOpen(true)}>
+                  <PlusIcon /> Add New Batch
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -546,8 +571,9 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         {!loading && !error && summary && (
           <>
             <div className="bi-stats">
-              <Stat tone="red" icon={<DropletIcon />} figure={total} label="Total Units" note="All blood groups" />
-              <Stat tone="amber" icon={<ClockIcon />} figure={expiring} label="Expiring Soon" note="Within 4 weeks" />
+              <Stat tone="red" icon={<DropletIcon />} figure={total} label="Total Units" note="Usable, all blood groups" />
+              <Stat tone="amber" icon={<ClockIcon />} figure={expiring} label="Expiring Soon"
+                    note={`Within ${summary.expiringSoonWindowDays} days`} />
               <Stat tone="green" icon={<SwapIcon />} figure={unitsIssued} label="Units Issued" note="This month" />
               <Stat tone="navy" icon={<AlertIcon />} figure={critical} label="Critical Groups" note="Below safe level" />
             </div>
@@ -585,28 +611,44 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
             <div className="bi-panel bi-tablepanel">
               <div className="bi-panel-head">
                 <div className="bi-panel-title">Blood Inventory Details</div>
-                <div className="bi-panel-link">Export</div>
+                {/* Replaces the mockup's inert "Export" with what staff must act on. */}
+                {expiredUnits > 0
+                  ? <div className="bi-panel-link">{expiredUnits} expired unit{expiredUnits === 1 ? "" : "s"} to write off</div>
+                  : <div className="bi-panel-link bi-ok">No expired units</div>}
               </div>
               <table className="bi-table">
                 <thead>
                   <tr>
-                    <th style={{ width: "12%" }}>Blood Group</th>
-                    <th style={{ width: "15%" }}>Available Units</th>
-                    <th style={{ width: "15%" }}>Expiring Soon</th>
-                    <th style={{ width: "19%" }}>Status</th>
-                    <th style={{ width: "24%" }}>Last Updated</th>
-                    <th style={{ width: "15%" }}>Action</th>
+                    <th style={{ width: "9%" }}>Blood Group</th>
+                    <th style={{ width: "10%" }}>Usable Units</th>
+                    <th style={{ width: "11%" }}>Expiring Soon</th>
+                    <th style={{ width: "10%" }}>Expired</th>
+                    <th style={{ width: "13%" }}>Batches</th>
+                    <th style={{ width: "11%" }}>Status</th>
+                    <th style={{ width: "19%" }}>Last Updated</th>
+                    <th style={{ width: "17%" }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stock.map((s) => {
-                    const expiringSoon = s.expiryDate && isWithinExpiryWindow(s.expiryDate);
                     return (
                       <tr key={s.bloodType}>
                         <td className="bi-grp">{s.bloodType}</td>
                         <td>{s.unitsAvailable}</td>
-                        <td className={expiringSoon ? "" : "bi-muted"}>
-                          {expiringSoon ? s.unitsAvailable : "—"}
+                        <td className={s.expiringSoonUnits > 0 ? "" : "bi-muted"}>
+                          {s.expiringSoonUnits > 0 ? s.expiringSoonUnits : "—"}
+                        </td>
+                        {/* Expired units are on the shelf but not stock: red until written off. */}
+                        <td className={s.expiredUnits > 0 ? "bi-expired" : "bi-muted"}>
+                          {s.expiredUnits > 0 ? s.expiredUnits : "—"}
+                        </td>
+                        <td>
+                          {s.batchCount > 0 ? (
+                            <button type="button" className="bi-batchbtn" onClick={() => setBatchGroup(s.bloodType)}
+                                    aria-label={`View the ${s.batchCount} ${s.bloodType} batches`}>
+                              View {s.batchCount} batch{s.batchCount === 1 ? "" : "es"}
+                            </button>
+                          ) : <span className="bi-muted">No batches</span>}
                         </td>
                         <td><span className={`bi-badge bi-b-${s.status.toLowerCase()}`}>{titleCase(s.status)}</span></td>
                         <td className="bi-muted">{s.lastUpdated ? formatDateTime(s.lastUpdated) : "Never stocked"}</td>
@@ -658,6 +700,17 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
           appeal={appeal}
           onCancel={() => setAppeal(null)}
           onConfirm={confirmAppeal}
+        />
+      )}
+
+      {openGroup && (
+        <BatchDialog
+          bloodBankId={bloodBankId}
+          group={openGroup}
+          canChangeStock={canChangeStock}
+          refreshKey={refreshKey}
+          onClose={() => setBatchGroup(null)}
+          onStockChanged={refreshQuietly}
         />
       )}
     </div>
@@ -728,13 +781,6 @@ function AppealConfirmation({ appeal, onCancel, onConfirm }) {
       </div>
     </div>
   );
-}
-
-/** Mirrors the server's 28-day window client-side, only for the table's own "Expiring Soon" column. */
-function isWithinExpiryWindow(isoDate) {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() + 28);
-  return new Date(isoDate) <= cutoff;
 }
 
 function Stat({ tone, icon, figure, label, note }) {
