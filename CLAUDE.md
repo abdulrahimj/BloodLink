@@ -49,6 +49,11 @@ STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser ca
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
 Delivery is per-user via `/user/queue/notifications` — nothing is broadcast.
 
+**Every notification goes to ACTIVE accounts only** — a suspended staff member, hospital user or donor is
+never a recipient of any type (and is not counted in an appeal's reach preview); `NotificationService`'s
+`activeBankStaff` / `activeHospitalStaff` and the ACTIVE filter in `DonorRepository.findByBloodTypeWithUser`
+are where this is decided.
+
 **Every push is also a Notification row, written first, in the same transaction as the event.** The
 socket is an accelerator; the row is the record. A client that was offline reads what it missed from
 `GET /api/notifications`, so no feature may depend on a push having been received.
@@ -453,7 +458,7 @@ BloodBank 1–N Notification (as appeal source)
       control. The cooldown row is written only after the send succeeds, inside the same transaction,
       so a failed appeal never leaves a cooldown blocking the retry it did not earn.
     - **This does not change who receives an appeal.** Business Rule 2's 90-day donor-eligibility
-      gate is untouched and remains the only thing deciding that. The two answer different questions:
+      gate is untouched and, with suspended accounts left out, decides that. The two answer different questions:
       the cooldown decides whether the bank may ask at all right now, Rule 2 decides which donors it
       is safe to ask. Schema added in `V10`.
 13. **Every phone number is stored in exactly one format: `+232` followed by 8 digits, no spaces,
@@ -1080,7 +1085,7 @@ BloodBank 1–N Notification (as appeal source)
     - **Accepting is a statement of intent, nothing more.** It books no slot, reserves no stock and changes
       no eligibility; the donation is still recorded by bank staff when the donor arrives (Record Donation).
       Acceptance is not withdrawable.
-    - **Every BLOOD_BANK_STAFF account assigned to the sending bank gets a DONATION_APPEAL_ACCEPTED
+    - **Every ACTIVE BLOOD_BANK_STAFF account assigned to the sending bank gets a DONATION_APPEAL_ACCEPTED
       notification** (the same recipient query as a low-stock alert) ("<donor name> accepted your appeal for O+."), routed by the appeal row's
       `source_blood_bank_id` — never by parsing the message. Written in the same transaction as the
       acceptance, like every other notification, then pushed.
@@ -1123,8 +1128,8 @@ BloodBank 1–N Notification (as appeal source)
       already expired at the cutover are included: they still need writing off.
     - **At most one notice of each type per bank per UTC day, listing all its batches**, sent to that
       bank's **ACTIVE** BLOOD_BANK_STAFF only (`UserRepository.findByRoleAndBloodBankIdAndStatus`) — no
-      suspended staff, administrators, hospital staff or donors. (Every other staff alert still goes to
-      every staff account of the bank, suspended included, as before.) Each row is a normal Notification —
+      suspended staff, administrators, hospital staff or donors. (Every other notification type now
+      goes to active accounts only as well.) Each row is a normal Notification —
       written first, pushed after commit, re-read by the 30-second poll — with `source_blood_bank_id` set to
       the bank and `created_at` from the injected Clock.
     - **The job** (`BatchExpiryNotificationJob`, enabled by `@EnableScheduling` in `SchedulingConfig` — the
@@ -1220,7 +1225,7 @@ listed so nothing is forgotten when the chapters are next revised.
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
-    `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`),
+    `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

@@ -13,6 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.Donor;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 
 import jakarta.persistence.LockModeType;
@@ -50,11 +51,11 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
     List<BloodTypeCount> countByBloodType();
 
     /**
-     * Everyone an appeal for one blood group goes to, with the user fetch-joined to avoid a query per donor;
-     * untyped donors (null group) are excluded by the match.
+     * Donors of one blood group whose account is in :status (ACTIVE for appeals), user fetch-joined to avoid a query
+     * per donor; untyped donors (null group) are excluded by the match.
      */
-    @Query("select d from Donor d join fetch d.user where d.bloodType = :bloodType")
-    List<Donor> findByBloodTypeWithUser(@Param("bloodType") BloodType bloodType);
+    @Query("select d from Donor d join fetch d.user u where d.bloodType = :bloodType and u.status = :status")
+    List<Donor> findByBloodTypeWithUser(@Param("bloodType") BloodType bloodType, @Param("status") AccountStatus status);
 
     /**
      * The donor registered against one phone (unique since V2), for Record Donation's lookup;

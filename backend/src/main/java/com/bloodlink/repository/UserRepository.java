@@ -33,21 +33,18 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsByEmail(String email);
 
     /**
-     * The staff accounts attached to one facility, i.e. who that facility's notifications go to;
-     * the role is in the query so it says what it means.
+     * The staff accounts of one facility in one status, i.e. who that facility's notifications go to (always ACTIVE:
+     * no notification reaches a suspended account). The role is in the query so it says what it means.
      */
-    List<User> findByRoleAndBloodBankId(Role role, UUID bloodBankId);
-
-    /** The same, limited to one account status: the daily expiry notices go to ACTIVE staff only (Business Rule 26). */
     List<User> findByRoleAndBloodBankIdAndStatus(Role role, UUID bloodBankId, AccountStatus status);
 
-    List<User> findByRoleAndHospitalId(Role role, UUID hospitalId);
+    List<User> findByRoleAndHospitalIdAndStatus(Role role, UUID hospitalId, AccountStatus status);
 
     /**
-     * Every account with one role; only the fallback when no bank can cover a new request,
-     * so the alert goes to all bank staff. Not for user-facing listings.
+     * Every account with one role and status; only the fallback when no bank can cover a new request,
+     * so the alert goes to all active bank staff. Not for user-facing listings.
      */
-    List<User> findByRole(Role role);
+    List<User> findByRoleAndStatus(Role role, AccountStatus status);
 
     /**
      * Search and filter conditions shared by searchAccounts and its count query, so rows and totals agree:

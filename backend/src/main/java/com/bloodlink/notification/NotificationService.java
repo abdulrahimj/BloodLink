@@ -143,7 +143,7 @@ public class NotificationService {
                 acceptanceUpdated = true;
                 notificationRepository.save(notification);
                 dispatch(
-                    userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bank.getId()),
+                    activeBankStaff(bank.getId()),
                     message,
                     NotificationType.DONATION_APPEAL_ACCEPTED
                 );
@@ -187,7 +187,7 @@ public class NotificationService {
         );
 
         dispatch(
-            userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bank.getId()),
+            activeBankStaff(bank.getId()),
             message,
             NotificationType.LOW_STOCK_ALERT
         );
@@ -205,11 +205,11 @@ public class NotificationService {
     private record AppealAudience(List<User> recipients, int inRecovery) {}
 
     /**
-     * The single place an appeal's audience is computed, so the preview count and the send cannot disagree.
-     * Eligibility comes from Donor.isEligibleToDonate(), filtered in memory so the rule is never copied into a query.
+     * The single place an appeal's audience is computed, so the preview count and the send cannot disagree. Suspended
+     * donors are left out by the query; eligibility comes from Donor.isEligibleToDonate(), filtered in memory.
      */
     private AppealAudience appealAudienceFor(BloodType bloodType) {
-        List<Donor> matchingGroup = donorRepository.findByBloodTypeWithUser(bloodType);
+        List<Donor> matchingGroup = donorRepository.findByBloodTypeWithUser(bloodType, AccountStatus.ACTIVE);
         List<User> recipients = matchingGroup.stream()
             .filter(Donor::isEligibleToDonate)
             .map(Donor::getUser)
@@ -269,9 +269,9 @@ public class NotificationService {
         );
 
         List<User> recipients = capableBankIds.isEmpty()
-            ? userRepository.findByRole(Role.BLOOD_BANK_STAFF)
+            ? userRepository.findByRoleAndStatus(Role.BLOOD_BANK_STAFF, AccountStatus.ACTIVE)
             : capableBankIds.stream()
-                .flatMap(bankId -> userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bankId).stream())
+                .flatMap(bankId -> activeBankStaff(bankId).stream())
                 .toList();
 
         dispatch(recipients, message, NotificationType.NEW_REQUEST);
@@ -306,7 +306,7 @@ public class NotificationService {
         }
 
         dispatch(
-            userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, request.getHospital().getId()),
+            activeHospitalStaff(request.getHospital().getId()),
             message,
             NotificationType.REQUEST_STATUS_CHANGE
         );
@@ -333,7 +333,7 @@ public class NotificationService {
             );
 
         dispatch(
-            userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, request.getHospital().getId()),
+            activeHospitalStaff(request.getHospital().getId()),
             message,
             NotificationType.REQUEST_STATUS_CHANGE
         );
@@ -368,7 +368,7 @@ public class NotificationService {
         List<User> recipients = bloodBankRepository.findAll().stream()
             .map(BloodBank::getId)
             .filter(bankId -> !excluded.contains(bankId))
-            .flatMap(bankId -> userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, bankId).stream())
+            .flatMap(bankId -> activeBankStaff(bankId).stream())
             .toList();
 
         dispatch(recipients, message, NotificationType.REQUEST_PROGRESS);
@@ -387,8 +387,7 @@ public class NotificationService {
     public ExpiryNotices notifyBatchExpiry(UUID bloodBankId, Instant now) {
         BloodBank bank = bloodBankRepository.lockById(bloodBankId)
             .orElseThrow(() -> new NotFoundException("No blood bank found for this id."));
-        List<User> staff = userRepository.findByRoleAndBloodBankIdAndStatus(
-            Role.BLOOD_BANK_STAFF, bloodBankId, AccountStatus.ACTIVE);
+        List<User> staff = activeBankStaff(bloodBankId);
         if (staff.isEmpty()) {
             // Nothing is stamped either, so a due reminder still reaches staff assigned later.
             return new ExpiryNotices(0, 0);
@@ -449,6 +448,16 @@ public class NotificationService {
     }
 
     // ======================================== Shared plumbing ========================================
+
+    /** A bank's ACTIVE staff: every notification goes to active accounts only, never to a suspended one. */
+    private List<User> activeBankStaff(UUID bloodBankId) {
+        return userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, bloodBankId, AccountStatus.ACTIVE);
+    }
+
+    /** A hospital's ACTIVE staff, for the same reason. */
+    private List<User> activeHospitalStaff(UUID hospitalId) {
+        return userRepository.findByRoleAndHospitalIdAndStatus(Role.HOSPITAL_STAFF, hospitalId, AccountStatus.ACTIVE);
+    }
 
     /**
      * Writes one Notification row per recipient (de-duplicated by user id) and queues each for live delivery

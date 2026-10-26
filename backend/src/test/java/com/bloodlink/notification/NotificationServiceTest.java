@@ -31,6 +31,7 @@ import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.NotificationType;
 import com.bloodlink.domain.enums.RequestStatus;
@@ -134,7 +135,8 @@ class NotificationServiceTest {
         when(notificationRepository.findByIdAndRecipientIdForUpdate(appeal.getId(), recipientId))
             .thenReturn(java.util.Optional.of(appeal));
         when(notificationRepository.save(appeal)).thenReturn(appeal);
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID)).thenReturn(List.of(staff));
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
+            .thenReturn(List.of(staff));
         echoSavedNotifications();
 
         NotificationResponse first = service.acceptAppeal(appeal.getId(), recipientId);
@@ -171,7 +173,8 @@ class NotificationServiceTest {
         when(notificationRepository.findByIdAndRecipientIdForUpdate(appeal.getId(), recipientId))
             .thenReturn(java.util.Optional.of(appeal));
         when(notificationRepository.save(appeal)).thenReturn(appeal);
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID)).thenReturn(List.of(staff));
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
+            .thenReturn(List.of(staff));
         echoSavedNotifications();
 
         NotificationResponse response = service.acceptAppeal(appeal.getId(), recipientId);
@@ -257,7 +260,7 @@ class NotificationServiceTest {
     @Test
     void aDropIntoLowAlertsThatBanksOwnStaff() {
         User staff = user("Aminata Kamara");
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(staff));
         echoSavedNotifications();
 
@@ -274,7 +277,7 @@ class NotificationServiceTest {
 
     @Test
     void aDropIntoCriticalIsNamedAsCritical() {
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(user("Aminata Kamara")));
         echoSavedNotifications();
 
@@ -309,7 +312,7 @@ class NotificationServiceTest {
     void anAppealReachesEveryEligibleDonorOfThatGroupAndNamesTheBank() {
         User first = user("Fatmata Sesay");
         User second = user("Ibrahim Conteh");
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE))
             .thenReturn(List.of(donor(first), donorWhoGave(second, 200)));
         echoSavedNotifications();
 
@@ -336,7 +339,7 @@ class NotificationServiceTest {
     void anAppealNeverReachesADonorStillInsideTheRecoveryWindow() {
         User eligible = user("Fatmata Sesay");
         User recovering = user("Ibrahim Conteh");
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE))
             .thenReturn(List.of(donor(eligible), donorWhoGave(recovering, 10)));
         echoSavedNotifications();
 
@@ -354,7 +357,7 @@ class NotificationServiceTest {
     @Test
     void theRecoveryWindowsLastDayIsStillIneligible() {
         // "More than 90 days": day 90 is inside the window, day 91 the first day out.
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE))
             .thenReturn(List.of(donorWhoGave(user("Day 90"), 90)));
         echoSavedNotifications();
 
@@ -370,7 +373,7 @@ class NotificationServiceTest {
     @Test
     void aDonorOneDayPastTheWindowIsReached() {
         User justEligible = user("Day 91");
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE))
             .thenReturn(List.of(donorWhoGave(justEligible, 91)));
         echoSavedNotifications();
 
@@ -384,7 +387,7 @@ class NotificationServiceTest {
 
     @Test
     void anAppealWhereEveryMatchingDonorIsRecoveringWritesNothingButSaysWhy() {
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE))
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE))
             .thenReturn(List.of(donorWhoGave(user("A"), 5), donorWhoGave(user("B"), 40)));
         echoSavedNotifications();
 
@@ -401,7 +404,7 @@ class NotificationServiceTest {
     @Test
     void thePreviewCountsWhatTheSendWouldReachAndWritesNothing() {
         // The preview's promised number must be exactly who is sent to; this fails if the shared calculation is split.
-        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE)).thenReturn(List.of(
+        when(donorRepository.findByBloodTypeWithUser(BloodType.O_NEGATIVE, AccountStatus.ACTIVE)).thenReturn(List.of(
             donor(user("Never donated")),
             donorWhoGave(user("Gave 200 days ago"), 200),
             donorWhoGave(user("Gave 30 days ago"), 30),
@@ -427,7 +430,7 @@ class NotificationServiceTest {
 
     @Test
     void anAppealWithNoMatchingDonorsReportsZeroRatherThanFailing() {
-        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE)).thenReturn(List.of());
+        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE, AccountStatus.ACTIVE)).thenReturn(List.of());
         echoSavedNotifications();
 
         AppealReach reach = service.sendDonationAppeal(
@@ -444,7 +447,7 @@ class NotificationServiceTest {
      */
     @Test
     void aPreviewForAGroupWithNoRegisteredDonorsReportsZeroEligibleAndZeroInRecovery() {
-        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE)).thenReturn(List.of());
+        when(donorRepository.findByBloodTypeWithUser(BloodType.AB_NEGATIVE, AccountStatus.ACTIVE)).thenReturn(List.of());
 
         AppealReach preview = service.previewAppealReach(BloodType.AB_NEGATIVE);
 
@@ -462,7 +465,7 @@ class NotificationServiceTest {
         User capableStaff = user("Aminata Kamara");
         when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID));
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(capableStaff));
         echoSavedNotifications();
 
@@ -474,14 +477,14 @@ class NotificationServiceTest {
         assertThat(rows.get(0).getRecipient()).isEqualTo(capableStaff);
         assertThat(rows.get(0).getMessage()).contains("Makeni Regional Hospital", "4 units", "O-", "Emergency");
         // The bank that could not cover it was never looked up, let alone written to.
-        verify(userRepository, never()).findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID);
+        verify(userRepository, never()).findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE);
     }
 
     @Test
     void aRequestNoBankCanCoverStillAlertsEveryBank() {
         when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of());
-        when(userRepository.findByRole(Role.BLOOD_BANK_STAFF))
+        when(userRepository.findByRoleAndStatus(Role.BLOOD_BANK_STAFF, AccountStatus.ACTIVE))
             .thenReturn(List.of(user("Aminata Kamara"), user("Mohamed Bangura")));
         echoSavedNotifications();
 
@@ -496,7 +499,7 @@ class NotificationServiceTest {
     @Test
     void aFulfilmentTellsTheRaisingHospitalWhichBankIssuedTheLastUnits() {
         User hospitalStaff = user("Isatu Turay");
-        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+        when(userRepository.findByRoleAndHospitalIdAndStatus(Role.HOSPITAL_STAFF, HOSPITAL_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(hospitalStaff));
         echoSavedNotifications();
 
@@ -518,7 +521,7 @@ class NotificationServiceTest {
     @Test
     void aPartialContributionTellsTheHospitalHowManyUnitsArrivedAndHowManyAreLeft() {
         User hospitalStaff = user("Isatu Turay");
-        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+        when(userRepository.findByRoleAndHospitalIdAndStatus(Role.HOSPITAL_STAFF, HOSPITAL_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(hospitalStaff));
         echoSavedNotifications();
 
@@ -546,7 +549,7 @@ class NotificationServiceTest {
         BloodBank otherBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
         when(bloodBankRepository.findAll()).thenReturn(List.of(contributor, otherBank));
         User otherBankStaff = user("Mohamed Kamara");
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(otherBankStaff));
         echoSavedNotifications();
 
@@ -558,7 +561,7 @@ class NotificationServiceTest {
         assertThat(rows.get(0).getRecipient()).isEqualTo(otherBankStaff);
         assertThat(rows.get(0).getMessage()).contains("1 unit still needed");
         // Never back to the bank that made the contribution.
-        verify(userRepository, never()).findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID);
+        verify(userRepository, never()).findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE);
     }
 
     @Test
@@ -582,7 +585,7 @@ class NotificationServiceTest {
         BloodBank contributor = bank(BANK_ID, "Makeni Regional Blood Bank");
         BloodBank otherBank = bank(OTHER_BANK_ID, "Holy Spirit Blood Bank");
         when(bloodBankRepository.findAll()).thenReturn(List.of(contributor, otherBank));
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(user("Mohamed Kamara")));
         echoSavedNotifications();
 
@@ -595,7 +598,7 @@ class NotificationServiceTest {
 
     @Test
     void aRejectionSaysEveryBankDeclinedItAndTheRequestIsClosed() {
-        when(userRepository.findByRoleAndHospitalId(Role.HOSPITAL_STAFF, HOSPITAL_ID))
+        when(userRepository.findByRoleAndHospitalIdAndStatus(Role.HOSPITAL_STAFF, HOSPITAL_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(user("Isatu Turay")));
         echoSavedNotifications();
 
@@ -619,7 +622,7 @@ class NotificationServiceTest {
     @Test
     void everyWrittenRowIsAlsoHandedToThePublisher() {
         User staff = user("Aminata Kamara");
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(staff));
         echoSavedNotifications();
 
@@ -635,9 +638,9 @@ class NotificationServiceTest {
         User shared = user("Aminata Kamara");
         when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
             .thenReturn(List.of(BANK_ID, OTHER_BANK_ID));
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(shared));
-        when(userRepository.findByRoleAndBloodBankId(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID))
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(shared));
         echoSavedNotifications();
 

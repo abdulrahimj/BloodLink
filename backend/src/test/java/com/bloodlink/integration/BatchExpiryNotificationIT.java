@@ -286,8 +286,8 @@ class BatchExpiryNotificationIT {
 
         assertThat(messages(staff, NotificationType.LOW_STOCK_ALERT)).hasSize(2);
         assertThat(messages(staff, NotificationType.BATCH_EXPIRED)).hasSize(1);
-        // Low-stock alerts still go to every staff account of the bank, as before (Business Rule 26 changes nothing there).
-        assertThat(messages(suspendedStaff, NotificationType.LOW_STOCK_ALERT)).hasSize(2);
+        // Like every notification, low-stock alerts reach active accounts only.
+        assertThat(messages(suspendedStaff, NotificationType.LOW_STOCK_ALERT)).isEmpty();
     }
 
     // ---------- helpers ----------
