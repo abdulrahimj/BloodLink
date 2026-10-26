@@ -111,9 +111,9 @@ public class SecurityConfig {
                     Role.HOSPITAL_STAFF.name(), Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
 
                 // --- Donor lookup for "Record Donation" ---
-                // Bank staff may find any donor, a donor may not; matched before the rule below.
-                .requestMatchers(HttpMethod.GET, "/api/donors/lookup")
-                    .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
+                // Bank staff only, like Record Donation itself (Business Rule 8): not ADMIN, hospital staff or donors.
+                // Matched before the general /api/donors/** rule below.
+                .requestMatchers(HttpMethod.GET, "/api/donors/lookup").hasRole(Role.BLOOD_BANK_STAFF.name())
 
                 // --- A blood bank's own donor roster and each donor's history there ---
                 // Matched before the general /api/donors/** rule, like /lookup.

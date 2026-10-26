@@ -305,7 +305,7 @@ public class AdminUserService {
     }
 
     /**
-     * Sets one account's status; an administrator may not suspend their own account, which could lock everyone out.
+     * Sets one account's status; nobody may suspend their own account or the last active admin (everyone locked out).
      * A real change is logged as ACCOUNT_SUSPENDED or ACCOUNT_REACTIVATED; setting the same status records nothing.
      */
     @Transactional
@@ -319,6 +319,9 @@ public class AdminUserService {
         User user = userRepository.findById(targetUserId)
             .orElseThrow(() -> new NotFoundException("No user found for this id."));
         AccountStatus previous = user.getStatus();
+        if (newStatus == AccountStatus.SUSPENDED && previous == AccountStatus.ACTIVE && user.getRole() == Role.ADMIN) {
+            refuseIfLastActiveAdmin(targetUserId);
+        }
         user.setStatus(newStatus);
         User saved = userRepository.save(user);
 
@@ -332,5 +335,20 @@ public class AdminUserService {
             );
         }
         return AdminUserResponse.from(saved);
+    }
+
+    /**
+     * Refuses (409) to suspend the only active administrator, which would leave nobody able to administer.
+     * The active admins are locked first, so two admins suspending each other at the same moment cannot both win.
+     */
+    private void refuseIfLastActiveAdmin(UUID targetUserId) {
+        boolean anotherActiveAdmin = userRepository.lockByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE).stream()
+            .anyMatch(admin -> !admin.getId().equals(targetUserId));
+        if (!anotherActiveAdmin) {
+            throw new ConflictException(
+                "This is the last active administrator account, so it cannot be suspended. "
+                    + "Create or reactivate another administrator first."
+            );
+        }
     }
 }

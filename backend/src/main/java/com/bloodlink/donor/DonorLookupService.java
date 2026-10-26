@@ -3,9 +3,11 @@ package com.bloodlink.donor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.donor.dto.DonorLookupResponse;
 import com.bloodlink.repository.DonorRepository;
+import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
@@ -16,17 +18,20 @@ import com.bloodlink.web.error.NotFoundException;
 public class DonorLookupService {
 
     private final DonorRepository donorRepository;
+    private final ActingBankResolver actingBankResolver;
 
-    DonorLookupService(DonorRepository donorRepository) {
+    DonorLookupService(DonorRepository donorRepository, ActingBankResolver actingBankResolver) {
         this.donorRepository = donorRepository;
+        this.actingBankResolver = actingBankResolver;
     }
 
     /**
      * The donor registered against this phone (404 if none), matched after PhoneNumber.normalize, so either format works.
-     * A number that cannot be normalised is a 400 on phone, a different problem from no match.
+     * Active, assigned BLOOD_BANK_STAFF only (Business Rule 8), checked first; an unnormalisable number is a 400 on phone.
      */
     @Transactional(readOnly = true)
-    public DonorLookupResponse lookupByPhone(String phone) {
+    public DonorLookupResponse lookupByPhone(String phone, AuthenticatedUser principal) {
+        actingBankResolver.resolveForStockChange(principal, "look up donors");
         return donorRepository.findByUserPhoneWithUser(PhoneNumber.normalize(phone))
             .map(DonorLookupResponse::from)
             .orElseThrow(() -> new NotFoundException(

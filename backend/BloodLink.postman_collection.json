@@ -419,7 +419,7 @@
     },
     {
       "name": "Donor Lookup (Blood Bank)",
-      "description": "Finding a donor by phone before recording a donation. BLOOD_BANK_STAFF and ADMIN.",
+      "description": "Finding a donor by phone before recording a donation. Active BLOOD_BANK_STAFF only (Business Rule 8).",
       "item": [
         {
           "name": "Look Up Donor by Phone",
@@ -448,7 +448,7 @@
                 "value": "Bearer {{bankStaffToken}}"
               }
             ],
-            "description": "Exact match only, typed either way (local or `+232`). 404 if nobody matches. Saves the donor id to `donorLookupId` for Record Donation."
+            "description": "Active blood bank staff only: ADMIN, hospital staff and donors get 403, the same as Record Donation (Business Rule 8). Exact match only, typed either way (local or `+232`). 404 if nobody matches. Saves the donor id to `donorLookupId` for Record Donation."
           },
           "event": [
             {

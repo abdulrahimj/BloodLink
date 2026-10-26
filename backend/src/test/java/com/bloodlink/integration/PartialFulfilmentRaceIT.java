@@ -2,7 +2,6 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
@@ -10,7 +9,6 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -98,7 +96,7 @@ class PartialFulfilmentRaceIT {
     static void useAThrowawayDatabase(DynamicPropertyRegistry registry) throws Exception {
         runOnServer("drop database if exists " + DATABASE + " with (force)");
         runOnServer("create database " + DATABASE);
-        registry.add("spring.datasource.url", () -> serverUrl().replace("/postgres", "/" + DATABASE));
+        registry.add("spring.datasource.url", () -> TestDatabaseLogin.serverUrl().replace("/postgres", "/" + DATABASE));
     }
 
     @AfterAll
@@ -108,31 +106,13 @@ class PartialFulfilmentRaceIT {
         runOnServer("drop database if exists " + DATABASE + " with (force)");
     }
 
-    /** Runs one statement against the server's postgres database with the test profile's own credentials. */
+    /** Runs one statement against the server's postgres database with the test profile's own login. */
     private static void runOnServer(String sql) throws Exception {
-        Properties properties = testProperties();
         try (Connection connection = DriverManager.getConnection(
-                serverUrl(),
-                properties.getProperty("spring.datasource.username"),
-                properties.getProperty("spring.datasource.password"));
+                TestDatabaseLogin.serverUrl(), TestDatabaseLogin.username(), TestDatabaseLogin.password());
              Statement statement = connection.createStatement()) {
             statement.execute(sql);
         }
-    }
-
-    private static String serverUrl() {
-        String testUrl = testProperties().getProperty("spring.datasource.url");
-        return testUrl.substring(0, testUrl.lastIndexOf('/')) + "/postgres";
-    }
-
-    private static Properties testProperties() {
-        Properties properties = new Properties();
-        try (InputStream in = PartialFulfilmentRaceIT.class.getResourceAsStream("/application-test.properties")) {
-            properties.load(in);
-        } catch (Exception cannotRead) {
-            throw new IllegalStateException("application-test.properties is required for this test", cannotRead);
-        }
-        return properties;
     }
 
     // ---------- the race ----------

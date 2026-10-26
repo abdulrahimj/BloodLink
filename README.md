@@ -115,7 +115,12 @@ npm test                               # 3. frontend tests
 1. **Unit tests** check the backend's rules one piece at a time, with no database: eligibility, stock thresholds, earliest-expiry-first issuing, appeal cooldowns, phone and email formats, the JWT secret checks, and who may do what. They need nothing set up.
 2. **Integration tests** (every class whose name ends in `IT`) start the real backend against a real PostgreSQL database and check whole features end to end: requests filled by several banks, write-offs, the daily expiry notices, admin accounts and the audit log, reports, the donor roster, and who receives each notification. They need:
    - a database named `bloodlink_test`, created once: `CREATE DATABASE bloodlink_test;`
-   - PostgreSQL on `localhost:5432` with user `postgres`, password `root`, as set in `backend/src/test/resources/application-test.properties`. Two of the tests read that file directly, so if your login is different, change it in that file on your machine rather than in environment variables.
+   - PostgreSQL on `localhost:5432`. The tests sign in as user `postgres` with password `root` unless you set `BLOODLINK_TEST_DB_USERNAME` and `BLOODLINK_TEST_DB_PASSWORD` in the terminal you run them from. Every integration test uses these two variables, so with neither set nothing changes. In PowerShell, for that terminal only:
+
+     ```powershell
+     $env:BLOODLINK_TEST_DB_USERNAME = "your_user"
+     $env:BLOODLINK_TEST_DB_PASSWORD = "your_password"
+     ```
    - permission for that user to create databases: two tests make a throwaway database of their own (`bloodlink_race_test`, `bloodlink_migration_test`) and delete it when they finish.
 3. **Frontend tests** check the wording and logic kept in `frontend/src/lib/`: appeal messages, batch and write-off forms, pagination, reports and user-account filters. They use Node's built-in test runner and need nothing set up beyond `npm install`.
 

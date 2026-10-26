@@ -58,8 +58,8 @@ public class ActingBankResolver {
     }
 
     /**
-     * The bank whose stock the caller is changing (Add New Batch, write-off, Record Donation, CONTRIBUTE): active
-     * BLOOD_BANK_STAFF only, acting as their own bank, never ADMIN; the role is checked before anything is read.
+     * The bank whose stock the caller is changing (Add New Batch, write-off, Record Donation and its donor lookup,
+     * CONTRIBUTE): active BLOOD_BANK_STAFF only, as their own bank, never ADMIN; the role is checked before any read.
      */
     public BloodBank resolveForStockChange(AuthenticatedUser principal, String action) {
         refuseUnlessBankStaff(principal, action);

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.time.LocalDate;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,8 +49,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Stage 3b-2 (Business Rule 8): an ADMIN cannot record a donation or CONTRIBUTE (403, nothing written),
- * while bank staff still can and an ADMIN may still decline. @Transactional, rolled back.
+ * Stage 3b-2 (Business Rule 8): an ADMIN cannot look up a donor, record a donation or CONTRIBUTE (403, nothing
+ * written), while bank staff still can and an ADMIN may still decline. @Transactional, rolled back.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -135,6 +136,20 @@ class AdminStockLockoutIT {
         assertThat(batchesAt(otherBank)).isEqualTo(1);
     }
 
+    // ---------- Donor Lookup, the step before Record Donation ----------
+
+    @Test
+    void onlyBankStaffCanLookUpADonorByPhone() throws Exception {
+        Donor donor = donor();
+        String donorToken = signIn(donor.getUser());
+
+        for (String refused : List.of(adminToken, hospitalToken, donorToken)) {
+            lookUp(refused, donor).andExpect(status().isForbidden());
+        }
+        lookUp(staffToken, donor).andExpect(status().isOk())
+            .andExpect(jsonPath("$.donorId").value(donor.getId().toString()));
+    }
+
     // ---------- CONTRIBUTE ----------
 
     @Test
@@ -202,6 +217,11 @@ class AdminStockLockoutIT {
     }
 
     // ---------- helpers ----------
+
+    private ResultActions lookUp(String token, Donor donor) throws Exception {
+        return mockMvc.perform(get("/api/donors/lookup").param("phone", donor.getUser().getPhone())
+            .header("Authorization", bearer(token)));
+    }
 
     private ResultActions recordDonation(String token, Donor donor, UUID bloodBankId) throws Exception {
         Map<String, Object> body = new HashMap<>(Map.of(

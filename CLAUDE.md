@@ -380,7 +380,14 @@ BloodBank 1–N Notification (as appeal source)
    no bank id from the request is consulted. `ActingBankResolver.resolve`, under which an ADMIN names a
    bank to act for, is now used only for actions that move no blood: REJECT, donation appeals and the
    donor roster. Staff of one bank can never change another bank's stock: a `bloodBankId` they send is
-   ignored and they act as their own bank. Known limit, not addressed: an administrator creates staff
+   ignored and they act as their own bank.
+   - **Donor Lookup (`GET /api/donors/lookup`), the step before Record Donation, follows the same rule:**
+     active BLOOD_BANK_STAFF assigned to a bank only, refused with a 403 for ADMIN, HOSPITAL_STAFF and DONOR —
+     by SecurityConfig (BLOOD_BANK_STAFF only) and again in `DonorLookupService` through
+     `resolveForStockChange`, before any donor is read. It moves no blood itself, but an administrator cannot
+     record the donation it prepares, so showing them a donor's details would serve no task (data minimisation).
+
+   Known limit, not addressed: an administrator creates staff
    accounts and is shown their one-time password (Business Rule 14), so could sign in *as* that staff
    member; anything done that way is recorded against the staff account. There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
@@ -650,6 +657,13 @@ BloodBank 1–N Notification (as appeal source)
       saying so), and anything else (name, email, status) via the same capture-and-refuse approach as
       Business Rule 16. **Nor the caller's own account** (409): Business Rule 16 already keeps every
       account holder, admins included, from changing their own phone, and this must not be a side door.
+    - **There is always at least one active administrator.** The status PATCH refuses (409, nothing
+      written) an administrator suspending their own account, and suspending the **last active ADMIN**
+      ("This is the last active administrator account, so it cannot be suspended. …"). The second check
+      locks the active ADMIN rows first (`UserRepository.lockByRoleAndStatus`), so two administrators
+      suspending each other at the same moment cannot both succeed. No endpoint changes a role after
+      creation, so an administrator can never be demoted either. New ADMIN accounts are made by another
+      ADMIN through `POST /api/admin/users` (Business Rule 14); the first one by the demo seed or by hand.
     - **What is logged — the four actions, from day one:** ACCOUNT_CREATED (Business Rule 14's create),
       ACCOUNT_EDITED, ACCOUNT_SUSPENDED and ACCOUNT_REACTIVATED (the existing status PATCH) — each with
       the acting admin, the affected account, a human-readable `details` snapshot ("Phone changed from

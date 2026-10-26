@@ -7,12 +7,15 @@ import java.util.UUID;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+
+import jakarta.persistence.LockModeType;
 
 public interface UserRepository extends JpaRepository<User, UUID> {
 
@@ -39,6 +42,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findByRoleAndBloodBankIdAndStatus(Role role, UUID bloodBankId, AccountStatus status);
 
     List<User> findByRoleAndHospitalIdAndStatus(Role role, UUID hospitalId, AccountStatus status);
+
+    /**
+     * Every account with one role and status, row-locked until the transaction ends: the last-active-admin check
+     * locks the active admins so two suspending each other at once cannot both succeed.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.role = :role and u.status = :status")
+    List<User> lockByRoleAndStatus(@Param("role") Role role, @Param("status") AccountStatus status);
 
     /**
      * Every account with one role and status; only the fallback when no bank can cover a new request,

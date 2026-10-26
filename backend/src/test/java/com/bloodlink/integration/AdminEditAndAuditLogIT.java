@@ -2,6 +2,7 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -34,6 +35,7 @@ import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
+import com.bloodlink.admin.AdminUserService;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.audit.AuditLogService;
@@ -46,12 +48,15 @@ import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.AuditLogRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.web.error.ConflictException;
 
 import jakarta.persistence.EntityManager;
 // Jackson 3 under Spring Boot 4 — see the same note on BloodRequestLifecycleIT.
@@ -77,6 +82,7 @@ class AdminEditAndAuditLogIT {
     @Autowired private BloodBankRepository bloodBankRepository;
     @Autowired private AuditLogRepository auditLogRepository;
     @Autowired private AuditLogService auditLogService;
+    @Autowired private AdminUserService adminUserService;
     @Autowired private EntityManager entityManager;
     @Autowired @Qualifier("requestMappingHandlerMapping") private RequestMappingHandlerMapping handlerMapping;
 
@@ -375,6 +381,56 @@ class AdminEditAndAuditLogIT {
 
         assertThatThrownBy(() -> entityManager.createNativeQuery("truncate audit_log").executeUpdate())
             .hasStackTraceContaining("audit_log is append-only: TRUNCATE is not permitted");
+    }
+
+    // ---------- the last active administrator ----------
+
+    @Test
+    void anAdministratorCanSuspendAnotherWhileTheyThemselvesStayActive() throws Exception {
+        String token = signIn(seed("Admin Who Stays Active", Role.ADMIN));
+        User other = seed("Admin Being Suspended", Role.ADMIN);
+
+        setStatus(token, other.getId(), "SUSPENDED").andExpect(status().isOk());
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(userRepository.findById(other.getId()).orElseThrow().getStatus()).isEqualTo(AccountStatus.SUSPENDED);
+    }
+
+    @Test
+    void anAdministratorCannotSuspendThemselvesAndNothingChanges() throws Exception {
+        User admin = seed("Admin Trying To Leave", Role.ADMIN);
+        long auditBefore = auditLogRepository.count();
+
+        setStatus(signIn(admin), admin.getId(), "SUSPENDED").andExpect(status().isConflict());
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(userRepository.findById(admin.getId()).orElseThrow().getStatus()).isEqualTo(AccountStatus.ACTIVE);
+        assertThat(auditLogRepository.count()).isEqualTo(auditBefore);
+    }
+
+    @Test
+    void theLastActiveAdministratorCannotBeSuspendedAndNothingChanges() {
+        // The caller is an admin already suspended, the state left by two admins suspending each other at once.
+        User lastAdmin = seed("Last Active Admin", Role.ADMIN);
+        User caller = seed("Admin Suspended Meanwhile", Role.ADMIN);
+        caller.setStatus(AccountStatus.SUSPENDED);
+        userRepository.save(caller);
+        entityManager.flush();
+        assumeTrue(userRepository.lockByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE).size() == 1,
+            "bloodlink_test holds other active administrators, so no account here is the last one");
+        long auditBefore = auditLogRepository.count();
+
+        assertThatThrownBy(() -> adminUserService.updateStatus(
+                lastAdmin.getId(), AccountStatus.SUSPENDED, AuthenticatedUser.from(caller)))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("last active administrator");
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(userRepository.findById(lastAdmin.getId()).orElseThrow().getStatus()).isEqualTo(AccountStatus.ACTIVE);
+        assertThat(auditLogRepository.count()).isEqualTo(auditBefore);
     }
 
     // ---------- helpers ----------

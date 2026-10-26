@@ -1,17 +1,19 @@
 package com.bloodlink.donor;
 
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bloodlink.donor.dto.DonorLookupResponse;
+import com.bloodlink.security.AuthenticatedUser;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 /**
- * Donor lookup for "Record Donation": bank staff and ADMIN only, matched ahead of the general /api/donors/** rule.
+ * Donor lookup for "Record Donation": active blood bank staff only (Business Rule 8), ahead of /api/donors/**.
  * Kept out of DonorController, whose routes are all scoped to the caller's own record.
  */
 @RestController
@@ -33,8 +35,9 @@ public class DonorLookupController {
         @RequestParam
         @NotBlank(message = "Phone number is required")
         @Size(max = 32, message = "Phone number must be 32 characters or fewer")
-        String phone
+        String phone,
+        @AuthenticationPrincipal AuthenticatedUser principal
     ) {
-        return donorLookupService.lookupByPhone(phone);
+        return donorLookupService.lookupByPhone(phone, principal);
     }
 }

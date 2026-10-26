@@ -3,7 +3,6 @@ package com.bloodlink.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -15,7 +14,6 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Properties;
 import java.util.UUID;
 
 import org.flywaydb.core.Flyway;
@@ -336,27 +334,16 @@ class V19CutoverMigrationIT {
         return serverUrl().replace("/postgres", "/" + DATABASE);
     }
 
+    // The login the test profile resolves, so there is no second copy of it.
     private static String serverUrl() {
-        String testUrl = testProperties().getProperty("spring.datasource.url");
-        return testUrl.substring(0, testUrl.lastIndexOf('/')) + "/postgres";
+        return TestDatabaseLogin.serverUrl();
     }
 
     private static String username() {
-        return testProperties().getProperty("spring.datasource.username");
+        return TestDatabaseLogin.username();
     }
 
     private static String password() {
-        return testProperties().getProperty("spring.datasource.password");
-    }
-
-    /** The credentials the test profile already declares, so there is no second copy. */
-    private static Properties testProperties() {
-        Properties properties = new Properties();
-        try (InputStream in = V19CutoverMigrationIT.class.getResourceAsStream("/application-test.properties")) {
-            properties.load(in);
-        } catch (Exception cannotRead) {
-            throw new IllegalStateException("application-test.properties is required for this test", cannotRead);
-        }
-        return properties;
+        return TestDatabaseLogin.password();
     }
 }

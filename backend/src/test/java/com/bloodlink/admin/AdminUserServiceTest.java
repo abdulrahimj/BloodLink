@@ -567,6 +567,54 @@ class AdminUserServiceTest {
         assertThat(updated.status()).isEqualTo(AccountStatus.ACTIVE);
     }
 
+    // ---------- the last active administrator ----------
+
+    private static User activeAdmin() {
+        User user = donor();
+        user.setRole(Role.ADMIN);
+        return user;
+    }
+
+    @Test
+    void theLastActiveAdministratorCannotBeSuspendedAndNothingChanges() {
+        // Reached by a caller who is no longer active themselves, e.g. two admins suspending each other at once.
+        User lastAdmin = activeAdmin();
+        when(userRepository.findById(lastAdmin.getId())).thenReturn(Optional.of(lastAdmin));
+        when(userRepository.lockByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE)).thenReturn(List.of(lastAdmin));
+
+        assertThatThrownBy(() -> service.updateStatus(lastAdmin.getId(), AccountStatus.SUSPENDED, admin()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("last active administrator");
+
+        assertThat(lastAdmin.getStatus()).isEqualTo(AccountStatus.ACTIVE);
+        verify(userRepository, never()).save(any());
+        verifyNoInteractions(auditLogService);
+    }
+
+    @Test
+    void anAdministratorCanBeSuspendedWhileAnotherStaysActive() {
+        User target = activeAdmin();
+        User otherAdmin = activeAdmin();
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.lockByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE)).thenReturn(List.of(target, otherAdmin));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AdminUserResponse updated = service.updateStatus(target.getId(), AccountStatus.SUSPENDED, admin());
+
+        assertThat(updated.status()).isEqualTo(AccountStatus.SUSPENDED);
+    }
+
+    @Test
+    void suspendingAnAccountThatIsNotAnActiveAdministratorTakesNoAdminLock() {
+        User target = bankStaff();
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(target.getId(), AccountStatus.SUSPENDED, admin());
+
+        verify(userRepository, never()).lockByRoleAndStatus(any(), any());
+    }
+
     @Test
     void suspendingAnUnknownUserIsA404() {
         when(userRepository.findById(OTHER_USER_ID)).thenReturn(Optional.empty());
