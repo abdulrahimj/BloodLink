@@ -442,8 +442,8 @@ class NotificationServiceTest {
     }
 
     /**
-     * A group nobody registered as reports zero eligible and zero in recovery, which lets the dialog say
-     * "no donors registered" rather than "all eligible" (see appealReach.js).
+     * A group with no active donors reports zero eligible and zero in recovery, which lets the dialog say
+     * "no active donors" rather than "all eligible" (see appealReach.js).
      */
     @Test
     void aPreviewForAGroupWithNoRegisteredDonorsReportsZeroEligibleAndZeroInRecovery() {
