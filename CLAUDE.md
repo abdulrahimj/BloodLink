@@ -74,7 +74,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **In progress — batch-level stock redesign, Stage 4 of 6 done:** V19 cut stock over to batches (Business Rule 24) and every screen, rule, alert and report now reads usable batch stock; Stage 3 added the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 made every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8); Stage 4 built the frontend (the Inventory columns, the batch dialog with history and the write-off form, and the wording fixes — see Business Rule 24's "Frontend"). Still to come: Stage 5 README/Postman/chapter notes, Stage 6 V24 dropping `blood_inventory_pre_batches` (V20–V22 are the appeal-acceptance migrations, Business Rule 25; V23 the expiry notice types, Business Rule 26).
+> **Batch-level stock redesign — Stages 1 to 5 done, only Stage 6 remains.** Done: Stage 1 the batch tables (V18); Stage 2 the V19 cutover, after which every screen, rule, alert and report reads usable batch stock (Business Rule 24); Stage 3 the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8); Stage 3c the daily batch expiry notices (Business Rule 26, V23); Stage 4 the frontend (see Business Rule 24's "Frontend"); then every notification sent to active accounts only (see the WebSocket section above); Stage 5 the README, the Postman collection and this file brought up to date. **Remaining: Stage 6, V24 dropping `blood_inventory_pre_batches`.** V20–V22 are the appeal-acceptance migrations (Business Rule 25).
 
 ### User
 | field | type |
@@ -387,8 +387,8 @@ BloodBank 1–N Notification (as appeal source)
 9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`,
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
    hospital automatically — a hospital cannot submit a request on another hospital's behalf. Hospital
-   staff only see their own hospital's requests; blood bank staff see every unclaimed request
-   (`fulfilled_by_blood_bank_id IS NULL`) plus anything their own bank has already approved or fulfilled.
+   staff only see their own hospital's requests; what blood bank staff see is set by Business Rule 20
+   (every request with units outstanding that their bank has not declined, plus any it contributed to).
 10. **Approving a request also requires sufficient stock at that moment** — **superseded by
     Business Rule 20, and no longer applicable.** There is no approval step: a bank issues units when
     it acts, so the stock check and the deduction are the same moment. The concern behind this rule —

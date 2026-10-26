@@ -2,45 +2,28 @@
   "info": {
     "name": "BloodLink API",
     "_postman_id": "b1000d10-0000-4000-8000-000000000001",
-    "description": "Every endpoint in the BloodLink backend (Spring Boot 4 / Java 25), organised by module exactly as the codebase is: auth, donor (self), donor lookup, blood banks, hospitals, inventory, blood requests, appeals, notifications, admin (users + reports), and donations.\n\n**Auth model.** Every route except `/api/health`, `/api/auth/register` and `/api/auth/login` requires a bearer token. The **Register** and **Login** requests in the Auth folder each carry a small test script that reads the response and saves the token into a collection variable named after the account's role — `donorToken`, `hospitalStaffToken`, `bankStaffToken` or `adminToken` — plus `<role>UserId`, `<role>BloodBankId` / `<role>HospitalId` where relevant. Every other request in this collection authenticates with `{{donorToken}}`, `{{bankStaffToken}}`, etc., so running Register/Login once per role wires up the rest of the collection automatically.\n\n**Roles CLAUDE.md's schema does not let you self-register.** Only DONOR accounts can be created via `POST /api/auth/register`. HOSPITAL_STAFF, BLOOD_BANK_STAFF and ADMIN accounts have no creation endpoint at all — in this project they only ever exist by a direct database insert (an administrator's own account-management tooling, or a developer seeding one by hand). To exercise the Blood Bank / Hospital / Admin folders, first register a donor, then promote that same account by hand, e.g.:\n\n```sql\ndelete from donors where user_id = '<the user id>';\nupdate users set role = 'BLOOD_BANK_STAFF', blood_bank_id = '11111111-1111-1111-1111-111111111111' where id = '<the user id>';\n```\n\n(`11111111-…` is Makeni Regional Blood Bank's fixed seed id — see `V4__seed_blood_banks.sql`; `33333333-…` is Makeni Regional Hospital's, from `V6__seed_hospitals.sql`. Both blood bank ids and both hospital ids are collection variables below, pre-filled with these seeded values.) Then re-run **Login** for that phone number to capture a fresh, role-correct token.\n\n**Blood group values in URLs.** Wherever a blood group is a path or query parameter (never in a JSON body, which needs no special handling), the literal `+` must be percent-encoded as `%2B` — a raw `+` in a URL decodes as a space server-side. Every request below that needs this already has it built in.\n\n**Error shape.** Every failure — 400, 401, 403, 404, 409, or an unexpected 500 — returns the same JSON shape: `{ timestamp, status, error, message, fieldErrors? }`. `fieldErrors` is present only for a validation failure (a bad request body field, or a constrained query parameter), mapping the failing field name to a message safe to show directly to a user.\n\n**Real-time channel.** `/ws` (STOMP over SockJS) pushes the four Notification types live to a connected client. It is not a request/response endpoint and is not represented in this collection — see `WebSocketConfig` and `StompAuthChannelInterceptor` in the source. `GET /api/notifications` and `GET /api/notifications/unread-count` are this collection's way of reading what that channel would otherwise push.",
+    "description": "Every REST endpoint in the BloodLink backend (Spring Boot 4 / Java 25), grouped by module. Checked against the controllers at Stage 5 of the batch-stock work.\n\n**Quick start.** The phone and password variables are pre-filled with the demo accounts, so start the backend in demo mode (see the README) and run the four **Login as …** requests in the Auth folder. Each saves a token (`donorToken`, `hospitalStaffToken`, `bankStaffToken`, `adminToken`) that every other request uses.\n\n**Accounts.** Only donors register themselves (`POST /api/auth/register`). Hospital staff, blood bank staff and administrators are created by an administrator with **Admin > Users > Create Staff Account** (Business Rule 14), which returns a one-time password. On an empty database with no administrator yet, use demo mode instead.\n\n**Who may change stock.** Only active blood bank staff, at their own bank: Add New Batch, Write Off Units, Record Donation and Contribute Units. An administrator gets 403 on all four (Business Rule 8); administrators can still read stock, batches and batch history, and may decline a request on a named bank's behalf.\n\n**Blood groups in URLs.** In a path or query string, `+` must be written `%2B` (a raw `+` means a space). In a JSON body, write `O+` as normal. Every request below already does this.\n\n**Error shape.** Every failure (400, 401, 403, 404, 405, 409, 500) returns `{ timestamp, status, error, message, fieldErrors? }`. `fieldErrors` appears only for a validation failure and maps the field name to a message.\n\n**Real-time channel.** `/ws` (STOMP over SockJS) pushes all eight notification types to the user they are for, and only to active accounts. It is not a request/response endpoint, so it is not in this collection. Every push is also a stored notification, read with `GET /api/notifications`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080" },
-    { "key": "donorPhone", "value": "+232 76 910 001" },
-    { "key": "donorPassword", "value": "correct-horse-battery" },
-    { "key": "donorToken", "value": "" },
-    { "key": "donorUserId", "value": "" },
-    { "key": "hospitalStaffPhone", "value": "+232 76 910 002" },
-    { "key": "hospitalStaffPassword", "value": "correct-horse-battery" },
-    { "key": "hospitalStaffToken", "value": "" },
-    { "key": "hospitalStaffUserId", "value": "" },
-    { "key": "bankStaffPhone", "value": "+232 76 910 003" },
-    { "key": "bankStaffPassword", "value": "correct-horse-battery" },
-    { "key": "bankStaffToken", "value": "" },
-    { "key": "bankStaffUserId", "value": "" },
-    { "key": "adminPhone", "value": "+232 76 910 004" },
-    { "key": "adminPassword", "value": "correct-horse-battery" },
-    { "key": "adminToken", "value": "" },
-    { "key": "adminUserId", "value": "" },
-    { "key": "makeniBloodBankId", "value": "11111111-1111-1111-1111-111111111111", "description": "Makeni Regional Blood Bank — seeded, fixed id (V4)." },
-    { "key": "holySpiritBloodBankId", "value": "22222222-2222-2222-2222-222222222222", "description": "Holy Spirit Blood Bank — seeded, fixed id (V4)." },
-    { "key": "makeniHospitalId", "value": "33333333-3333-3333-3333-333333333333", "description": "Makeni Regional Hospital — seeded, fixed id (V6)." },
-    { "key": "holySpiritHospitalId", "value": "44444444-4444-4444-4444-444444444444", "description": "Holy Spirit Hospital — seeded, fixed id (V6)." },
-    { "key": "bloodRequestId", "value": "", "description": "Set automatically by \"Submit Blood Request\"." },
-    { "key": "notificationId", "value": "", "description": "Set by hand from a GET /api/notifications response — see that request's example." },
-    { "key": "donorLookupId", "value": "", "description": "Set automatically by \"Look Up Donor by Phone\" (Donor.id, for Record Donation)." },
-    { "key": "otherUserId", "value": "", "description": "Any user id other than the caller's own, for Admin > Suspend/Activate — set by hand from Admin > List All Users." }
-  ],
   "item": [
     {
       "name": "Health",
+      "description": "Public, no token.",
       "item": [
         {
           "name": "Health Check",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/health", "host": ["{{baseUrl}}"], "path": ["api", "health"] },
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "health"
+              ]
+            },
             "description": "Public, unauthenticated. Returns `{\"status\":\"ok\"}` when the application is up."
           }
         }
@@ -48,10 +31,35 @@
     },
     {
       "name": "Auth",
-      "description": "Public endpoints — no token required, and none accepted. Registration only ever creates a DONOR (CLAUDE.md: staff and admin accounts are never self-registered).",
+      "description": "Public: no token needed. Registration only ever creates a DONOR account.",
       "item": [
         {
           "name": "Register (Donor)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Aminata Kamara\",\n  \"phone\": \"{{newDonorPhone}}\",\n  \"email\": \"aminata.kamara@example.com\",\n  \"dateOfBirth\": \"1998-04-12\",\n  \"gender\": \"FEMALE\",\n  \"bloodType\": \"O+\",\n  \"address\": \"Wusum, Makeni\",\n  \"password\": \"{{donorPassword}}\"\n}"
+            },
+            "description": "Creates a donor and signs them in (201). `phone` is local (`076900005`) or international (`+232 76 900 005`) and is stored as `+232` plus 8 digits (Business Rule 13); a phone already registered is 409. `email` is optional: send `null` or leave it out (Business Rule 18). `bloodType` may be `null` if not known yet. `gender` is `MALE`, `FEMALE` or `PREFER_NOT_TO_SAY`. `password` is 8–72 characters. Saves the token to `donorToken`."
+          },
           "event": [
             {
               "listen": "test",
@@ -67,20 +75,35 @@
                 ]
               }
             }
-          ],
-          "request": {
-            "method": "POST",
-            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"fullName\": \"Aminata Kamara\",\n  \"phone\": \"{{donorPhone}}\",\n  \"email\": \"aminata.kamara@example.com\",\n  \"dateOfBirth\": \"1998-04-12\",\n  \"gender\": \"FEMALE\",\n  \"bloodType\": \"O+\",\n  \"address\": \"Wusum, Makeni\",\n  \"password\": \"{{donorPassword}}\"\n}"
-            },
-            "description": "`bloodType` may be `null` for \"I don't know yet\" (Business Rule 4 — it is re-verified at every donation regardless). `gender` is one of `MALE`, `FEMALE`, `PREFER_NOT_TO_SAY`. On success (201), the token and user id are saved to `donorToken` / `donorUserId` automatically."
-          }
+          ]
         },
         {
-          "name": "Login",
+          "name": "Login as Donor",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{donorPhone}}\",\n  \"password\": \"{{donorPassword}}\"\n}"
+            },
+            "description": "Signs in as the donor account in `donorPhone` and saves its token to `donorToken` (and its id to `donorUserId`). A wrong phone or password is 401; a suspended account is 403."
+          },
           "event": [
             {
               "listen": "test",
@@ -99,50 +122,334 @@
                 ]
               }
             }
-          ],
+          ]
+        },
+        {
+          "name": "Login as Hospital Staff",
           "request": {
             "method": "POST",
-            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"phone\": \"{{donorPhone}}\",\n  \"password\": \"{{donorPassword}}\"\n}"
+              "raw": "{\n  \"phone\": \"{{hospitalStaffPhone}}\",\n  \"password\": \"{{hospitalStaffPassword}}\"\n}"
             },
-            "description": "Re-run this with `hospitalStaffPhone`/`hospitalStaffPassword`, `bankStaffPhone`/`bankStaffPassword` or `adminPhone`/`adminPassword` in the body (edit the raw JSON, or duplicate this request) once those accounts exist, to capture a token for each role. The response shape is identical to Register's."
+            "description": "Signs in as the hospital staff account in `hospitalStaffPhone` and saves its token to `hospitalStaffToken` (and its id to `hospitalStaffUserId`). A wrong phone or password is 401; a suspended account is 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    const roleKey = { DONOR: 'donor', HOSPITAL_STAFF: 'hospitalStaff', BLOOD_BANK_STAFF: 'bankStaff', ADMIN: 'admin' }[body.user.role];",
+                  "    if (roleKey) {",
+                  "        pm.collectionVariables.set(roleKey + 'Token', body.token);",
+                  "        pm.collectionVariables.set(roleKey + 'UserId', body.user.id);",
+                  "        pm.test('captured token for role ' + body.user.role, () => pm.expect(body.token).to.be.a('string'));",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Blood Bank Staff",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{bankStaffPhone}}\",\n  \"password\": \"{{bankStaffPassword}}\"\n}"
+            },
+            "description": "Signs in as the blood bank staff account in `bankStaffPhone` and saves its token to `bankStaffToken` (and its id to `bankStaffUserId`). A wrong phone or password is 401; a suspended account is 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    const roleKey = { DONOR: 'donor', HOSPITAL_STAFF: 'hospitalStaff', BLOOD_BANK_STAFF: 'bankStaff', ADMIN: 'admin' }[body.user.role];",
+                  "    if (roleKey) {",
+                  "        pm.collectionVariables.set(roleKey + 'Token', body.token);",
+                  "        pm.collectionVariables.set(roleKey + 'UserId', body.user.id);",
+                  "        pm.test('captured token for role ' + body.user.role, () => pm.expect(body.token).to.be.a('string'));",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Admin",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{adminPhone}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "description": "Signs in as the admin account in `adminPhone` and saves its token to `adminToken` (and its id to `adminUserId`). A wrong phone or password is 401; a suspended account is 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    const roleKey = { DONOR: 'donor', HOSPITAL_STAFF: 'hospitalStaff', BLOOD_BANK_STAFF: 'bankStaff', ADMIN: 'admin' }[body.user.role];",
+                  "    if (roleKey) {",
+                  "        pm.collectionVariables.set(roleKey + 'Token', body.token);",
+                  "        pm.collectionVariables.set(roleKey + 'UserId', body.user.id);",
+                  "        pm.test('captured token for role ' + body.user.role, () => pm.expect(body.token).to.be.a('string'));",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "My Account",
+      "description": "Profile Settings for every role (Business Rule 16). Acts only on the caller's own account: the id comes from the token.",
+      "item": [
+        {
+          "name": "Get My Account",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "Any signed-in role. Name, email, phone, role and facility of the caller's own account."
+          }
+        },
+        {
+          "name": "Update My Name and Email",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Aminata Kamara\",\n  \"email\": \"aminata.k@example.com\"\n}"
+            },
+            "description": "Changes `fullName` and `email` only. Email is lower-cased and must be unique (409 if another account has it). A donor may send `null` to have no email; every other role must keep one. Any other field (phone, role, facility, status, anything unknown) is refused with a 400 naming it, and nothing is saved."
+          }
+        },
+        {
+          "name": "Change My Password",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/api/users/me/password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "users",
+                "me",
+                "password"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{donorPassword}}\",\n  \"newPassword\": \"a-new-password-123\"\n}"
+            },
+            "description": "Needs the current password: a wrong one is 401 with a field error on `currentPassword` (this 401 does not sign the user out). `newPassword` is 8–72 characters and must differ from the current one (400). Tokens issued before the change stay valid until they expire."
           }
         }
       ]
     },
     {
       "name": "Donor (Self)",
-      "description": "Every route here is scoped to the caller by their own token — there is no id parameter, and no way to look up a different donor's profile from this folder. Requires DONOR (or ADMIN, though an admin has no donor profile to see).",
+      "description": "A donor's own profile and history, scoped by the token. DONOR (ADMIN is let through but has no donor profile).",
       "item": [
         {
           "name": "Get My Profile",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/donors/me", "host": ["{{baseUrl}}"], "path": ["api", "donors", "me"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{donorToken}}" }],
-            "description": "Dashboard summary: blood type, eligibility (Business Rule 2), totals, lives impacted, first/last donation dates."
+            "url": {
+              "raw": "{{baseUrl}}/api/donors/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "me"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "Dashboard summary: blood type, eligibility (Business Rule 2), totals, first and last donation dates."
           }
         },
         {
           "name": "Get My Donation History",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/donors/me/donations", "host": ["{{baseUrl}}"], "path": ["api", "donors", "me", "donations"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{donorToken}}" }],
-            "description": "Full history, most recent first. `bloodType` on each row is the group tested at that donation (Business Rule 4) — it can differ from, or exist where, the profile's own blood type does not."
+            "url": {
+              "raw": "{{baseUrl}}/api/donors/me/donations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "me",
+                "donations"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "Every donation, newest first. Each row's `bloodType` is the group tested at that donation (Business Rule 4)."
           }
         }
       ]
     },
     {
       "name": "Donor Lookup (Blood Bank)",
-      "description": "The one place a donor's details are shown to someone else — restricted to BLOOD_BANK_STAFF and ADMIN, the opposite of the Donor (Self) folder's rule. Feeds the Record Donation flow.",
+      "description": "Finding a donor by phone before recording a donation. BLOOD_BANK_STAFF and ADMIN.",
       "item": [
         {
           "name": "Look Up Donor by Phone",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/donors/lookup?phone={{donorPhone}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "phone",
+                  "value": "{{donorPhone}}"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Exact match only, typed either way (local or `+232`). 404 if nobody matches. Saves the donor id to `donorLookupId` for Record Donation."
+          },
           "event": [
             {
               "listen": "test",
@@ -155,31 +462,153 @@
                 ]
               }
             }
-          ],
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Donor Roster (Blood Bank)",
+      "description": "Donors who have given at least one donation at the caller's bank (Business Rule 21). BLOOD_BANK_STAFF for their own bank; an ADMIN must name the bank with `bloodBankId`. No address, email or date of birth is ever returned.",
+      "item": [
+        {
+          "name": "List Donor Roster",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/donors/lookup?phone={{donorPhone}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "donors", "lookup"],
-              "query": [{ "key": "phone", "value": "{{donorPhone}}" }]
+              "raw": "{{baseUrl}}/api/donors/roster?page=0&size=20&sort=lastDonation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "roster"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "0-based, default 0"
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "1–100, default 20"
+                },
+                {
+                  "key": "sort",
+                  "value": "lastDonation",
+                  "description": "lastDonation (default) or name"
+                },
+                {
+                  "key": "q",
+                  "value": "900",
+                  "description": "Name or part of a phone number",
+                  "disabled": true
+                },
+                {
+                  "key": "bloodType",
+                  "value": "O%2B",
+                  "description": "A blood group, URL-encoded",
+                  "disabled": true
+                },
+                {
+                  "key": "eligibility",
+                  "value": "ELIGIBLE",
+                  "description": "ELIGIBLE or IN_RECOVERY",
+                  "disabled": true
+                },
+                {
+                  "key": "bloodBankId",
+                  "value": "{{makeniBloodBankId}}",
+                  "description": "Required for ADMIN; ignored for bank staff",
+                  "disabled": true
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Exact phone match only — no browse, no partial-name search. 404 (with a message telling you what to do next) if nobody matches. On success, saves `donorId` to `donorLookupId` for the Donations folder."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "One page of the roster: `{ content, page, size, totalElements, totalPages }`. A bad parameter is a 400 naming it, never corrected. Tick the optional filters to try them. Saves the first donor's id to `rosterDonorId`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200 && pm.response.json().content.length) {",
+                  "    pm.collectionVariables.set('rosterDonorId', pm.response.json().content[0].donorId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Donor's Donations at This Bank",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/donors/roster/{{rosterDonorId}}/donations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "roster",
+                "{{rosterDonorId}}",
+                "donations"
+              ],
+              "query": [
+                {
+                  "key": "bloodBankId",
+                  "value": "{{makeniBloodBankId}}",
+                  "description": "Required for ADMIN; ignored for bank staff",
+                  "disabled": true
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "That donor's donations at this bank only, newest first, at most 50. A donor with no donation here is a 404, the same as an unknown id."
           }
         }
       ]
     },
     {
       "name": "Blood Banks",
-      "description": "Fixed, seeded reference data (CLAUDE.md — two banks, never self-registering). The plain listing is open to any signed-in role; the dashboard is staff-facing.",
+      "description": "Blood banks are created by an administrator (Admin > Facilities). The list is open to any signed-in role; the dashboard is for bank staff and administrators.",
       "item": [
         {
           "name": "List Blood Banks",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/blood-banks", "host": ["{{baseUrl}}"], "path": ["api", "blood-banks"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{donorToken}}" }],
-            "description": "Any signed-in role. The two seeded banks, for pickers and read-only display."
+            "url": {
+              "raw": "{{baseUrl}}/api/blood-banks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "blood-banks"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "Any signed-in role. Every blood bank, for pickers and display."
           }
         },
         {
@@ -188,24 +617,51 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/blood-banks/{{makeniBloodBankId}}/dashboard",
-              "host": ["{{baseUrl}}"], "path": ["api", "blood-banks", "{{makeniBloodBankId}}", "dashboard"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "blood-banks",
+                "{{makeniBloodBankId}}",
+                "dashboard"
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "BLOOD_BANK_STAFF or ADMIN only. The four Blood Bank Dashboard stat cards: total units, donations this month, pending requests, registered donors."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "BLOOD_BANK_STAFF or ADMIN. The dashboard stat cards: usable units, donations this month, open requests (pending and partly filled) and registered donors."
           }
         }
       ]
     },
     {
       "name": "Hospitals",
-      "description": "Fixed, seeded reference data (CLAUDE.md — two hospitals, never self-registering). No write path exists at all.",
+      "description": "Hospitals are created by an administrator (Admin > Facilities).",
       "item": [
         {
           "name": "List Hospitals",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/hospitals", "host": ["{{baseUrl}}"], "path": ["api", "hospitals"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{donorToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/hospitals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "hospitals"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
             "description": "Any signed-in role."
           }
         }
@@ -213,7 +669,7 @@
     },
     {
       "name": "Inventory",
-      "description": "Per-bank, per-blood-group stock — one row per (blood_bank_id, blood_type), not per unit. Reading is open to any signed-in role; writing is BLOOD_BANK_STAFF (own bank only) or ADMIN (any bank).",
+      "description": "Stock is held batch by batch, each batch with its own expiry date (Business Rule 24). Only usable units (not expired) are counted. Reading totals is open to any signed-in role; batch lists and history are for that bank's staff and administrators; changing stock is for that bank's active staff only, and an ADMIN gets 403.",
       "item": [
         {
           "name": "Get Bank Inventory",
@@ -221,10 +677,22 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "inventory", "{{makeniBloodBankId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}"
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Always all eight blood groups, even ones this bank has never stocked (those come back as zero units, status CRITICAL)."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Always all eight blood groups. Per group: usable units, status (Critical under 15, Low under 40, else Sufficient), the earliest usable expiry date, units expiring within 28 days, expired units awaiting write-off, the number of batches, and the Send Appeal state."
           }
         },
         {
@@ -233,10 +701,23 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}/summary",
-              "host": ["{{baseUrl}}"], "path": ["api", "inventory", "{{makeniBloodBankId}}", "summary"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}",
+                "summary"
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Total units, units expiring within 4 weeks, count of groups at CRITICAL, units issued this month, and a Sufficient/Low/Critical composition breakdown — backs the Blood Inventory detail page's stat cards and charts."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Usable units, units expiring within 28 days, expired units awaiting write-off, groups at Critical, units issued this month, and the Sufficient/Low/Critical breakdown."
           }
         },
         {
@@ -245,28 +726,176 @@
             "method": "PATCH",
             "url": {
               "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}/O%2B",
-              "host": ["{{baseUrl}}"], "path": ["api", "inventory", "{{makeniBloodBankId}}", "O%2B"],
-              "description": "The blood-type path segment is percent-encoded — `O%2B` is \"O+\". Swap for any of A%2B, A-, B%2B, B-, AB%2B, AB-, O-."
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}",
+                "O%2B"
+              ]
             },
             "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"unitsToAdd\": 10,\n  \"expiryDate\": \"2027-01-01\"\n}"
             },
-            "description": "Adds units to the (bank, group) row, creating it if the bank has never stocked that group. Business Rule 7: units accumulate, and the row's expiry becomes the *earlier* of its current expiry and this one — never extended. `unitsToAdd` must be 1–1000 (a typo guard, not a clinical limit); `expiryDate` must not be in the past. BLOOD_BANK_STAFF may only write to their own bank; the check is server-side regardless of which id is in the URL."
+            "description": "Creates a new batch with its own expiry date; nothing is merged. `unitsToAdd` is 1–1000. `expiryDate` must be today or later and at most 365 days away (400 otherwise). The blood group in the path is URL-encoded (`O%2B` is O+). Own bank only (403 for another bank's id). ADMIN: 403."
+          }
+        },
+        {
+          "name": "List Batches",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}/batches",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}",
+                "batches"
+              ],
+              "query": [
+                {
+                  "key": "bloodType",
+                  "value": "O%2B",
+                  "description": "Only this blood group, URL-encoded",
+                  "disabled": true
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "The bank's batches that still hold units, expired ones included, grouped by blood group and then earliest expiry first. Each shows units received and remaining, expiry date, state (USABLE, EXPIRING_SOON or EXPIRED), days to expiry and source (DONATION, MANUAL or MIGRATED). That bank's staff or ADMIN; hospitals and donors get 403. Saves the first batch's id to `batchId`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200 && pm.response.json().length) {",
+                  "    pm.collectionVariables.set('batchId', pm.response.json()[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Batch History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}/batches/{{batchId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}",
+                "batches",
+                "{{batchId}}"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "One batch as it stands, plus where its units went: issues to hospital requests and write-offs (who, when, why). That bank's staff or ADMIN. A batch of another bank asked for under this bank is a 404."
+          }
+        },
+        {
+          "name": "Write Off Units",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/inventory/{{makeniBloodBankId}}/batches/{{batchId}}/write-offs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "inventory",
+                "{{makeniBloodBankId}}",
+                "batches",
+                "{{batchId}}",
+                "write-offs"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"units\": 1,\n  \"reason\": \"DAMAGED\",\n  \"note\": \"Bag punctured in storage.\"\n}"
+            },
+            "description": "Takes units off one batch and records why (201). `units` is 1 up to what is left; more is a 409 naming what is left. `reason` is `EXPIRED`, `DAMAGED`, `FAILED_TESTING`, `DATA_ENTRY_ERROR` or `OTHER`. `note` is optional (500 characters at most) but required for `OTHER`. Expired batches can be written off. Recorded in the audit log as STOCK_WRITTEN_OFF; cannot be undone. Own bank's active staff only; ADMIN: 403."
           }
         }
       ]
     },
     {
       "name": "Blood Requests",
-      "description": "The hospital-to-blood-bank sequence (Figure 3.5, Business Rules 5 & 6). HOSPITAL_STAFF submit and track; BLOOD_BANK_STAFF and ADMIN approve, reject or fulfil.",
+      "description": "Hospitals raise requests; any blood bank with stock contributes units until the request is covered (Business Rule 20). Status is PENDING, PARTIALLY_FULFILLED, FULFILLED or REJECTED, worked out from the contributions.",
       "item": [
         {
           "name": "Submit Blood Request",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{hospitalStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bloodType\": \"O+\",\n  \"unitsRequested\": 3,\n  \"urgencyLevel\": \"URGENT\",\n  \"patientReference\": \"Maternity Ward - Bed 4\"\n}"
+            },
+            "description": "HOSPITAL_STAFF only (201). The caller's own hospital is stamped on by the server. `urgencyLevel` is `ROUTINE`, `URGENT` or `EMERGENCY`. `unitsRequested` is 1–500. `patientReference` is optional, 255 characters at most. Saves the new id to `bloodRequestId`."
+          },
           "event": [
             {
               "listen": "test",
@@ -279,31 +908,29 @@
                 ]
               }
             }
-          ],
-          "request": {
-            "method": "POST",
-            "url": { "raw": "{{baseUrl}}/api/requests", "host": ["{{baseUrl}}"], "path": ["api", "requests"] },
-            "header": [
-              { "key": "Authorization", "value": "Bearer {{hospitalStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"bloodType\": \"O+\",\n  \"unitsRequested\": 3,\n  \"urgencyLevel\": \"URGENT\",\n  \"patientReference\": \"Maternity Ward — Bed 4\"\n}"
-            },
-            "description": "HOSPITAL_STAFF only. No hospital id in the body — the caller's own hospital is stamped on server-side. `urgencyLevel` is one of `ROUTINE`, `URGENT`, `EMERGENCY`. `unitsRequested` is 1–500 (typo guard). `patientReference` is optional free text, max 255 characters. Starts `PENDING` with no fulfilling bank. Saves the new id to `bloodRequestId`."
-          }
+          ]
         },
         {
-          "name": "List Requests (mine / actionable)",
+          "name": "List Requests",
           "request": {
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/requests",
-              "host": ["{{baseUrl}}"], "path": ["api", "requests"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests"
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{hospitalStaffToken}}" }],
-            "description": "HOSPITAL_STAFF see only their own hospital's requests. BLOOD_BANK_STAFF see every unclaimed request plus any their own bank has already claimed (Business Rule 6) — switch the Authorization header to `{{bankStaffToken}}` to see that view instead. ADMIN see everything, or one bank's actionable scope via `?bloodBankId=`."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{hospitalStaffToken}}"
+              }
+            ],
+            "description": "Hospital staff see their own hospital's requests, with how many units have arrived and from which banks. Switch the token to `{{bankStaffToken}}` for a bank's view: every request with units outstanding that the bank has not declined, plus requests it has contributed to."
           }
         },
         {
@@ -312,75 +939,98 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/requests?bloodBankId={{makeniBloodBankId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "requests"],
-              "query": [{ "key": "bloodBankId", "value": "{{makeniBloodBankId}}" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests"
+              ],
+              "query": [
+                {
+                  "key": "bloodBankId",
+                  "value": "{{makeniBloodBankId}}"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
-            "description": "`bloodBankId` is a view filter, meaningful only for ADMIN or bank staff not yet assigned a bank — it never widens what an assigned staff member can see."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "description": "`bloodBankId` shows one bank's view. It matters only for ADMIN (or bank staff with no bank yet); assigned staff always see their own bank."
           }
         },
         {
-          "name": "Approve Request",
+          "name": "Contribute Units",
           "request": {
             "method": "PATCH",
             "url": {
               "raw": "{{baseUrl}}/api/requests/{{bloodRequestId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "requests", "{{bloodRequestId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{bloodRequestId}}"
+              ]
             },
             "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"action\": \"APPROVE\",\n  \"bloodBankId\": null\n}"
+              "raw": "{\n  \"action\": \"CONTRIBUTE\",\n  \"units\": 2\n}"
             },
-            "description": "PENDING -> APPROVED (Business Rule 5). Claims the request for the acting bank and takes it out of every other bank's queue. Requires enough stock right now, though nothing is deducted until Fulfil. `bloodBankId` is ignored for BLOOD_BANK_STAFF (their own bank always wins) and required only for ADMIN."
+            "description": "Issues units from the caller's bank to the request, earliest-expiring batch first, and updates its status. Units above what is still outstanding are capped, not refused. More than the bank's usable stock is a 409 naming the usable and expired units. A bank that declined cannot contribute (409). Active bank staff only, acting as their own bank; ADMIN: 403."
           }
         },
         {
-          "name": "Fulfil Request",
+          "name": "Decline Request",
           "request": {
             "method": "PATCH",
             "url": {
               "raw": "{{baseUrl}}/api/requests/{{bloodRequestId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "requests", "{{bloodRequestId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "{{bloodRequestId}}"
+              ]
             },
             "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"action\": \"FULFIL\",\n  \"bloodBankId\": null\n}"
-            },
-            "description": "APPROVED -> FULFILLED. The only action that actually deducts stock — re-checked against current inventory, not trusted from Approve. Only the bank that approved may fulfil."
-          }
-        },
-        {
-          "name": "Reject Request",
-          "request": {
-            "method": "PATCH",
-            "url": {
-              "raw": "{{baseUrl}}/api/requests/{{bloodRequestId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "requests", "{{bloodRequestId}}"]
-            },
-            "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"action\": \"REJECT\",\n  \"bloodBankId\": null\n}"
             },
-            "description": "Declines the request on behalf of the acting blood bank — per Business Rule 11 this is per-bank, not shared. It writes a `blood_request_declines` row and removes the request from THIS bank's queue only; the request stays PENDING and fully actionable for every other bank. It becomes REJECTED (and the hospital is notified) only once every blood bank has declined it. Declining twice as the same bank returns 409. Run against a request that is still PENDING (this example reuses `{{bloodRequestId}}`, which the Approve/Fulfil requests above will already have moved past PENDING — submit a fresh request first if you want to see this succeed)."
+            "description": "This bank cannot help (Business Rule 11). The request leaves this bank's queue only and stays open for the others; it becomes REJECTED only when every bank has declined an untouched (PENDING) request. Declining twice, or after contributing, is a 409. Bank staff act as their own bank (`bloodBankId` ignored). An ADMIN may decline on a bank's behalf by giving `bloodBankId`."
           }
         }
       ]
     },
     {
       "name": "Appeals",
-      "description": "A blood bank asking donors of one group to come in (Business Rule 1: Blood Bank -> Donor only, never Hospital -> Donor). Restricted to BLOOD_BANK_STAFF and ADMIN.",
+      "description": "A blood bank asking eligible donors of one group to come in (Business Rules 1, 2 and 12). BLOOD_BANK_STAFF and ADMIN.",
       "item": [
         {
           "name": "Preview Appeal Reach",
@@ -388,60 +1038,152 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/api/appeals/reach?bloodType=O%2B",
-              "host": ["{{baseUrl}}"], "path": ["api", "appeals", "reach"],
-              "query": [{ "key": "bloodType", "value": "O%2B" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "appeals",
+                "reach"
+              ],
+              "query": [
+                {
+                  "key": "bloodType",
+                  "value": "O%2B"
+                }
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Sends nothing — reports how many eligible donors an appeal for this group would reach right now, and how many are excluded because they are inside Business Rule 2's 90-day recovery window. Backs the confirmation step before actually sending."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Sends nothing. How many active, eligible donors an appeal for this group would reach, and how many are held back inside the 90-day recovery window. Suspended donors are counted in neither."
           }
         },
         {
           "name": "Send Donation Appeal",
           "request": {
             "method": "POST",
-            "url": { "raw": "{{baseUrl}}/api/appeals", "host": ["{{baseUrl}}"], "path": ["api", "appeals"] },
+            "url": {
+              "raw": "{{baseUrl}}/api/appeals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "appeals"
+              ]
+            },
             "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"bloodType\": \"O+\",\n  \"note\": \"Donation drive at the lab this Saturday, 9am to 4pm.\",\n  \"bloodBankId\": null\n}"
             },
-            "description": "Notifies every *eligible* donor of this group — never a donor still inside their recovery window, regardless of how the appeal was sent. `note` is optional free text, max 280 characters. The response reports how many were notified and how many were skipped as ineligible.\n\n**Rate-limited per (bank, blood group) — Business Rule 12.** Two things return 409 here rather than sending anything:\n\n- **No shortage:** the acting bank holds 30 units or more of this group. Note this is *not* the Business Rule 3 badge threshold — a group at 30–39 units still shows a \"Low\" badge on the Inventory screen and still cannot be appealed for.\n- **Cooldown still running:** this bank already appealed for this group recently. The window is 5 hours if stock was under 15 units at that send (CRITICAL tier) or 24 hours if it was 15–29 (LOW tier), and it is cleared for good the moment stock climbs back over the threshold that triggered it (15 or 30 respectively) — a group that recovers and then falls short again is a new shortage, free to appeal immediately rather than serving out the old timer.\n\nA successful send writes or overwrites the bank's `appeal_cooldowns` row for this group, which is what the Inventory screen reads to decide whether its Send Appeal button is live or shows \"Appeal Sent.\". To see a 409 for yourself, send this twice in a row against a group the bank is short of."
+            "description": "Notifies every active, eligible donor of the group (201) with a receipt of how many were notified and skipped. `note` is optional, 280 characters at most. Bank staff act as their own bank; an ADMIN must give `bloodBankId`.\n\nRefused with 409 when the bank has 30 or more usable units of the group (no shortage), or when a recent appeal's cooldown is still running: 5 hours if it was sent under 15 units, 24 hours if under 30. The cooldown ends early once stock climbs back over that level."
           }
         }
       ]
     },
     {
       "name": "Notifications",
-      "description": "The REST side of the bell icon — what fills it on page load and how it is cleared. The live WebSocket push (`/ws`) is the other half; see the collection description.",
+      "description": "The stored side of the bell: every notification is a row, whether or not it was also pushed live. Notifications only ever go to active accounts.",
       "item": [
         {
           "name": "List My Notifications",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/notifications", "host": ["{{baseUrl}}"], "path": ["api", "notifications"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Any signed-in role — all four receive some notification type. Up to the 50 most recent, newest first. Copy an `id` from the response into the `notificationId` collection variable to try \"Mark One Read\" below."
-          }
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Any signed-in role. The 50 most recent, newest first. Saves the first id to `notificationId`; with a donor token it also saves the first appeal not yet accepted to `appealNotificationId`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const rows = pm.response.json();",
+                  "    if (rows.length) pm.collectionVariables.set('notificationId', rows[0].id);",
+                  "    const appeal = rows.find(r => r.type === 'DONATION_APPEAL' && !r.accepted);",
+                  "    if (appeal) pm.collectionVariables.set('appealNotificationId', appeal.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get Unread Count",
           "request": {
             "method": "GET",
-            "url": { "raw": "{{baseUrl}}/api/notifications/unread-count", "host": ["{{baseUrl}}"], "path": ["api", "notifications", "unread-count"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Just the bell's badge number."
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/unread-count",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "unread-count"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "The bell's badge number."
           }
         },
         {
           "name": "Mark All Read",
           "request": {
             "method": "PATCH",
-            "url": { "raw": "{{baseUrl}}/api/notifications/read-all", "host": ["{{baseUrl}}"], "path": ["api", "notifications", "read-all"] },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Clears every unread notification for the caller. Returns the resulting count (zero)."
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/read-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "read-all"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Marks every unread notification of the caller as read."
           }
         },
         {
@@ -450,28 +1192,215 @@
             "method": "PATCH",
             "url": {
               "raw": "{{baseUrl}}/api/notifications/{{notificationId}}",
-              "host": ["{{baseUrl}}"], "path": ["api", "notifications", "{{notificationId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "{{notificationId}}"
+              ]
             },
-            "header": [{ "key": "Authorization", "value": "Bearer {{bankStaffToken}}" }],
-            "description": "Set `notificationId` first (see \"List My Notifications\"). A notification belonging to someone else is a 404, not a 403 — the caller has no business learning it exists."
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "Run List My Notifications first. Someone else's notification is a 404, not a 403."
+          }
+        },
+        {
+          "name": "Accept Donation Appeal",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/notifications/{{appealNotificationId}}/accept",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "{{appealNotificationId}}",
+                "accept"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "DONOR only (Business Rule 25). Run List My Notifications with `{{donorToken}}` first. Marks the appeal accepted and read, and tells the sending bank's active staff. Safe to repeat: the staff are told once. Refused with 409 if the donor is not eligible; another user's notification, or one that is not an appeal, is a 404. Accepting books nothing; the donation is still recorded by bank staff."
           }
         }
       ]
     },
     {
       "name": "Admin",
-      "description": "Every route here requires ADMIN.",
+      "description": "Every route here requires ADMIN (any other role 403, no token 401).",
       "item": [
         {
           "name": "Users",
+          "description": "Staff and administrator accounts (Business Rules 14, 17 and 22). Every change is written to the audit log.",
           "item": [
             {
-              "name": "List All Users",
+              "name": "List Users",
               "request": {
                 "method": "GET",
-                "url": { "raw": "{{baseUrl}}/api/admin/users", "host": ["{{baseUrl}}"], "path": ["api", "admin", "users"] },
-                "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
-                "description": "Every account across all four roles, with its linked blood_bank_id/hospital_id where applicable. Copy an `id` other than `{{adminUserId}}` into the `otherUserId` variable to try the suspend/activate request below — an administrator cannot suspend their own account (409)."
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/users?page=0&size=13&sort=name&direction=asc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "0",
+                      "description": "0-based, default 0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "13",
+                      "description": "1–100, default 13"
+                    },
+                    {
+                      "key": "sort",
+                      "value": "name",
+                      "description": "name, role, createdAt or status"
+                    },
+                    {
+                      "key": "direction",
+                      "value": "asc",
+                      "description": "asc or desc"
+                    },
+                    {
+                      "key": "q",
+                      "value": "kamara",
+                      "description": "Name, email, or part of a phone number",
+                      "disabled": true
+                    },
+                    {
+                      "key": "role",
+                      "value": "BLOOD_BANK_STAFF",
+                      "description": "DONOR, HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN",
+                      "disabled": true
+                    },
+                    {
+                      "key": "status",
+                      "value": "ACTIVE",
+                      "description": "ACTIVE or SUSPENDED",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "One page of accounts: `{ content, page, size, totalElements, totalPages }`. A bad parameter is a 400 naming it. No password hash is ever returned. Saves the first account that is not the caller's own to `otherUserId`."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 200) {",
+                      "    const me = pm.collectionVariables.get('adminUserId');",
+                      "    const other = pm.response.json().content.find(u => u.id !== me);",
+                      "    if (other) pm.collectionVariables.set('otherUserId', other.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Create Staff Account",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/users",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"fullName\": \"Mohamed Bangura\",\n  \"phone\": \"076910005\",\n  \"email\": \"mohamed.bangura@example.com\",\n  \"role\": \"BLOOD_BANK_STAFF\",\n  \"bloodBankId\": \"{{makeniBloodBankId}}\",\n  \"hospitalId\": null\n}"
+                },
+                "description": "Creates a HOSPITAL_STAFF, BLOOD_BANK_STAFF or ADMIN account (201); DONOR is refused. `bloodBankId` is required for BLOOD_BANK_STAFF and forbidden otherwise; `hospitalId` the same for HOSPITAL_STAFF; ADMIN takes neither. Email is required. A phone or email already in use is a 409. The response holds `temporaryPassword`, shown this once only. Saves the new account's id to `otherUserId`."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 201) {",
+                      "    pm.collectionVariables.set('otherUserId', pm.response.json().account.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Edit Account Details",
+              "request": {
+                "method": "PATCH",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/users/{{otherUserId}}/details",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users",
+                    "{{otherUserId}}",
+                    "details"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phone\": \"076910006\",\n  \"bloodBankId\": \"{{holySpiritBloodBankId}}\",\n  \"hospitalId\": null\n}"
+                },
+                "description": "Changes another account's phone and facility. Send the full wanted state: the phone, plus the facility the account's role needs (this example suits a blood bank staff account). Role cannot be changed (400), nor the caller's own account (409). A phone already in use is a 409."
               }
             },
             {
@@ -480,14 +1409,31 @@
                 "method": "PATCH",
                 "url": {
                   "raw": "{{baseUrl}}/api/admin/users/{{otherUserId}}",
-                  "host": ["{{baseUrl}}"], "path": ["api", "admin", "users", "{{otherUserId}}"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users",
+                    "{{otherUserId}}"
+                  ]
                 },
                 "header": [
-                  { "key": "Authorization", "value": "Bearer {{adminToken}}" },
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
-                "body": { "mode": "raw", "raw": "{\n  \"status\": \"SUSPENDED\"\n}" },
-                "description": "Takes effect immediately — the account's existing token is rejected on its very next request (JwtAuthenticationFilter checks status on every one), not only at its next login attempt."
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"SUSPENDED\"\n}"
+                },
+                "description": "Takes effect at once: the account's token is refused on its next request, and it receives no notifications. An administrator cannot suspend their own account (409)."
               }
             },
             {
@@ -496,37 +1442,486 @@
                 "method": "PATCH",
                 "url": {
                   "raw": "{{baseUrl}}/api/admin/users/{{otherUserId}}",
-                  "host": ["{{baseUrl}}"], "path": ["api", "admin", "users", "{{otherUserId}}"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users",
+                    "{{otherUserId}}"
+                  ]
                 },
                 "header": [
-                  { "key": "Authorization", "value": "Bearer {{adminToken}}" },
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
-                "body": { "mode": "raw", "raw": "{\n  \"status\": \"ACTIVE\"\n}" },
-                "description": "Reverses a suspension. `status` is `ACTIVE` or `SUSPENDED` — the only two values `AccountStatus` allows."
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+                },
+                "description": "Reverses a suspension. `status` is `ACTIVE` or `SUSPENDED`."
               }
             }
           ]
         },
         {
+          "name": "Facilities",
+          "description": "Adding blood banks and hospitals (Business Rule 19). Create only: there is no edit or delete.",
+          "item": [
+            {
+              "name": "Create Blood Bank",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/blood-banks",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "blood-banks"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Bombali District Blood Bank\",\n  \"location\": \"Makeni\",\n  \"contactPhone\": \"076 555 100\"\n}"
+                },
+                "description": "201 with the new bank. All three fields are required. The name is unique among blood banks, ignoring case and extra spaces (409). `contactPhone` is stored as typed. The bank starts with no stock."
+              }
+            },
+            {
+              "name": "Create Hospital",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/hospitals",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "hospitals"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Bombali Government Hospital\",\n  \"location\": \"Makeni\",\n  \"contactPhone\": \"076 555 200\"\n}"
+                },
+                "description": "201 with the new hospital. Same rules as Create Blood Bank; a hospital may share a name with a blood bank."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Audit Log",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/audit-log?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "audit-log"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0",
+                  "description": "0-based, default 0"
+                },
+                {
+                  "key": "size",
+                  "value": "20",
+                  "description": "1–100, default 20"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              }
+            ],
+            "description": "One page of the permanent audit log, newest first: account creation, edits, suspensions and reactivations, facility creation, and stock write-offs by bank staff (Business Rule 17). Read-only: any other method is 405."
+          }
+        },
+        {
           "name": "Reports",
+          "description": "Read-only figures, counted by the database. No donor's personal details appear anywhere (Business Rule 23).",
           "item": [
             {
               "name": "Donation Trends",
               "request": {
                 "method": "GET",
-                "url": { "raw": "{{baseUrl}}/api/admin/reports/donations", "host": ["{{baseUrl}}"], "path": ["api", "admin", "reports", "donations"] },
-                "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
-                "description": "Six months of citywide donation counts, oldest first, current month included. Every month appears even at zero — a quiet month is real data, not a gap."
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/donations",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "donations"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Donations per month for the last six months, oldest first, empty months included (the Dashboard chart)."
               }
             },
             {
               "name": "Request Outcomes",
               "request": {
                 "method": "GET",
-                "url": { "raw": "{{baseUrl}}/api/admin/reports/requests", "host": ["{{baseUrl}}"], "path": ["api", "admin", "reports", "requests"] },
-                "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
-                "description": "Citywide counts by outcome — pending, approved, fulfilled, rejected — plus their total, for the donut chart."
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/requests",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "requests"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Citywide request counts: pending, partly filled, fulfilled and rejected, plus the total (the Dashboard donut)."
+              }
+            },
+            {
+              "name": "User Counts",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/users",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "users"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "`{ total, donors, hospitalStaff, bloodBankStaff, admins }` (the Dashboard cards and role buttons)."
+              }
+            },
+            {
+              "name": "Stock Summary",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/stock",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "stock"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Citywide usable units per blood group with Critical/Low/Sufficient status, each bank's total and its Critical and Low group counts, units expiring within 28 days, and expired units awaiting write-off (shown, never counted as stock). As of today."
+              }
+            },
+            {
+              "name": "Requests Summary",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/requests",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "requests"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-05-01",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-10-26",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Requests created in the range, by status, blood group and urgency, the fulfilment rate (null when nothing was decided) and how many were filled by more than one bank. Default range: the 1st of the month five months back until today. A bad date, `from` after `to`, or more than five years is a 400."
+              }
+            },
+            {
+              "name": "Donations Summary",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/donations",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "donations"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-05-01",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-10-26",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Donations in the range per month, per blood bank and per tested blood group. Same range rules as Requests Summary."
+              }
+            },
+            {
+              "name": "Donors Summary",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/donors",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "donors"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Total donors, eligible now, in recovery, and per blood group (plus Unknown). As of today."
+              }
+            },
+            {
+              "name": "Stock Summary CSV",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/stock/export",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "stock",
+                    "export"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "The Stock Summary as a CSV file. Use Postman's Send and Download."
+              }
+            },
+            {
+              "name": "Requests Summary CSV",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/requests/export",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "requests",
+                    "export"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-05-01",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-10-26",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "The Requests Summary as a CSV file. Same range rules."
+              }
+            },
+            {
+              "name": "Donations Summary CSV",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/donations/export",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "donations",
+                    "export"
+                  ],
+                  "query": [
+                    {
+                      "key": "from",
+                      "value": "2026-05-01",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-10-26",
+                      "description": "ISO date, inclusive",
+                      "disabled": true
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "The Donations Summary as a CSV file. Same range rules."
+              }
+            },
+            {
+              "name": "Donors Summary CSV",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/reports/summary/donors/export",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "reports",
+                    "summary",
+                    "donors",
+                    "export"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "The Donors Summary as a CSV file."
               }
             }
           ]
@@ -535,25 +1930,175 @@
     },
     {
       "name": "Donations",
-      "description": "Recording a donation — the moment blood actually enters the system: a Donation row, the donor's last-donation date, and the bank's stock, all in one action. Restricted to BLOOD_BANK_STAFF and ADMIN.",
+      "description": "Recording a donation: a Donation row, the donor's last-donation date and a new stock batch, in one action. Active BLOOD_BANK_STAFF only; ADMIN gets 403 (Business Rule 8).",
       "item": [
         {
           "name": "Record Donation",
           "request": {
             "method": "POST",
-            "url": { "raw": "{{baseUrl}}/api/donations", "host": ["{{baseUrl}}"], "path": ["api", "donations"] },
+            "url": {
+              "raw": "{{baseUrl}}/api/donations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donations"
+              ]
+            },
             "header": [
-              { "key": "Authorization", "value": "Bearer {{bankStaffToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"donorId\": \"{{donorLookupId}}\",\n  \"bloodType\": \"O+\",\n  \"unitsDonated\": 1,\n  \"bloodBankId\": null\n}"
+              "raw": "{\n  \"donorId\": \"{{donorLookupId}}\",\n  \"bloodType\": \"O+\",\n  \"unitsDonated\": 1,\n  \"expiryDate\": null\n}"
             },
-            "description": "Run \"Look Up Donor by Phone\" first to populate `donorId` from `donorLookupId`. `bloodType` is the group **as tested today** — Business Rule 4 means this is never defaulted from the donor's stored profile, by design; you must state it explicitly even if it matches. `unitsDonated` is 1–10 (a typo guard). Refused with 409, and nothing written, if the donor is still inside their 90-day recovery window (Business Rule 2, enforced server-side regardless of what any UI shows). The donation date is always today, set by the server."
+            "description": "Run Look Up Donor by Phone first. `bloodType` is the group as tested today, always stated (Business Rule 4). `unitsDonated` is 1–10. `expiryDate` is optional: leave it `null` for donation date + 42 days, or give the bag label's date (today to 365 days ahead). The donor must be eligible: a donor inside the 90-day recovery window is a 409 and nothing is written. The donation is recorded at the caller's own bank, dated today."
           }
         }
       ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "donorPhone",
+      "value": "+232 76 900 006",
+      "description": "Demo donor (README, Demo sign-ins)."
+    },
+    {
+      "key": "donorPassword",
+      "value": "BloodLink@2026",
+      "description": "The shared demo password, public, demo data only."
+    },
+    {
+      "key": "donorToken",
+      "value": ""
+    },
+    {
+      "key": "donorUserId",
+      "value": ""
+    },
+    {
+      "key": "newDonorPhone",
+      "value": "+232 76 910 001",
+      "description": "A number no account has yet, for Register (Donor)."
+    },
+    {
+      "key": "hospitalStaffPhone",
+      "value": "+232 76 900 002",
+      "description": "Demo hospital staff, Makeni Regional Hospital."
+    },
+    {
+      "key": "hospitalStaffPassword",
+      "value": "BloodLink@2026"
+    },
+    {
+      "key": "hospitalStaffToken",
+      "value": ""
+    },
+    {
+      "key": "hospitalStaffUserId",
+      "value": ""
+    },
+    {
+      "key": "bankStaffPhone",
+      "value": "+232 76 900 004",
+      "description": "Demo blood bank staff, Makeni Regional Blood Bank."
+    },
+    {
+      "key": "bankStaffPassword",
+      "value": "BloodLink@2026"
+    },
+    {
+      "key": "bankStaffToken",
+      "value": ""
+    },
+    {
+      "key": "bankStaffUserId",
+      "value": ""
+    },
+    {
+      "key": "adminPhone",
+      "value": "+232 76 900 001",
+      "description": "Demo administrator."
+    },
+    {
+      "key": "adminPassword",
+      "value": "BloodLink@2026"
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "adminUserId",
+      "value": ""
+    },
+    {
+      "key": "makeniBloodBankId",
+      "value": "11111111-1111-1111-1111-111111111111",
+      "description": "Makeni Regional Blood Bank — seeded, fixed id (V4)."
+    },
+    {
+      "key": "holySpiritBloodBankId",
+      "value": "22222222-2222-2222-2222-222222222222",
+      "description": "Holy Spirit Blood Bank — seeded, fixed id (V4)."
+    },
+    {
+      "key": "makeniHospitalId",
+      "value": "33333333-3333-3333-3333-333333333333",
+      "description": "Makeni Regional Hospital — seeded, fixed id (V6)."
+    },
+    {
+      "key": "holySpiritHospitalId",
+      "value": "44444444-4444-4444-4444-444444444444",
+      "description": "Holy Spirit Hospital — seeded, fixed id (V6)."
+    },
+    {
+      "key": "bloodRequestId",
+      "value": "",
+      "description": "Set by Submit Blood Request."
+    },
+    {
+      "key": "batchId",
+      "value": "",
+      "description": "Set by List Batches."
+    },
+    {
+      "key": "notificationId",
+      "value": "",
+      "description": "Set by List My Notifications."
+    },
+    {
+      "key": "appealNotificationId",
+      "value": "",
+      "description": "Set by List My Notifications run with the donor token."
+    },
+    {
+      "key": "donorLookupId",
+      "value": "",
+      "description": "Set by Look Up Donor by Phone (for Record Donation)."
+    },
+    {
+      "key": "rosterDonorId",
+      "value": "",
+      "description": "Set by List Donor Roster."
+    },
+    {
+      "key": "otherUserId",
+      "value": "",
+      "description": "Set by List Users or Create Staff Account."
     }
   ]
 }
