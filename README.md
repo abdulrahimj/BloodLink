@@ -128,7 +128,7 @@ The integration tests roll back everything they write, so they are safe to re-ru
 
 ## Database migrations
 
-The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V23__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number. **V24 is reserved** for dropping the old `blood_inventory_pre_batches` table that the batch-stock change left behind; nothing reads or writes it. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
+The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V24__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number, which is V25 now. The move to batch-level stock is complete: V24 dropped the old one-row-per-group stock table, so stock lives only in `blood_inventory_batches`. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
 
 ## Setting a real JWT secret
 

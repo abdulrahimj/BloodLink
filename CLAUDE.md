@@ -74,7 +74,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 
 ## Database Schema (source of truth — match exactly)
 
-> **Batch-level stock redesign — Stages 1 to 5 done, only Stage 6 remains.** Done: Stage 1 the batch tables (V18); Stage 2 the V19 cutover, after which every screen, rule, alert and report reads usable batch stock (Business Rule 24); Stage 3 the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8); Stage 3c the daily batch expiry notices (Business Rule 26, V23); Stage 4 the frontend (see Business Rule 24's "Frontend"); then every notification sent to active accounts only (see the WebSocket section above); Stage 5 the README, the Postman collection and this file brought up to date. **Remaining: Stage 6, V24 dropping `blood_inventory_pre_batches`.** V20–V22 are the appeal-acceptance migrations (Business Rule 25).
+> **Batch-level stock redesign — complete (Stages 1 to 6).** Stage 1 the batch tables (V18); Stage 2 the V19 cutover, after which every screen, rule, alert and report reads usable batch stock (Business Rule 24); Stage 3 the write-off action (`POST /api/inventory/{bank}/batches/{batch}/write-offs`) with its `STOCK_WRITTEN_OFF` audit entries; Stages 3b and 3b-2 every stock change — Add New Batch, write-off, Record Donation, CONTRIBUTE — own-bank active staff only (ADMIN read-only, Business Rule 8); Stage 3c the daily batch expiry notices (Business Rule 26, V23); Stage 4 the frontend (see Business Rule 24's "Frontend"); then every notification sent to active accounts only (see the WebSocket section above); Stage 5 the README, the Postman collection and this file brought up to date; Stage 6 V24, dropping the legacy `blood_inventory_pre_batches` table. V20–V22 are the appeal-acceptance migrations (Business Rule 25).
 
 ### User
 | field | type |
@@ -151,10 +151,9 @@ NO ACTION throughout. **The stock identity** — `units_received = units_remaini
 off` — holds for every batch; `BloodInventoryBatchRepository.findIdsBreakingStockIdentity` is the
 check (native SQL, pasteable into psql).
 
-The old one-row-per-(bank, group) `blood_inventory` table was renamed by V19 to
-`blood_inventory_pre_batches` (its constraint and index names too), is read and written by nothing, and
-is dropped by V24 (Stage 6; renumbered from V20 when Business Rule 25 took V20–V22, then from V23 when
-Business Rule 26 took V23).
+The old one-row-per-(bank, group) `blood_inventory` table no longer exists. V19 renamed it to
+`blood_inventory_pre_batches` as a safety copy that nothing read or wrote, and V24 dropped it (Stage 6;
+planned as V20, renumbered when Business Rules 25 and 26 took V20–V23).
 
 ### ContributionAllocation
 | field | type |
@@ -1058,7 +1057,7 @@ BloodBank 1–N Notification (as appeal source)
       listed in the migration output (`DB: V19: skipped …`). Batches already expired at the cutover are
       stamped `expiry_noticed_at`. V19 refuses to run (one transaction, nothing changed) on negative units
       or a non-empty batch table, verifies per-bank, per-group totals before finishing, and renames the
-      old table to `blood_inventory_pre_batches` (dropped by V24).
+      old table to `blood_inventory_pre_batches`, which V24 dropped.
     - **Batch detail is for the bank's own staff and ADMIN only.** `GET /api/inventory/{bank}/batches`
       (live batches — any units left, expired included — optional `?bloodType=`) and
       `GET /api/inventory/{bank}/batches/{id}` (one batch: state, days to expiry, source, donation, and
@@ -1123,10 +1122,10 @@ BloodBank 1–N Notification (as appeal source)
     - **Migration renumbering:** this feature was written as V18–V20 on code older than the batch-stock
       work, colliding with V18/V19 (batch stock, already applied to `bloodlink_dev`) and the V20 reserved for
       dropping `blood_inventory_pre_batches`. It was renumbered V20 / V21 / V22 with contents unchanged, and
-      the drop became V23, now **V24** (Stage 6) since Business Rule 26 took V23. None of the three touches stock tables. The applied V18/V19 files,
-      the table comment V19 stores on `blood_inventory_pre_batches` and `V19CutoverMigrationIT` still say
-      "V20": left as they are, since editing an applied migration changes its checksum and Flyway would then
-      refuse to start on `bloodlink_dev`. V24 replaces the stale comment simply by dropping the table.
+      the drop became V23, then **V24** (Stage 6) since Business Rule 26 took V23. None of the three touches stock tables. The applied V18/V19 files
+      and `V19CutoverMigrationIT` (which migrates only up to V19) still say "V20": left as they are, since
+      editing an applied migration changes its checksum and Flyway would then refuse to start on
+      `bloodlink_dev`. The stale table comment went with the table when V24 dropped it.
 26. **Every day, a blood bank's active staff are told which of its batches expire in 7 days, and which
     have expired and still hold units.** The project owner's decisions, final. Schema: `V23` (the two
     notification types only; no table or column).
@@ -1192,7 +1191,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapters 3, 4 and 5 — ERD and narrative for facilities.** Blood banks and hospitals are no
   longer purely seeded: an administrator creates them (Business Rule 19, V14), names are unique per
   type, and `audit_log` gained `target_blood_bank_id` / `target_hospital_id` with two new actions.
-- **Chapters 3, 4 and 5 — ERD and narrative for stock (Business Rule 24, V18/V19).** `BloodInventory`
+- **Chapters 3, 4 and 5 — ERD and narrative for stock (Business Rule 24, V18/V19; old table dropped by V24).** `BloodInventory`
   is replaced by `BloodInventoryBatch` (one row per batch, own expiry date; usable stock derived, not
   stored), with `ContributionAllocation` (Contribution 1–N, Batch 1–N), `BatchWriteOff` (Batch 1–N,
   User 1–N), Donation 0..1–1 Batch, and `audit_log.target_batch_id` / STOCK_WRITTEN_OFF. Narrative: why
