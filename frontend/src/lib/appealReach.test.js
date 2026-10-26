@@ -7,7 +7,7 @@ test("no donors registered at all says so, and never claims everyone is eligible
   const { heading, note, nobodyToReach } = describeAppealReach("AB-", 0, 0);
 
   assert.equal(nobodyToReach, true);
-  assert.equal(heading, "No AB- donors registered");
+  assert.equal(heading, "No active AB- donors");
   assert.match(note, /No active donors of this blood type right now/);
   // The contradiction this test exists to prevent: "every donor is eligible"
   // alongside "nobody to appeal to".
