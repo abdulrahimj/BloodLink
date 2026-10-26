@@ -8,7 +8,7 @@ test("no donors registered at all says so, and never claims everyone is eligible
 
   assert.equal(nobodyToReach, true);
   assert.equal(heading, "No AB- donors registered");
-  assert.match(note, /No donors of this blood type are registered yet/);
+  assert.match(note, /No active donors of this blood type right now/);
   // The contradiction this test exists to prevent: "every donor is eligible"
   // alongside "nobody to appeal to".
   assert.doesNotMatch(note, /currently eligible/);
@@ -21,7 +21,7 @@ test("donors who are all in recovery keep the message naming how many", () => {
   assert.equal(heading, "No eligible O+ donors");
   assert.match(note, /3 donors of this group are within the 90-day recovery window/);
   assert.match(note, /nobody to appeal to right now/);
-  assert.doesNotMatch(note, /registered yet/);
+  assert.doesNotMatch(note, /No active donors/);
 });
 
 test("a single donor in recovery is singular", () => {

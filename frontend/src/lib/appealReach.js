@@ -16,7 +16,7 @@ export function describeAppealReach(bloodType, eligible, inRecovery) {
   if (registered === 0) {
     return {
       heading: `No ${bloodType} donors registered`,
-      note: "No donors of this blood type are registered yet. There is nobody to appeal to.",
+      note: "No active donors of this blood type right now. There is nobody to appeal to.",
       nobodyToReach,
     };
   }

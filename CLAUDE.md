@@ -326,7 +326,7 @@ BloodBank 1–N Notification (as appeal source)
    `Donor.eligibleFrom()` — the same calculation the donor's own dashboard shows — so they cannot drift.
    - **The Send Appeal dialog tells "nobody registered" apart from "everyone recovering".** The reach
      preview returns both `eligibleDonors` and `donorsInRecovery`; zero of each means no donor of that
-     group is registered ("No donors of this blood type are registered yet"), while zero eligible with
+     group is registered ("No active donors of this blood type right now"), while zero eligible with
      some recovering names how many are inside the 90-day window. The wording lives in
      `frontend/src/lib/appealReach.js` (`describeAppealReach`) and must never say everyone is eligible
      when there is nobody to appeal to.
