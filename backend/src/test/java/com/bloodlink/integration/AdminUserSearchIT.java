@@ -158,6 +158,7 @@ class AdminUserSearchIT {
 
         assertThat(ids("q=" + local)).contains(aminata.getId());
         assertThat(ids("q=" + spaced)).contains(aminata.getId());
+        assertThat(stored.charAt(6)).as("a partial search must not start with 0").isNotEqualTo('0');
         assertThat(ids("q=" + stored.substring(6))).contains(aminata.getId()); // last six digits
     }
 
@@ -369,10 +370,13 @@ class AdminUserSearchIT {
         return "Bearer " + token;
     }
 
-    /** Distinct local-format numbers within a run — see AdminAccountCreationIT. */
+    /**
+     * Distinct local-format numbers within a run, whose last six digits never start with 0: a search for "012345" is
+     * read as a local number (+23212345, Business Rule 13), so the partial-digits test failed about one run in ten.
+     */
     private String uniqueLocalPhone() {
-        long value = (PHONE_RUN_BASE + PHONE_SEQUENCE.incrementAndGet()) % 1_000_000L;
-        return "076" + String.format("%06d", value);
+        long value = 100_000L + (PHONE_RUN_BASE + PHONE_SEQUENCE.incrementAndGet()) % 900_000L;
+        return "076" + value;
     }
 
     private static final long PHONE_RUN_BASE = System.nanoTime() % 1_000_000L;
