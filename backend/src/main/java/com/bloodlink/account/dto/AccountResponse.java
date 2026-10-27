@@ -22,7 +22,9 @@ public record AccountResponse(
     String bloodBankName,
     /** Null for every role except HOSPITAL_STAFF. */
     UUID hospitalId,
-    String hospitalName
+    String hospitalName,
+    /** True until the account holder replaces a password someone else set (Business Rule 27). */
+    boolean mustChangePassword
 ) {
 
     /**
@@ -42,7 +44,8 @@ public record AccountResponse(
             bank == null ? null : bank.getId(),
             bank == null ? null : bank.getName(),
             hospital == null ? null : hospital.getId(),
-            hospital == null ? null : hospital.getName()
+            hospital == null ? null : hospital.getName(),
+            user.isMustChangePassword()
         );
     }
 }

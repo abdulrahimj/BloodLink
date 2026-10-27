@@ -66,6 +66,13 @@ public class User {
     private AccountStatus status = AccountStatus.ACTIVE;
 
     /**
+     * True while the password is one someone else set (Business Rule 27, V25); the account can then only change it.
+     * Set for administrator-created and startup-created accounts, cleared by the account holder's own password change.
+     */
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword;
+
+    /**
      * The blood bank this account works at, set only for BLOOD_BANK_STAFF (V5); null for every other role.
      * Staff with no bank have access to nothing.
      */

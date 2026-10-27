@@ -2,6 +2,7 @@ package com.bloodlink.account.dto;
 
 import java.util.Map;
 
+import com.bloodlink.common.PasswordPolicy;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 
 import jakarta.validation.constraints.NotBlank;
@@ -18,7 +19,8 @@ public record ChangePasswordPayload(
     String currentPassword,
 
     @NotBlank(message = "Enter a new password")
-    @Size(min = 8, max = 72, message = "New password must be between 8 and 72 characters")
+    @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH,
+        message = "New password must be between 8 and 72 characters")
     String newPassword,
 
     /** As on UpdateAccountPayload: any other property is captured so it can be refused rather than quietly ignored. */

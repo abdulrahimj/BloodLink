@@ -23,11 +23,21 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByPhone(String phone);
 
     /**
-     * Just the status column by primary key: what JwtAuthenticationFilter checks on every request
-     * to enforce a suspension immediately.
+     * Status and the must-change-password flag by primary key: what JwtAuthenticationFilter and the STOMP CONNECT check
+     * judge, so a suspension or an unchanged temporary password bites immediately (Business Rule 27).
      */
-    @Query("select u.status from User u where u.id = :id")
-    Optional<AccountStatus> findStatusById(@Param("id") UUID id);
+    @Query("select new com.bloodlink.repository.AccountAccess(u.status, u.mustChangePassword) from User u where u.id = :id")
+    Optional<AccountAccess> findAccessById(@Param("id") UUID id);
+
+    /** Whether any account of this role is in this status: the first-administrator bootstrap asks it of ACTIVE ADMIN. */
+    boolean existsByRoleAndStatus(Role role, AccountStatus status);
+
+    /**
+     * Waits for a PostgreSQL advisory lock held until the transaction ends, so two servers starting at once take turns
+     * at the first-administrator bootstrap. Cast to text because the lock function itself returns nothing.
+     */
+    @Query(value = "select cast(pg_advisory_xact_lock(:key) as text)", nativeQuery = true)
+    String waitForAdvisoryLock(@Param("key") long key);
 
     /** Pre-flight uniqueness checks at registration, so we can return a friendly
      *  409 instead of letting the database's unique constraints surface as a 500. */

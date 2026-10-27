@@ -159,6 +159,8 @@ public class AdminUserService {
         // Only the BCrypt hash is stored; the plaintext leaves this method only inside the response below.
         String temporaryPassword = TemporaryPasswordGenerator.generate();
         user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        // Temporary: the administrator has seen it, so the holder must replace it at first sign-in (Business Rule 27).
+        user.setMustChangePassword(true);
 
         User saved = userRepository.save(user);
         auditLogService.record(principal.getId(), AuditAction.ACCOUNT_CREATED, saved,

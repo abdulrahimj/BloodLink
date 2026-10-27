@@ -98,7 +98,37 @@ Open <http://localhost:5173>. The frontend expects the backend at `http://localh
 
 ### A note on accounts
 
-Only donors can register themselves. Hospital staff, blood bank staff and administrators are created by an administrator inside the app, so a fresh, empty database has no administrator to sign in as. The quickest way to explore every role is the demo mode below, which comes with one account per role already in place.
+Only donors can register themselves. Hospital staff, blood bank staff and administrators are created by an administrator inside the app. A fresh, empty database has no administrator, so the first one is created from startup settings (next section). The quickest way to explore every role is the demo mode below, which comes with one account per role already in place.
+
+Every account an administrator creates gets a **temporary password**, shown once to the administrator. At its first sign-in the account sees only a "Set your own password" screen, and the server refuses everything else until a new password is chosen. Donors who register themselves chose their own password, so they never see this screen.
+
+### Creating the first administrator
+
+When the backend starts and **no active administrator exists**, it creates one from four environment variables. All four must be set:
+
+| Variable | What to put in it |
+|---|---|
+| `BLOODLINK_BOOTSTRAP_ADMIN_PHONE` | The administrator's phone, e.g. `076000000` or `+232 76 000 000`. This is their sign-in. |
+| `BLOODLINK_BOOTSTRAP_ADMIN_NAME` | Their full name. |
+| `BLOODLINK_BOOTSTRAP_ADMIN_EMAIL` | Their email address (every staff account needs one). |
+| `BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD` | A temporary password, 8 to 72 characters. They must change it at their first sign-in. |
+
+In PowerShell, in the terminal you start the backend from (the values below are placeholders):
+
+```powershell
+$env:BLOODLINK_BOOTSTRAP_ADMIN_PHONE    = "076000000"
+$env:BLOODLINK_BOOTSTRAP_ADMIN_NAME     = "Your Name"
+$env:BLOODLINK_BOOTSTRAP_ADMIN_EMAIL    = "you@example.org"
+$env:BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD = "choose-a-temporary-password"
+.\mvnw.cmd spring-boot:run
+```
+
+The log then says `Created the first administrator account for …`. Sign in with that phone and password, choose your own password, and remove the four variables (`Remove-Item Env:BLOODLINK_BOOTSTRAP_ADMIN_*`). The creation is recorded in the Audit Log.
+
+- **If any active administrator already exists, the settings are ignored.** No existing account is ever changed, reset or reactivated.
+- **Nothing is created if a setting is refused:** a phone or email that already belongs to another account, a malformed phone or email, or a password shorter than 8 characters. The log says which setting and why. The password itself is never written to the log.
+- **If no administrator exists and the settings are not set**, the backend still starts, and logs a warning explaining how to create one.
+- Never write real values into `application.properties.example`, `.env.example` or any other file in the repository. Two servers starting at the same moment never create two administrators.
 
 ## Running the tests
 
@@ -121,14 +151,14 @@ npm test                               # 3. frontend tests
      $env:BLOODLINK_TEST_DB_USERNAME = "your_user"
      $env:BLOODLINK_TEST_DB_PASSWORD = "your_password"
      ```
-   - permission for that user to create databases: two tests make a throwaway database of their own (`bloodlink_race_test`, `bloodlink_migration_test`) and delete it when they finish.
+   - permission for that user to create databases: three tests make a throwaway database of their own (`bloodlink_race_test`, `bloodlink_bootstrap_race_test`, `bloodlink_migration_test`) and delete it when they finish.
 3. **Frontend tests** check the wording and logic kept in `frontend/src/lib/`: appeal messages, batch and write-off forms, pagination, reports and user-account filters. They use Node's built-in test runner and need nothing set up beyond `npm install`.
 
 The integration tests roll back everything they write, so they are safe to re-run, and they never touch `bloodlink_dev`. Tests must only ever use `bloodlink_test`: if a `SPRING_DATASOURCE_URL` is set in your terminal it would override that, so the tests refuse to start until you remove it (`Remove-Item Env:SPRING_DATASOURCE_URL`). For the same reason, set `SPRING_DATASOURCE_*` per terminal, never permanently.
 
 ## Database migrations
 
-The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V24__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number, which is V25 now. The move to batch-level stock is complete: V24 dropped the old one-row-per-group stock table, so stock lives only in `blood_inventory_batches`. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
+The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V25__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number, which is V26 now. V25 added `users.must_change_password` for the forced password change above. The move to batch-level stock is complete: V24 dropped the old one-row-per-group stock table, so stock lives only in `blood_inventory_batches`. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
 
 ## Setting a real JWT secret
 

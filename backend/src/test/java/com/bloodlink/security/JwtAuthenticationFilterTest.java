@@ -20,9 +20,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.repository.AccountAccess;
 import com.bloodlink.repository.UserRepository;
 
 import io.jsonwebtoken.Claims;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Where a suspension bites for a token issued before it: every request after login is this filter's decision.
@@ -39,7 +41,7 @@ class JwtAuthenticationFilterTest {
     private JwtAuthenticationFilter filter;
 
     private void setUp() {
-        filter = new JwtAuthenticationFilter(jwtService, userRepository);
+        filter = new JwtAuthenticationFilter(jwtService, userRepository, new ObjectMapper());
 
         Claims claims = mock(Claims.class);
         when(jwtService.parseClaims(TOKEN)).thenReturn(claims);
@@ -67,7 +69,7 @@ class JwtAuthenticationFilterTest {
 
     @Test
     void anActiveAccountsTokenAuthenticatesNormally() throws Exception {
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.of(AccountStatus.ACTIVE));
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.ACTIVE, false)));
 
         runFilterWithBearerToken();
 
@@ -78,7 +80,7 @@ class JwtAuthenticationFilterTest {
 
     @Test
     void aSuspendedAccountsExistingTokenDoesNotAuthenticate() throws Exception {
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.of(AccountStatus.SUSPENDED));
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.SUSPENDED, false)));
 
         runFilterWithBearerToken();
 
@@ -89,7 +91,7 @@ class JwtAuthenticationFilterTest {
     @Test
     void aTokenForAnAccountThatNoLongerExistsIsTreatedTheSameAsSuspended() throws Exception {
         // Fails closed: an absent row is never read as active, only as inactive.
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.empty());
 
         runFilterWithBearerToken();
 
@@ -98,7 +100,7 @@ class JwtAuthenticationFilterTest {
 
     @Test
     void aRequestWithNoTokenIsUntouched() throws Exception {
-        filter = new JwtAuthenticationFilter(jwtService, userRepository);
+        filter = new JwtAuthenticationFilter(jwtService, userRepository, new ObjectMapper());
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
@@ -106,5 +108,62 @@ class JwtAuthenticationFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    // ---------- Business Rule 27: an account that must replace its temporary password ----------
+
+    /** Runs the filter for a flagged, active account on one method and path; returns the response. */
+    private MockHttpServletResponse runFlaggedRequest(String method, String path, MockFilterChain chain) throws Exception {
+        setUp();
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.ACTIVE, true)));
+        MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+        request.addHeader("Authorization", "Bearer " + TOKEN);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, chain);
+        return response;
+    }
+
+    @Test
+    void aFlaggedAccountIsRefusedEverywhereElseWithADistinctCode() throws Exception {
+        for (String[] call : new String[][] {
+            { "GET", "/api/notifications" }, { "GET", "/api/admin/users" }, { "POST", "/api/requests" },
+            // Its own account is readable, but not editable, until the password is changed.
+            { "PATCH", "/api/users/me" },
+        }) {
+            SecurityContextHolder.clearContext();
+            MockFilterChain chain = new MockFilterChain();
+            MockHttpServletResponse response = runFlaggedRequest(call[0], call[1], chain);
+
+            assertThat(response.getStatus()).as(call[0] + " " + call[1]).isEqualTo(403);
+            assertThat(response.getContentAsString())
+                .contains("\"code\":\"PASSWORD_CHANGE_REQUIRED\"")
+                .contains("set your own password");
+            // Answered by the filter itself: no rule, controller or later filter ever saw the request.
+            assertThat(chain.getRequest()).isNull();
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        }
+    }
+
+    @Test
+    void aFlaggedAccountMayReadItsOwnAccountAndChangeItsPassword() throws Exception {
+        for (String[] call : new String[][] { { "GET", "/api/users/me" }, { "PATCH", "/api/users/me/password" } }) {
+            SecurityContextHolder.clearContext();
+            MockFilterChain chain = new MockFilterChain();
+            MockHttpServletResponse response = runFlaggedRequest(call[0], call[1], chain);
+
+            assertThat(response.getStatus()).as(call[0] + " " + call[1]).isEqualTo(200);
+            assertThat(chain.getRequest()).isNotNull();
+            assertThat(((AuthenticatedUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal()).getId())
+                .isEqualTo(USER_ID);
+        }
+    }
+
+    @Test
+    void aStrayTokenOnAPublicEndpointDoesNotBlockSigningInAgain() throws Exception {
+        MockFilterChain chain = new MockFilterChain();
+        MockHttpServletResponse response = runFlaggedRequest("POST", "/api/auth/login", chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(chain.getRequest()).isNotNull();
     }
 }

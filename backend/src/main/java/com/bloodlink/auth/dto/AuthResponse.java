@@ -27,13 +27,17 @@ public record AuthResponse(
          * lets the Blood Bank portal open on the right bank straight away. */
         UUID bloodBankId,
         /** The same for HOSPITAL_STAFF, so the Hospital Portal opens on that hospital's own requests. */
-        UUID hospitalId
+        UUID hospitalId,
+        /** True while the account must replace a password someone else set (Business Rule 27): the frontend then
+         * shows only the "Set your own password" screen, and the server refuses everything else. */
+        boolean mustChangePassword
     ) {
         static UserSummary from(User user) {
             return new UserSummary(
                 user.getId(), user.getFullName(), user.getEmail(), user.getPhone(), user.getRole(),
                 user.getBloodBank() == null ? null : user.getBloodBank().getId(),
-                user.getHospital() == null ? null : user.getHospital().getId()
+                user.getHospital() == null ? null : user.getHospital().getId(),
+                user.isMustChangePassword()
             );
         }
     }

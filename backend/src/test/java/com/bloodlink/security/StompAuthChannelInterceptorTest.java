@@ -19,6 +19,7 @@ import org.springframework.messaging.support.MessageBuilder;
 
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.repository.AccountAccess;
 import com.bloodlink.repository.UserRepository;
 
 import io.jsonwebtoken.Claims;
@@ -57,7 +58,7 @@ class StompAuthChannelInterceptorTest {
     @Test
     void anActiveAccountsTokenIsAcceptedAndNamesThePrincipal() {
         stubToken();
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.of(AccountStatus.ACTIVE));
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.ACTIVE, false)));
 
         Message<byte[]> connect = connectFrameWithBearerToken();
         interceptor.preSend(connect, null);
@@ -69,7 +70,7 @@ class StompAuthChannelInterceptorTest {
     @Test
     void aSuspendedAccountCannotOpenANewSession() {
         stubToken();
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.of(AccountStatus.SUSPENDED));
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.SUSPENDED, false)));
 
         assertThatThrownBy(() -> interceptor.preSend(connectFrameWithBearerToken(), null))
             .isInstanceOf(StompAuthenticationException.class)
@@ -79,9 +80,20 @@ class StompAuthChannelInterceptorTest {
     @Test
     void anAccountThatNoLongerExistsIsTreatedTheSameAsSuspended() {
         stubToken();
-        when(userRepository.findStatusById(USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> interceptor.preSend(connectFrameWithBearerToken(), null))
             .isInstanceOf(StompAuthenticationException.class);
+    }
+
+    @Test
+    void anAccountThatMustChangeItsPasswordCannotOpenASession() {
+        stubToken();
+        when(userRepository.findAccessById(USER_ID)).thenReturn(Optional.of(new AccountAccess(AccountStatus.ACTIVE, true)));
+
+        // Business Rule 27: no notifications until the temporary password is replaced.
+        assertThatThrownBy(() -> interceptor.preSend(connectFrameWithBearerToken(), null))
+            .isInstanceOf(StompAuthenticationException.class)
+            .hasMessageContaining("set your own password");
     }
 }

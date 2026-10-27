@@ -79,7 +79,7 @@ public class AccountService {
 
     /**
      * Changes the password after verifying the current one (401 if wrong, nothing written); an unchanged one is refused.
-     * Only the BCrypt hash is stored; tokens already issued stay valid until they expire.
+     * Only the BCrypt hash is stored; clears must-change-password (Business Rule 27), so the same token then works fully.
      */
     @Transactional
     public void changeMyPassword(UUID userId, ChangePasswordPayload payload) {
@@ -95,6 +95,7 @@ public class AccountService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(payload.newPassword()));
+        user.setMustChangePassword(false);
         userRepository.save(user);
     }
 

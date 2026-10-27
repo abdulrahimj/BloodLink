@@ -3,6 +3,8 @@ package com.bloodlink.security;
 import java.io.IOException;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.lang.NonNull;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -10,9 +12,10 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.repository.AccountAccess;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.web.error.ApiError;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -20,10 +23,11 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Turns a Bearer token into an authenticated SecurityContext for one request, rebuilding the principal from claims.
- * Also checks the account is still ACTIVE on every request; a bad token or suspended account just leaves it empty.
+ * Also checks the account on every request: suspended is left unauthenticated, must-change-password is refused (403).
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -33,10 +37,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
 
-    JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
+    JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
         this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -47,6 +53,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
 
         String token = extractBearerToken(request);
+        boolean passwordChangeRequired = false;
 
         // Skip if there is no token, or if something earlier in the chain already
         // authenticated this request — never overwrite an existing authentication.
@@ -54,8 +61,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             try {
                 Claims claims = jwtService.parseClaims(token);
                 UUID userId = jwtService.extractUserId(claims);
+                // Fail-closed: a missing row reads the same as SUSPENDED, never as active.
+                AccountAccess access = userRepository.findAccessById(userId).orElse(null);
 
-                if (accountIsActive(userId)) {
+                if (access != null && access.isActive()) {
                     AuthenticatedUser principal = new AuthenticatedUser(
                         userId,
                         claims.getSubject(),
@@ -68,6 +77,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     );
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
+                    passwordChangeRequired = access.mustChangePassword() && !PasswordChangeGate.allows(request);
                 }
                 // Suspended or missing account: leave the context empty, exactly as for a bad signature.
 
@@ -78,16 +88,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
 
+        if (passwordChangeRequired) {
+            // Answered here, before any rule or controller runs, so nothing else is reachable (Business Rule 27).
+            SecurityContextHolder.clearContext();
+            refusePasswordChangeRequired(response);
+            return;
+        }
+
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * Fail-closed: a missing row reads the same as SUSPENDED, never as active.
-     */
-    private boolean accountIsActive(UUID userId) {
-        return userRepository.findStatusById(userId)
-            .map(status -> status == AccountStatus.ACTIVE)
-            .orElse(false);
+    /** The 403 a flagged account gets everywhere but the gate's few addresses, with its distinct code. */
+    private void refusePasswordChangeRequired(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpStatus.FORBIDDEN.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        objectMapper.writeValue(response.getOutputStream(), ApiError.withCode(
+            HttpStatus.FORBIDDEN.value(), "Forbidden", PasswordChangeGate.ERROR_CODE, PasswordChangeGate.MESSAGE
+        ));
     }
 
     /** Pulls the raw token out of the Authorization header, or null if absent/not Bearer. */

@@ -10,8 +10,8 @@ import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
 
-import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.repository.AccountAccess;
 import com.bloodlink.repository.UserRepository;
 
 import io.jsonwebtoken.Claims;
@@ -19,7 +19,7 @@ import io.jsonwebtoken.JwtException;
 
 /**
  * Identifies a WebSocket client from the JWT on its STOMP CONNECT frame (browsers cannot set a handshake header).
- * A missing, invalid or suspended account's token fails the CONNECT; open sockets are not closed on suspension.
+ * A missing, invalid or suspended token, or one that must change its password, fails the CONNECT; open sockets stay.
  */
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
@@ -53,11 +53,13 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             UUID userId = jwtService.extractUserId(claims);
             Role role = Role.valueOf(jwtService.extractRole(claims));
 
-            boolean active = userRepository.findStatusById(userId)
-                .map(status -> status == AccountStatus.ACTIVE)
-                .orElse(false);
-            if (!active) {
+            AccountAccess access = userRepository.findAccessById(userId).orElse(null);
+            if (access == null || !access.isActive()) {
                 throw new StompAuthenticationException("This account has been suspended. Sign in again.");
+            }
+            // No notifications until the temporary password is replaced (Business Rule 27).
+            if (access.mustChangePassword()) {
+                throw new StompAuthenticationException(PasswordChangeGate.MESSAGE);
             }
 
             // What every later /user/queue/... delivery is routed by.

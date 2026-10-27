@@ -2,6 +2,7 @@ package com.bloodlink.auth.dto;
 
 import java.time.LocalDate;
 
+import com.bloodlink.common.PasswordPolicy;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Gender;
 
@@ -51,6 +52,6 @@ public record RegisterRequest(
     String address,
 
     @NotBlank(message = "Password is required")
-    @Size(min = 8, max = 72, message = "Password must be at least 8 characters")
+    @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH, message = "Password must be at least 8 characters")
     String password
 ) {}

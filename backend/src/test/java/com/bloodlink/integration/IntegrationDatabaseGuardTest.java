@@ -39,6 +39,13 @@ class IntegrationDatabaseGuardTest {
     }
 
     @Test
+    void theBootstrapRaceTestsOwnThrowawayDatabaseIsAllowed() {
+        assertThatCode(() -> guard.postProcessEnvironment(
+            environment("jdbc:postgresql://localhost:5432/bloodlink_bootstrap_race_test", "test"), null))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
     void theTestProfileOnBloodlinkDevIsRefused() {
         // The case this exists for: SPRING_DATASOURCE_URL left set to the real database.
         assertThatThrownBy(() -> guard.postProcessEnvironment(

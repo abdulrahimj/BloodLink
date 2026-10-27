@@ -2,6 +2,7 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -114,15 +115,29 @@ class AdminAccountCreationIT {
         assertThat(created.account().bloodBankId()).isNull();
         assertThat(created.account().hospitalId()).isNull();
 
-        // The new administrator can sign in, and their token really does carry ADMIN:
-        // proven by using it to reach an endpoint only an administrator may reach.
+        // The new administrator can sign in, and their token really does carry ADMIN: proven by reaching an
+        // administrator-only endpoint, once the temporary password is replaced (Business Rule 27).
         String newAdminToken = signIn(phone, created.temporaryPassword());
+        String payload = objectMapper.writeValueAsString(new CreateStaffAccountPayload(
+            "Created By The New Admin", uniqueLocalPhone(), uniqueEmail(), Role.ADMIN, null, null
+        ));
         mockMvc.perform(post("/api/admin/users")
                 .header("Authorization", "Bearer " + newAdminToken)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(new CreateStaffAccountPayload(
-                    "Created By The New Admin", uniqueLocalPhone(), uniqueEmail(), Role.ADMIN, null, null
-                ))))
+                .content(payload))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"));
+
+        mockMvc.perform(patch("/api/users/me/password")
+                .header("Authorization", "Bearer " + newAdminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"currentPassword\": \"" + created.temporaryPassword()
+                    + "\", \"newPassword\": \"the-new-admins-own-passphrase\"}"))
+            .andExpect(status().isNoContent());
+        mockMvc.perform(post("/api/admin/users")
+                .header("Authorization", "Bearer " + newAdminToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
             .andExpect(status().isCreated());
     }
 

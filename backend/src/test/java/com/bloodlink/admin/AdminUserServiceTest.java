@@ -207,6 +207,24 @@ class AdminUserServiceTest {
     }
 
     @Test
+    void everyRoleAnAdministratorCreatesMustReplaceItsTemporaryPassword() {
+        // Business Rule 27: the administrator has seen the password, so the holder must change it at first sign-in.
+        stubSaveAssigningId();
+        stubHospitalExists();
+        stubBankExists();
+
+        create(payload(Role.HOSPITAL_STAFF, null, HOSPITAL_ID));
+        create(payload(Role.BLOOD_BANK_STAFF, BANK_ID, null));
+        create(payload(Role.ADMIN, null, null));
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository, org.mockito.Mockito.times(3)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(User::getRole)
+            .containsExactly(Role.HOSPITAL_STAFF, Role.BLOOD_BANK_STAFF, Role.ADMIN);
+        assertThat(saved.getAllValues()).allMatch(User::isMustChangePassword);
+    }
+
+    @Test
     void aDonorAccountCannotBeCreatedHere() {
         // Donors self-register with a Donor row this endpoint cannot create, so DONOR is refused, not half-created.
         assertThatThrownBy(() -> create(payload(Role.DONOR, null, null)))

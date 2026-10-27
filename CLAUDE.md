@@ -89,6 +89,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | hospital_id | UUID, FK -> Hospital, nullable — set only for HOSPITAL_STAFF |
 | created_at | timestamp |
 | status | enum: ACTIVE, SUSPENDED — added in V8 for the Admin module's activate/suspend use case, the same kind of confirmed addition as blood_bank_id/hospital_id above. Every account starts ACTIVE. A suspension is enforced immediately, not just at the next login: `JwtAuthenticationFilter` checks it on every authenticated request (one indexed lookup by primary key), and `AuthService.login` checks it again after the password is verified. |
+| must_change_password | boolean, not null, default false — added in V25 (Business Rule 27). True while the password is one someone else set (an administrator's creation, or the first-administrator bootstrap); the account can then only read its own account and change its password. Cleared by that change. Existing accounts and self-registered donors are false. |
 
 ### Donor
 | field | type |
@@ -388,7 +389,8 @@ BloodBank 1–N Notification (as appeal source)
 
    Known limit, not addressed: an administrator creates staff
    accounts and is shown their one-time password (Business Rule 14), so could sign in *as* that staff
-   member; anything done that way is recorded against the staff account. There is no self-registration path for HOSPITAL_STAFF,
+   member; anything done that way is recorded against the staff account. Since Business Rule 27 that password is temporary:
+   using it first means setting a new one, which the staff member would then find does not work. There is no self-registration path for HOSPITAL_STAFF,
    BLOOD_BANK_STAFF, or ADMIN — only DONOR accounts are created via public registration.
 9. **A HOSPITAL_STAFF user is tied to exactly one hospital** via a nullable `hospital_id` on `User`,
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
@@ -548,6 +550,10 @@ BloodBank 1–N Notification (as appeal source)
       The Admin Console's confirmation screen says so plainly because it is true of the system, not
       because the interface is being cautious: **if the password is lost, the account must be
       created again.** An administrator relays it directly; BloodLink sends no email or SMS.
+    - **The shown password is temporary (Business Rule 27).** The administrator has seen it, so the
+      account is created with `must_change_password` set, and at its first sign-in it can do nothing
+      but set its own password (Profile Settings' change-password endpoint, the temporary password as
+      the current one). This applies to all three roles, another ADMIN included.
     - **Phone goes through Business Rule 13's shared `PhoneNumber.normalize`** and is refused as a
       duplicate exactly as registration refuses one (409), compared against the normalised value so
       the same number typed two ways cannot become two accounts. Email is lower-cased and likewise
@@ -662,7 +668,8 @@ BloodBank 1–N Notification (as appeal source)
       locks the active ADMIN rows first (`UserRepository.lockByRoleAndStatus`), so two administrators
       suspending each other at the same moment cannot both succeed. No endpoint changes a role after
       creation, so an administrator can never be demoted either. New ADMIN accounts are made by another
-      ADMIN through `POST /api/admin/users` (Business Rule 14); the first one by the demo seed or by hand.
+      ADMIN through `POST /api/admin/users` (Business Rule 14); the first one by the demo seed, or by the startup
+      settings of Business Rule 27.
     - **What is logged — the four actions, from day one:** ACCOUNT_CREATED (Business Rule 14's create),
       ACCOUNT_EDITED, ACCOUNT_SUSPENDED and ACCOUNT_REACTIVATED (the existing status PATCH) — each with
       the acting admin, the affected account, a human-readable `details` snapshot ("Phone changed from
@@ -1169,6 +1176,55 @@ BloodBank 1–N Notification (as appeal source)
     - **Frontend:** the bell lists every type; since Stage 4 the reminder has an amber dot and the expired
       notice a red one (`NotificationBell.jsx`), and either one arriving re-reads the Inventory page quietly,
       as a low-stock alert does (`lib/batchStock.js` `refreshesInventory`).
+27. **The first administrator is created from startup settings, and every password someone else set must be
+    replaced at the first sign-in.** Before this rule a fresh database had no way in at all (the first ADMIN was
+    inserted by hand), and the password Business Rule 14 shows the administrator stayed usable indefinitely by
+    whoever saw it. Schema: `V25` (`users.must_change_password`).
+    - **Bootstrap (`BootstrapAdminService`, run at `ApplicationReadyEvent` by `BootstrapAdminRunner`).** Four
+      environment variables — `BLOODLINK_BOOTSTRAP_ADMIN_PHONE`, `_NAME`, `_EMAIL`, `_PASSWORD` (also readable
+      as `bloodlink.bootstrap-admin.phone|name|email|password`). **Email is the fourth setting by the owner's
+      decision**: V13's `users_email_required_for_staff` requires one for every non-DONOR, and was not relaxed.
+      In one transaction: take a PostgreSQL advisory lock (`UserRepository.waitForAdvisoryLock`,
+      `pg_advisory_xact_lock`, held until commit), then —
+      1. **any ACTIVE ADMIN exists → nothing at all**, settings ignored (an INFO line says so if any are set). No
+         existing account is ever changed, reset or reactivated.
+      2. a setting unset or blank → nothing created; **a WARN line** names the variables, the missing ones and
+         the README section. The application starts normally.
+      3. phone through `PhoneNumber.normalize`, email through `EmailAddress.normalizeOptional`, name ≤ 255,
+         password through `PasswordPolicy.problemWith` (8–72 characters, the rule registration and password
+         changes share) — any refusal is an ERROR line naming the variable, nothing created.
+      4. a phone or email already belonging to any account (a suspended administrator included) → ERROR,
+         nothing created.
+      5. otherwise one ADMIN: ACTIVE, BCrypt hash, `must_change_password` true, audited as **ACCOUNT_CREATED with
+         the new account as both actor and subject** (V14's one-target CHECK allows it; no constraint changed),
+         details "… from the startup settings, because no active administrator existed."
+      **Concurrent starts:** the advisory lock makes a second server wait, then find the first one's
+      administrator — never two, even with different settings (`BootstrapAdminRaceIT`, and rehearsed with two
+      real servers on one empty database). **The password is never logged:** `BootstrapAdminSettings.toString`
+      hides it, refusal messages never include it, and the runner logs only an unexpected exception's type,
+      since a database error can quote the row. An unexpected failure is logged and the app still starts.
+      `bloodlink.bootstrap-admin.enabled=false` removes the runner; `application-test.properties` sets it.
+      Documented with placeholders only (`application.properties.example`, `backend/.env.example`, README).
+    - **Forced change.** `must_change_password` is set by `AdminUserService.createStaffAccount` (all three roles)
+      and by the bootstrap; self-registered donors and every pre-V25 account are false. Login still succeeds and
+      `AuthResponse.user.mustChangePassword` (also on `GET /api/users/me`) tells the frontend.
+      **While it is true the server refuses everything except `GET /api/users/me`, `PATCH /api/users/me/password`
+      and the public endpoints** (`/api/auth/login`, `/api/auth/register`, `/api/health`, which never read a
+      token) — a **403 with `code: "PASSWORD_CHANGE_REQUIRED"`** (`ApiError.code`, absent on every other error),
+      answered by `JwtAuthenticationFilter` before any rule or controller (`PasswordChangeGate` holds the list).
+      The same lookup that enforces suspension reads the flag (`UserRepository.findAccessById`, one query by
+      primary key), so nothing extra per request. **The STOMP CONNECT is refused** too
+      (`StompAuthChannelInterceptor`). Signing out is client-side (a stateless JWT has nothing to revoke), so it
+      is always possible — by the owner's decision no logout endpoint was added.
+    - **Lifting it:** Business Rule 16's password change, unchanged — current (temporary) password required
+      (401 on `currentPassword` if wrong), new one 8–72 and different (400) — now also clears the flag. Read from
+      the database on every request, so **the token issued before the change works everywhere straight after**.
+    - **Frontend:** `App.jsx` shows only `pages/SetOwnPassword.jsx` while `user.mustChangePassword` is true — no
+      portal, so no socket either — with a Sign out button; on success it updates the stored session and opens
+      the normal portal. A reload keeps the gate (the flag is in the stored user). Checks in
+      `lib/passwordChange.js` (tested), mirroring the server's.
+    - **Known limits:** an account created before V25 with an administrator-shown password is not flagged; a
+      flagged account whose temporary password is lost must be recreated (as Business Rule 14 already says).
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1185,6 +1241,9 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15), a sixth,
   DONATION_APPEAL_ACCEPTED (Business Rule 25, V21), and a seventh and eighth, BATCH_EXPIRY_REMINDER and
   BATCH_EXPIRED (Business Rule 26, V23), sent by a daily scheduled job — the first scheduled task in the system.
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for first sign-in (Business Rule 27, V25).** `User` gains
+  `must_change_password`; the "create account" use case now ends with the holder setting their own password, and
+  the first administrator is created from startup settings rather than by hand.
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for appeal acceptance (Business Rule 25, V20–V22).**
   `Notification` gains `accepted`, `source_blood_bank_id` (BloodBank 1–N Notification), `blood_type` and
   `acceptance_alert_sent`; the donor's "respond to donation appeals" use case now has a real flow.
@@ -1206,7 +1265,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
 
 ## Conventions
 
@@ -1238,7 +1297,8 @@ listed so nothing is forgotten when the chapters are next revised.
     (`BloodRequestLifecycleIT`, `AdminAccountCreationIT`, `AccountSettingsIT`, `AdminEditAndAuditLogIT`,
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
-    `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`),
+    `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
@@ -1250,11 +1310,13 @@ listed so nothing is forgotten when the chapters are next revised.
     nothing shared. That is the pattern for any future test in the same position — and the one
     `V19CutoverMigrationIT` follows: it must stop the schema at V17 and run real, committed Flyway
     migrations, so it creates `bloodlink_migration_test` before each test (plain JUnit, no Spring
-    context) and drops it afterwards.
+    context) and drops it afterwards. `BootstrapAdminRaceIT` (Business Rule 27) races six first-administrator
+    bootstraps in real transactions, so it creates and drops `bloodlink_bootstrap_race_test` the same way.
     **Enforced, not just stated:** an environment variable outranks `application-test.properties`, so a
     `SPRING_DATASOURCE_URL` left set in a terminal would silently redirect the tests. `IntegrationDatabaseGuard`
     (test classpath only, registered in `src/test/resources/META-INF/spring.factories`) refuses any start
-    under the `test` profile whose database is not `bloodlink_test` or `bloodlink_race_test`, before a
+    under the `test` profile whose database is not `bloodlink_test`, `bloodlink_race_test` or
+    `bloodlink_bootstrap_race_test`, before a
     connection is opened. (Originally worded as "exactly one test, `BloodRequestLifecycleIT`";
     widened deliberately when `AdminAccountCreationIT` was added, since the guarantee comes from the
     rollback, not from there being a single class.)

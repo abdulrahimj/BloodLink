@@ -6,7 +6,9 @@ import DonorPortal from './pages/DonorPortal.jsx';
 import BloodBankPortal from './pages/BloodBankPortal.jsx';
 import HospitalPortal from './pages/HospitalPortal.jsx';
 import AdminConsole from './pages/AdminConsole.jsx';
+import SetOwnPassword from './pages/SetOwnPassword.jsx';
 import { clearSession, getUser, isSignedIn, updateSessionUser } from './auth/session.js';
+import { mustChangePassword } from './lib/passwordChange.js';
 
 /* BloodLink — app shell: hash-routed landing page, login/register, and each role's portal once signed in
    (ADMIN goes to the Admin Console). No router dependency for a handful of screens. */
@@ -53,6 +55,17 @@ export default function App() {
   function handleUserUpdated(changes) {
     const stored = updateSessionUser(changes);
     setUser((current) => (current ? { ...current, ...(stored ?? changes) } : current));
+  }
+
+  // Business Rule 27: a temporary password must be replaced before any portal opens (the server refuses the rest).
+  if (user && mustChangePassword(user)) {
+    return (
+      <SetOwnPassword
+        user={user}
+        onPasswordChanged={() => handleUserUpdated({ mustChangePassword: false })}
+        onSignOut={handleSignOut}
+      />
+    );
   }
 
   if (user) {

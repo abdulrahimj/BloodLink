@@ -15,7 +15,8 @@ import org.springframework.core.env.ConfigurableEnvironment;
 public class IntegrationDatabaseGuard implements EnvironmentPostProcessor, Ordered {
 
     /** The only databases a "test" profile start may use. */
-    static final Set<String> ALLOWED_DATABASES = Set.of("bloodlink_test", "bloodlink_race_test");
+    static final Set<String> ALLOWED_DATABASES =
+        Set.of("bloodlink_test", "bloodlink_race_test", "bloodlink_bootstrap_race_test");
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
