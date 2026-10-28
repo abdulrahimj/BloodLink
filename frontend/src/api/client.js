@@ -9,14 +9,15 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localho
 
 /**
  * Error carrying the backend's ApiError: message is safe to show;
- * fieldErrors (400s) maps field names to messages for the form.
+ * fieldErrors (400s) maps field names to messages for the form; code (rare) names a refusal the form acts on.
  */
 export class ApiError extends Error {
-  constructor(message, status, fieldErrors) {
+  constructor(message, status, fieldErrors, code) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fieldErrors = fieldErrors ?? {};
+    this.code = code ?? null;
   }
 }
 
@@ -91,6 +92,7 @@ function throwIfFailed(response, payload, sentToken) {
       payload?.message ?? `Request failed (${response.status}).`,
       response.status,
       payload?.fieldErrors,
+      payload?.code,
     );
   }
 }

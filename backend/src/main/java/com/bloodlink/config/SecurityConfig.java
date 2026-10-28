@@ -120,6 +120,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/donors/roster/**")
                     .hasAnyRole(Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())
 
+                // --- Correcting a donor's blood group after a test (Business Rule 28) ---
+                // Bank staff only, never ADMIN; refused again in DonorBloodGroupService. Before /api/donors/**.
+                .requestMatchers(HttpMethod.PATCH, "/api/donors/*/blood-group").hasRole(Role.BLOOD_BANK_STAFF.name())
+
                 // --- Donor's own profile, history and eligibility ---
                 .requestMatchers("/api/donors/**")
                     .hasAnyRole(Role.DONOR.name(), Role.ADMIN.name())

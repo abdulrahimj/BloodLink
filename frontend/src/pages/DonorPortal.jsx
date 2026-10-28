@@ -5,6 +5,7 @@ import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
+import { describeDonorPortalBloodGroup } from "../lib/bloodGroup.js";
 
 /* BloodLink — Donor Portal: donation history, eligibility and live donation appeals from blood banks
    (Business Rule 1), from GET /api/donors/me, /me/donations and the donor's notifications. */
@@ -160,6 +161,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
     }
   }
   const lastDonation = history[0] ?? null;
+  const bloodGroupCard = describeDonorPortalBloodGroup(profile?.bloodType);
   // The panel's CSS clips overflow rather than scrolling it, so it is capped here at
   // the same five rows the mockup's fixture happened to have.
   const visibleHistory = history.slice(0, 5);
@@ -276,6 +278,11 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
         .dn-stat-figure { font-size: clamp(18px, 3vh, 28px); font-weight: 800; line-height: 1.05; letter-spacing: -.02em; }
         .dn-stat-label { font-size: clamp(10.5px, 1.6vh, 14px); font-weight: 700; margin-top: 1px; }
         .dn-stat-note { font-size: clamp(8.5px, 1.2vh, 11px); color: var(--ink-muted); margin-top: 2px; }
+        .dn-group-notice {
+          flex: 0 0 auto; font-size: clamp(10px, 1.45vh, 13px); font-weight: 600; line-height: 1.45;
+          color: #8A5510; background: #FBF1E3; border-left: 3px solid var(--amber); border-radius: 6px;
+          padding: clamp(7px, 1.1vh, 10px) clamp(10px, 1vw, 14px);
+        }
         .dn-stat-icon {
           flex: 0 0 auto;
           width: clamp(30px, 4.6vh, 44px); height: clamp(30px, 4.6vh, 44px);
@@ -490,7 +497,7 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
             <div className="dn-stats">
               <div className="dn-stat">
                 <div>
-                  <div className="dn-stat-figure">{profile.bloodType ?? "Not yet tested"}</div>
+                  <div className="dn-stat-figure">{bloodGroupCard.figure}</div>
                   <div className="dn-stat-label">Blood Group</div>
                   {bloodGroupTag(profile.bloodType) && (
                     <span className="dn-tag">{bloodGroupTag(profile.bloodType)}</span>
@@ -509,6 +516,9 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     label="Last Donation"
                     note={lastDonation ? lastDonation.bloodBankName : "Not yet donated"} />
             </div>
+
+            {/* No group on file yet: how it gets added (Business Rule 28). */}
+            {bloodGroupCard.notice && <div className="dn-group-notice" role="note">{bloodGroupCard.notice}</div>}
 
             {/* ---- eligibility ---- */}
             <div className={`dn-elig${isEligible ? "" : " dn-elig--ineligible"}`}>

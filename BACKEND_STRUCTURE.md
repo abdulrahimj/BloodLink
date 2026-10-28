@@ -14,8 +14,8 @@ so once one is familiar the rest read the same way.
 | `bloodbank` | Blood bank reference data (name, location) and the shared rule for "which blood bank is this staff member acting on behalf of." |
 | `config` | Application-wide setup: security rules (who can reach which endpoint) and the real-time (WebSocket) connection. |
 | `domain` | The core data shapes — User, Donor, BloodBank, Hospital, Donation, BloodRequest, BloodInventoryBatch, Notification — matching the database tables directly. Its `enums/` subfolder holds the fixed-choice values used throughout (blood type, urgency level, request status, account status, and the like). |
-| `donation` | Recording an actual donation event: the blood drawn, the units added to stock, and the donor's eligibility clock reset. |
-| `donor` | A donor's own profile and donation history, plus the separate staff-facing lookup used to find a donor by phone before recording their donation. |
+| `donation` | Recording an actual donation event: the blood drawn, the units added to stock, the donor's eligibility clock reset, and their profile blood group taken from the test. |
+| `donor` | A donor's own profile and donation history, plus the staff-facing lookup used to find a donor by phone before recording their donation, the bank's donor roster, and correcting a donor's blood group after a test. |
 | `health` | A single "is the server up" check, used for monitoring. |
 | `hospital` | Hospital reference data (name, location) — the hospital equivalent of `bloodbank`. |
 | `inventory` | A blood bank's stock levels — viewing them, and adding a new batch of units. |

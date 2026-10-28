@@ -14,10 +14,11 @@ export function lookupDonorByPhone(phone) {
 /**
  * POST /api/donations: one all-or-nothing call recording the donation, the donor's date and a new stock batch;
  * bloodType is today's tested group (Business Rule 4). A donor in recovery is a 409 (Business Rule 2).
+ * confirmBloodGroupChange: true only after staff confirm replacing a different profile group (Business Rule 28).
  */
-export function recordDonation({ donorId, bloodType, unitsDonated, bloodBankId }) {
+export function recordDonation({ donorId, bloodType, unitsDonated, bloodBankId, confirmBloodGroupChange = false }) {
   return apiRequest('/api/donations', {
     method: 'POST',
-    body: { donorId, bloodType, unitsDonated, bloodBankId: bloodBankId ?? null },
+    body: { donorId, bloodType, unitsDonated, bloodBankId: bloodBankId ?? null, confirmBloodGroupChange },
   });
 }

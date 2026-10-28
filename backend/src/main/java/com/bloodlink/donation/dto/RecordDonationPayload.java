@@ -45,5 +45,17 @@ public record RecordDonationPayload(
      * Optional last usable day from the bag label; default donation date + 42 days.
      * If given, today to 365 days away (StockPolicy), else a 400; checked in DonationService.
      */
-    LocalDate expiryDate
-) {}
+    LocalDate expiryDate,
+
+    /**
+     * True once staff confirm that a tested group differing from the profile's should replace it (Business Rule 28);
+     * without it such a donation is a 409 with nothing written. Null means false.
+     */
+    Boolean confirmBloodGroupChange
+) {
+
+    /** Whether the profile change was confirmed; a missing flag is a no. */
+    public boolean bloodGroupChangeConfirmed() {
+        return Boolean.TRUE.equals(confirmBloodGroupChange);
+    }
+}

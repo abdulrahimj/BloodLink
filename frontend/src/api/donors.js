@@ -33,3 +33,14 @@ export function getDonorHistoryAtBank(donorId, bloodBankId = null) {
   const query = bloodBankId ? `?bloodBankId=${encodeURIComponent(bloodBankId)}` : '';
   return apiRequest(`/api/donors/roster/${donorId}/donations${query}`);
 }
+
+/**
+ * PATCH /api/donors/{donorId}/blood-group: set or correct a donor's blood group after a test, with a required note
+ * (Business Rule 28); active blood bank staff only. Resolves to { donorId, fullName, previousBloodType, bloodType }.
+ */
+export function correctDonorBloodGroup(donorId, { bloodType, note }) {
+  return apiRequest(`/api/donors/${donorId}/blood-group`, {
+    method: 'PATCH',
+    body: { bloodType, note },
+  });
+}

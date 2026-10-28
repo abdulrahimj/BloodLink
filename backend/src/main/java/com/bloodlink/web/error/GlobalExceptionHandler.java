@@ -211,10 +211,14 @@ public class GlobalExceptionHandler {
         ));
     }
 
-    /** Phone or email already registered, an admin's own account can't be
-     *  suspended, or a donor is still inside their recovery window. */
+    /** Phone or email already registered, an admin's own account can't be suspended, or a donor is in recovery;
+     *  carries a code when the client must act on it (BLOOD_GROUP_CHANGE_UNCONFIRMED, Business Rule 28). */
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiError> handleConflict(ConflictException ex) {
+        if (ex.getCode() != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.withCode(
+                HttpStatus.CONFLICT.value(), "Conflict", ex.getCode(), ex.getMessage()));
+        }
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiError.of(
             HttpStatus.CONFLICT.value(),
             "Conflict",

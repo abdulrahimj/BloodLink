@@ -333,12 +333,12 @@ class BatchStockCutoverIT {
 
     @Test
     void aRecordedDonationBecomesItsOwnLinkedBatchWithTheDefaultOrTheEnteredExpiry() throws Exception {
-        Donor first = donor();
+        Donor first = donor(BloodType.B_NEGATIVE);
         JsonNode receipt = json(recordDonation(first, "B-", 1, null).andExpect(status().isCreated()).andReturn());
         LocalDate defaultExpiry = LocalDate.now().plusDays(42);
         assertThat(receipt.get("batchExpiryDate").asString()).isEqualTo(defaultExpiry.toString());
 
-        Donor second = donor();
+        Donor second = donor(BloodType.B_NEGATIVE);
         LocalDate onTheLabel = today.plusDays(30);
         recordDonation(second, "B-", 2, onTheLabel).andExpect(status().isCreated())
             .andExpect(jsonPath("$.batchExpiryDate").value(onTheLabel.toString()))
@@ -468,9 +468,15 @@ class BatchStockCutoverIT {
     }
 
     private Donor donor() {
+        return donor(BloodType.O_POSITIVE);
+    }
+
+    /** A donor whose profile group matches the group their donation is tested as, so no change needs confirming
+     *  (Business Rule 28). */
+    private Donor donor(BloodType profileGroup) {
         Donor donor = new Donor();
         donor.setUser(user("Cutover Donor " + UUID.randomUUID().toString().substring(0, 6), Role.DONOR, null, null));
-        donor.setBloodType(BloodType.O_POSITIVE);
+        donor.setBloodType(profileGroup);
         donor.setDateOfBirth(LocalDate.of(1993, 5, 1));
         donor.setGender(Gender.MALE);
         donor.setAddress("Makeni");

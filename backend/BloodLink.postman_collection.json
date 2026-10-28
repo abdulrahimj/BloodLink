@@ -581,6 +581,39 @@
             ],
             "description": "That donor's donations at this bank only, newest first, at most 50. A donor with no donation here is a 404, the same as an unknown id."
           }
+        },
+        {
+          "name": "Correct Donor's Blood Group",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/api/donors/{{rosterDonorId}}/blood-group",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "donors",
+                "{{rosterDonorId}}",
+                "blood-group"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bloodType\": \"B+\",\n  \"note\": \"Retested at our lab, sample 4471\"\n}"
+            },
+            "description": "Business Rule 28: set or correct a donor's profile blood group after a test, with no donation. Active blood bank staff of any bank, for any donor; ADMIN, hospital staff and donors get 403. `bloodType` is one of the eight groups; `note` (how or where the test was done) is required, at most 500 characters. The same group as now is a 400 on `bloodType`. Answers 200 with `{ donorId, fullName, previousBloodType, bloodType }` and writes a DONOR_BLOOD_GROUP_UPDATED audit entry carrying the note."
+          }
         }
       ]
     },
@@ -1958,9 +1991,9 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"donorId\": \"{{donorLookupId}}\",\n  \"bloodType\": \"O+\",\n  \"unitsDonated\": 1,\n  \"expiryDate\": null\n}"
+              "raw": "{\n  \"donorId\": \"{{donorLookupId}}\",\n  \"bloodType\": \"O+\",\n  \"unitsDonated\": 1,\n  \"expiryDate\": null,\n  \"confirmBloodGroupChange\": false\n}"
             },
-            "description": "Run Look Up Donor by Phone first. `bloodType` is the group as tested today, always stated (Business Rule 4). `unitsDonated` is 1–10. `expiryDate` is optional: leave it `null` for donation date + 42 days, or give the bag label's date (today to 365 days ahead). The donor must be eligible: a donor inside the 90-day recovery window is a 409 and nothing is written. The donation is recorded at the caller's own bank, dated today."
+            "description": "Run Look Up Donor by Phone first. `bloodType` is the group as tested today, always stated (Business Rule 4). `unitsDonated` is 1–10. `expiryDate` is optional: leave it `null` for donation date + 42 days, or give the bag label's date (today to 365 days ahead). The donor must be eligible: a donor inside the 90-day recovery window is a 409 and nothing is written. The donation is recorded at the caller's own bank, dated today. Business Rule 28: the donor's profile group follows the test. An empty profile group is set to it; a different one is replaced only with `confirmBloodGroupChange: true` — without it the answer is a 409 with `code: \"BLOOD_GROUP_CHANGE_UNCONFIRMED\"` and nothing is written, not even the donation. Every profile change is audited; the receipt's `profileBloodTypeUpdated` says whether one happened."
           }
         }
       ]

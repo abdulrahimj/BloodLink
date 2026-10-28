@@ -65,12 +65,12 @@ const HEADINGS = {
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
-  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions and stock write-offs by bank staff, newest first — permanent and read-only" },
+  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions, and stock write-offs and donor blood group changes by bank staff, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
 /** How each audit action reads and its badge tone: suspend red, reactivate green, creations (facilities too) navy,
- * edits amber, and a write-off red (blood lost). */
+ * edits amber (a donor blood group change too, Business Rule 28), and a write-off red (blood lost). */
 const AUDIT_ACTION = {
   ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
   ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
@@ -79,6 +79,7 @@ const AUDIT_ACTION = {
   BLOOD_BANK_CREATED: { label: "Created", tone: "ad-au-created" },
   HOSPITAL_CREATED: { label: "Created", tone: "ad-au-created" },
   STOCK_WRITTEN_OFF: { label: "Written off", tone: "ad-au-written-off" },
+  DONOR_BLOOD_GROUP_UPDATED: { label: "Blood group", tone: "ad-au-edited" },
 };
 
 /** The line under an audit entry's subject: the account's role, the kind of facility, or a stock batch. */

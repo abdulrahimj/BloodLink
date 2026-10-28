@@ -39,7 +39,7 @@ public class AuditLog {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    /** The administrator who acted. */
+    /** Who acted: an administrator, or bank staff for STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED. */
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "actor_user_id", nullable = false, updatable = false)
     private User actor;
@@ -48,7 +48,7 @@ public class AuditLog {
     @Column(name = "action", nullable = false, length = 32, updatable = false)
     private AuditAction action;
 
-    /** The account the action was done to — set for the four ACCOUNT_ actions,
+    /** The account the action was done to — set for the four ACCOUNT_ actions and DONOR_BLOOD_GROUP_UPDATED,
      *  null for a facility creation (V14). */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_user_id", updatable = false)

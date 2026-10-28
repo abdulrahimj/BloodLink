@@ -14,6 +14,7 @@ import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
+import com.bloodlink.donor.DonorBloodGroupService;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
@@ -24,8 +25,8 @@ import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Recording a donation, in one transaction: the Donation row, the donor's last_donation_date, and a new batch
- * of stock (Business Rule 24). Expiry is as entered, or donation date + 42 days (provisional).
+ * Recording a donation, in one transaction: the Donation row, the donor's last_donation_date and profile blood group
+ * (Business Rule 28), and a new batch of stock (Business Rule 24). Expiry as entered, or donation date + 42 days.
  */
 @Service
 public class DonationService {
@@ -38,17 +39,20 @@ public class DonationService {
     private final DonorRepository donorRepository;
     private final ActingBankResolver actingBankResolver;
     private final InventoryService inventoryService;
+    private final DonorBloodGroupService donorBloodGroupService;
 
     DonationService(
         DonationRepository donationRepository,
         DonorRepository donorRepository,
         ActingBankResolver actingBankResolver,
-        InventoryService inventoryService
+        InventoryService inventoryService,
+        DonorBloodGroupService donorBloodGroupService
     ) {
         this.donationRepository = donationRepository;
         this.donorRepository = donorRepository;
         this.actingBankResolver = actingBankResolver;
         this.inventoryService = inventoryService;
+        this.donorBloodGroupService = donorBloodGroupService;
     }
 
     /**
@@ -75,9 +79,13 @@ public class DonationService {
             .orElseThrow(() -> new NotFoundException("No donor found for this id."));
 
         requireEligible(donor);
+        // A test that contradicts the profile's group needs the staff member's confirmation (Business Rule 28);
+        // refused here, before the first write, so nothing at all is saved without it.
+        donorBloodGroupService.requireConfirmedIfChanging(
+            donor, testedBloodType, payload.bloodGroupChangeConfirmed());
 
         // 1. What was drawn and tested: the group entered from today's test (Business Rule 4);
-        // donor.getBloodType() is never read here.
+        // the donation never takes the profile's group.
         Donation donation = new Donation();
         donation.setDonor(donor);
         donation.setBloodBank(bank);
@@ -90,6 +98,10 @@ public class DonationService {
         //    "eligible" and could be appealed to — or recorded — again the same week.
         donor.setLastDonationDate(today);
         donorRepository.save(donor);
+
+        // The profile group follows the test (Business Rule 28): filled if empty, replaced if confirmed, audited.
+        boolean profileUpdated = donorBloodGroupService.updateFromDonation(
+            donor, testedBloodType, bank, principal.getId());
 
         // 3. The units, as a new batch linked to this donation (Business Rule 24); receiveDonation also runs
         // the low-stock check and cooldown recovery, as Add New Batch does.
@@ -107,7 +119,8 @@ public class DonationService {
             stock.unitsAvailable(),
             stock.expiryDate(),
             stock.status(),
-            expiryDate
+            expiryDate,
+            profileUpdated
         );
     }
 

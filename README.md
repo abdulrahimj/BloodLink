@@ -7,6 +7,7 @@ It was built as a final-year BSc Computer Science dissertation project.
 ## Key features
 
 - **Donor registration and eligibility tracking.** Donors register with their phone number (email is optional), see their own profile and donation history, and are shown whether they are currently eligible to give. Eligibility is a safety rule: someone still in the 90-day recovery period after a donation is never sent an appeal and cannot have a donation recorded.
+- **Blood group from the blood bank's test.** A donor may register with a blood group or "I don't know yet". The group a blood bank tests and records is what counts: recording a donation saves the tested group to an empty profile, and replaces a different one only after the staff member confirms the change. Bank staff can also correct a donor's group after a test, with a note saying how it was tested. Every change goes into the audit log, and a donor starts receiving appeals for their group as soon as it is recorded.
 - **Stock held batch by batch, each with its own expiry date.** Every new delivery ("Add New Batch") and every recorded donation becomes its own batch. Only usable blood counts as stock: once a batch passes its expiry date it is no longer counted, shown as available or issued anywhere. It is listed separately as "expired, awaiting write-off". Low and critical levels are judged on usable units only. Hospitals see live usable totals across all banks.
 - **Earliest expiry first.** When a bank sends units to a hospital, they are taken from the batch that expires soonest, then the next. Each batch records exactly where its units went.
 - **Writing off stock.** Bank staff can remove units from a batch that has expired, been damaged, failed testing or was entered by mistake. They give a reason, and each write-off goes into the permanent audit log.
@@ -14,7 +15,7 @@ It was built as a final-year BSc Computer Science dissertation project.
 - **Hospital blood requests filled by several banks together.** A hospital raises a request; any blood bank with stock can contribute part or all of it, so two banks can cover a request neither could alone. Both sides see progress, such as how many units have arrived and from which banks.
 - **Donation appeals that donors can answer.** A blood bank running short can appeal to donors of the blood group it needs. Only eligible donors are asked, and a bank cannot repeat an appeal too often. A donor can accept an appeal from their portal, and the bank's staff are told straight away.
 - **Real-time notifications.** Low-stock alerts, new requests, request progress, appeals, appeal acceptances and expiry reminders are pushed to the right people as they happen. They are also stored, so nothing is lost if someone was offline. Notifications go to active accounts only: a suspended account receives none.
-- **Admin console.** Administrators create and manage staff accounts, add blood banks and hospitals, read a permanent audit log of their own actions and of stock write-offs, and see reports with CSV downloads. Administrators have read-only oversight of stock: they can see every bank's stock, batches and batch history, but cannot add stock, record donations, contribute units to requests or write units off. Only a bank's own staff can change its stock.
+- **Admin console.** Administrators create and manage staff accounts, add blood banks and hospitals, read a permanent audit log of their own actions, of stock write-offs and of donor blood group changes, and see reports with CSV downloads. Administrators have read-only oversight of stock: they can see every bank's stock, batches and batch history, but cannot add stock, record donations, contribute units to requests or write units off. Only a bank's own staff can change its stock.
 
 Everyone signs in to one web application and sees the views for their role: Donor, Hospital Staff, Blood Bank Staff or Administrator.
 
@@ -143,7 +144,7 @@ npm test                               # 3. frontend tests
 (On macOS / Linux use `./mvnw` instead of `.\mvnw.cmd`.)
 
 1. **Unit tests** check the backend's rules one piece at a time, with no database: eligibility, stock thresholds, earliest-expiry-first issuing, appeal cooldowns, phone and email formats, the JWT secret checks, and who may do what. They need nothing set up.
-2. **Integration tests** (every class whose name ends in `IT`) start the real backend against a real PostgreSQL database and check whole features end to end: requests filled by several banks, write-offs, the daily expiry notices, admin accounts and the audit log, reports, the donor roster, and who receives each notification. They need:
+2. **Integration tests** (every class whose name ends in `IT`) start the real backend against a real PostgreSQL database and check whole features end to end: requests filled by several banks, write-offs, the daily expiry notices, admin accounts and the audit log, reports, the donor roster, donor blood group changes, and who receives each notification. They need:
    - a database named `bloodlink_test`, created once: `CREATE DATABASE bloodlink_test;`
    - PostgreSQL on `localhost:5432`. The tests sign in as user `postgres` with password `root` unless you set `BLOODLINK_TEST_DB_USERNAME` and `BLOODLINK_TEST_DB_PASSWORD` in the terminal you run them from. Every integration test uses these two variables, so with neither set nothing changes. In PowerShell, for that terminal only:
 
@@ -152,13 +153,13 @@ npm test                               # 3. frontend tests
      $env:BLOODLINK_TEST_DB_PASSWORD = "your_password"
      ```
    - permission for that user to create databases: three tests make a throwaway database of their own (`bloodlink_race_test`, `bloodlink_bootstrap_race_test`, `bloodlink_migration_test`) and delete it when they finish.
-3. **Frontend tests** check the wording and logic kept in `frontend/src/lib/`: appeal messages, batch and write-off forms, pagination, reports and user-account filters. They use Node's built-in test runner and need nothing set up beyond `npm install`.
+3. **Frontend tests** check the wording and logic kept in `frontend/src/lib/`: appeal messages, batch and write-off forms, blood group messages, pagination, reports and user-account filters. They use Node's built-in test runner and need nothing set up beyond `npm install`.
 
 The integration tests roll back everything they write, so they are safe to re-run, and they never touch `bloodlink_dev`. Tests must only ever use `bloodlink_test`: if a `SPRING_DATASOURCE_URL` is set in your terminal it would override that, so the tests refuse to start until you remove it (`Remove-Item Env:SPRING_DATASOURCE_URL`). For the same reason, set `SPRING_DATASOURCE_*` per terminal, never permanently.
 
 ## Database migrations
 
-The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V25__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number, which is V26 now. V25 added `users.must_change_password` for the forced password change above. The move to batch-level stock is complete: V24 dropped the old one-row-per-group stock table, so stock lives only in `blood_inventory_batches`. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
+The schema is built by Flyway from the numbered files in `backend/src/main/resources/db/migration` (`V1__…` to `V26__…`), run in order. **Once a migration has been applied anywhere, never edit it and never reuse its number.** Flyway stores a checksum of every applied file, and refuses to start if one changes. A change always goes in a new file with the next number, which is V27 now. V25 added `users.must_change_password` for the forced password change above; V26 lets the audit log record a change to a donor's blood group (`DONOR_BLOOD_GROUP_UPDATED`) and changes no data. The move to batch-level stock is complete: V24 dropped the old one-row-per-group stock table, so stock lives only in `blood_inventory_batches`. The demo data lives separately in `db/demo-seed` (`V900` upwards) and is only loaded by the `demo` profile.
 
 ## Setting a real JWT secret
 

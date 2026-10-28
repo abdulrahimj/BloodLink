@@ -24,6 +24,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
+import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Donation;
@@ -32,9 +33,11 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.AppealAvailability;
+import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.StockStatus;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
+import com.bloodlink.donor.DonorBloodGroupService;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
 import com.bloodlink.repository.DonationRepository;
@@ -47,7 +50,7 @@ import com.bloodlink.web.error.NotFoundException;
 
 /**
  * Recording a donation's three effects; the tested group is stored, not the profile's (Business Rule 4),
- * and a donor in recovery is refused with nothing written, boundary included (Business Rule 2).
+ * a donor in recovery is refused with nothing written (Business Rule 2), and the profile follows the test (Rule 28).
  */
 @ExtendWith(MockitoExtension.class)
 class DonationServiceTest {
@@ -55,18 +58,22 @@ class DonationServiceTest {
     private static final UUID BANK_ID = UUID.randomUUID();
     private static final UUID DONOR_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
+    private static final UUID STAFF_ID = UUID.randomUUID();
     private static final DateTimeFormatter LONG_DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
 
     @Mock private DonationRepository donationRepository;
     @Mock private DonorRepository donorRepository;
     @Mock private ActingBankResolver actingBankResolver;
     @Mock private InventoryService inventoryService;
+    @Mock private AuditLogService auditLogService;
 
     private DonationService service;
 
     @BeforeEach
     void setUp() {
-        service = new DonationService(donationRepository, donorRepository, actingBankResolver, inventoryService);
+        // The real blood group rule over the same mocks, so its effects (profile, audit) are checked as written.
+        DonorBloodGroupService bloodGroups = new DonorBloodGroupService(donorRepository, actingBankResolver, auditLogService);
+        service = new DonationService(donationRepository, donorRepository, actingBankResolver, inventoryService, bloodGroups);
     }
 
     // ---------- fixtures ----------
@@ -79,12 +86,16 @@ class DonationServiceTest {
     }
 
     private static AuthenticatedUser principal() {
-        return new AuthenticatedUser(USER_ID, "+23276000002", "hash", Role.BLOOD_BANK_STAFF);
+        return new AuthenticatedUser(STAFF_ID, "+23276000002", "hash", Role.BLOOD_BANK_STAFF);
     }
 
-    /** A donor whose stored profile group is A+ — deliberately different from the
-     *  tested group used in the tests below, so the two cannot be confused. */
+    /** A donor whose profile group is O+, the group most tests below record, so no change needs confirming;
+     *  the Business Rule 28 tests choose the profile group themselves. */
     private static Donor donorWithProfileGroup(LocalDate lastDonationDate) {
+        return donorWithProfileGroup(lastDonationDate, BloodType.O_POSITIVE);
+    }
+
+    private static Donor donorWithProfileGroup(LocalDate lastDonationDate, BloodType profileGroup) {
         User user = new User();
         user.setId(USER_ID);
         user.setFullName("Rahim Barrie");
@@ -93,13 +104,17 @@ class DonationServiceTest {
         Donor donor = new Donor();
         donor.setId(DONOR_ID);
         donor.setUser(user);
-        donor.setBloodType(BloodType.A_POSITIVE);
+        donor.setBloodType(profileGroup);
         donor.setLastDonationDate(lastDonationDate);
         return donor;
     }
 
     private static RecordDonationPayload payload(String testedGroup, int units) {
-        return new RecordDonationPayload(DONOR_ID, testedGroup, units, null, null);
+        return new RecordDonationPayload(DONOR_ID, testedGroup, units, null, null, null);
+    }
+
+    private static RecordDonationPayload confirmedPayload(String testedGroup) {
+        return new RecordDonationPayload(DONOR_ID, testedGroup, 1, null, null, true);
     }
 
     /** The lookup every path makes — the bank, then the donor under its lock. */
@@ -157,15 +172,17 @@ class DonationServiceTest {
         assertThat(response.donorName()).isEqualTo("Rahim Barrie");
     }
 
+    /**
+     * Business Rule 4 still holds: the donation and its stock follow today's test. Since Business Rule 28 the
+     * profile follows it too, but only once the change is confirmed, and the change is audited.
+     */
     @Test
-    void theStoredGroupIsTheOneTestedTodayNotTheDonorsProfileGroup() {
-        // Business Rule 4: the donor's profile says A+, today's test says O-.
-        // The donation — and the stock it creates — must follow the test.
-        Donor donor = donorWithProfileGroup(null);
+    void aConfirmedDifferentGroupIsStoredOnTheDonationAndReplacesTheProfileGroup() {
+        Donor donor = donorWithProfileGroup(null, BloodType.A_POSITIVE);
         stubBankAndDonor(donor);
         stubWritesAccepting(12);
 
-        service.recordDonation(payload("O-", 1), principal());
+        DonationRecordedResponse response = service.recordDonation(confirmedPayload("O-"), principal());
 
         ArgumentCaptor<Donation> donationCaptor = ArgumentCaptor.forClass(Donation.class);
         verify(donationRepository).save(donationCaptor.capture());
@@ -179,9 +196,56 @@ class DonationServiceTest {
         assertThat(batchSource.getValue().getBloodType()).isEqualTo(BloodType.O_NEGATIVE);
         assertThat(batchSource.getValue().getBloodBank().getId()).isEqualTo(BANK_ID);
 
-        // And the profile value is left exactly as it was — recording a donation
-        // is not a back door for editing the donor's record.
+        assertThat(donor.getBloodType()).isEqualTo(BloodType.O_NEGATIVE);
+        assertThat(response.profileBloodTypeUpdated()).isTrue();
+        verify(auditLogService).record(eq(STAFF_ID), eq(AuditAction.DONOR_BLOOD_GROUP_UPDATED), eq(donor.getUser()),
+            eq("Blood group changed from A+ to O-. Source: donation at Makeni Regional Blood Bank."));
+    }
+
+    // ---------- Business Rule 28: the profile group follows the test ----------
+
+    @Test
+    void anEmptyProfileGroupIsFilledFromTheTestWithoutConfirmationAndAudited() {
+        Donor donor = donorWithProfileGroup(null, null);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(5);
+
+        DonationRecordedResponse response = service.recordDonation(payload("B+", 1), principal());
+
+        assertThat(donor.getBloodType()).isEqualTo(BloodType.B_POSITIVE);
+        assertThat(response.profileBloodTypeUpdated()).isTrue();
+        verify(auditLogService).record(eq(STAFF_ID), eq(AuditAction.DONOR_BLOOD_GROUP_UPDATED), eq(donor.getUser()),
+            eq("Blood group set to B+ (none was recorded before). Source: donation at Makeni Regional Blood Bank."));
+    }
+
+    @Test
+    void theSameGroupAsTheProfileChangesNothingAndWritesNoAuditEntry() {
+        Donor donor = donorWithProfileGroup(null, BloodType.O_POSITIVE);
+        stubBankAndDonor(donor);
+        stubWritesAccepting(5);
+
+        DonationRecordedResponse response = service.recordDonation(payload("O+", 1), principal());
+
+        assertThat(donor.getBloodType()).isEqualTo(BloodType.O_POSITIVE);
+        assertThat(response.profileBloodTypeUpdated()).isFalse();
+        verify(auditLogService, never()).record(any(), any(), any(), any());
+    }
+
+    @Test
+    void aDifferentGroupWithoutConfirmationIsRefusedWithItsCodeAndNothingIsWrittenNotEvenTheDonation() {
+        Donor donor = donorWithProfileGroup(null, BloodType.A_POSITIVE);
+        stubBankAndDonor(donor);
+
+        assertThatThrownBy(() -> service.recordDonation(payload("B+", 1), principal()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("This donor's profile says A+, but the tested group is B+.")
+            .extracting(e -> ((ConflictException) e).getCode())
+            .isEqualTo(DonorBloodGroupService.CHANGE_UNCONFIRMED_CODE);
+
+        verifyNothingWasWritten();
+        verify(auditLogService, never()).record(any(), any(), any(), any());
         assertThat(donor.getBloodType()).isEqualTo(BloodType.A_POSITIVE);
+        assertThat(donor.getLastDonationDate()).isNull();
     }
 
     @Test
@@ -190,7 +254,7 @@ class DonationServiceTest {
         stubBankAndDonor(donor);
         stubWritesAccepting(3);
 
-        DonationRecordedResponse response = service.recordDonation(payload("AB-", 2), principal());
+        DonationRecordedResponse response = service.recordDonation(payload("O+", 2), principal());
 
         // The batch is the donation's own: its units, and donation date + the 42-day
         // StockPolicy constant, since no expiry date was entered.
@@ -211,7 +275,7 @@ class DonationServiceTest {
         LocalDate onTheBagLabel = LocalDate.now().plusDays(35);
 
         DonationRecordedResponse response = service.recordDonation(
-            new RecordDonationPayload(DONOR_ID, "AB-", 1, null, onTheBagLabel), principal());
+            new RecordDonationPayload(DONOR_ID, "O+", 1, null, onTheBagLabel, null), principal());
 
         verify(inventoryService).receiveDonation(any(), eq(onTheBagLabel));
         assertThat(response.batchExpiryDate()).isEqualTo(onTheBagLabel);
@@ -228,7 +292,7 @@ class DonationServiceTest {
             .when(inventoryService).requireAcceptableExpiry(typo);
 
         assertThatThrownBy(() -> service.recordDonation(
-                new RecordDonationPayload(DONOR_ID, "O+", 1, null, typo), principal()))
+                new RecordDonationPayload(DONOR_ID, "O+", 1, null, typo, null), principal()))
             .isInstanceOf(InvalidFieldException.class);
 
         verifyNothingWasWritten();
@@ -298,7 +362,7 @@ class DonationServiceTest {
         AuthenticatedUser admin = new AuthenticatedUser(USER_ID, "+23276000009", "hash", Role.ADMIN);
 
         assertThatThrownBy(() -> service.recordDonation(
-                new RecordDonationPayload(DONOR_ID, "O+", 1, BANK_ID, null), admin))
+                new RecordDonationPayload(DONOR_ID, "O+", 1, BANK_ID, null, null), admin))
             .isInstanceOf(AccessDeniedException.class);
 
         verify(actingBankResolver, never()).resolve(any(), any(), any());

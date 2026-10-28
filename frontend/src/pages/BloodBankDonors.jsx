@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getDonorRoster, getDonorHistoryAtBank } from "../api/donors.js";
+import { getDonorRoster, getDonorHistoryAtBank, correctDonorBloodGroup } from "../api/donors.js";
+import {
+  BLOOD_GROUP_NOTE_MAX, bloodGroupEditProblems, describeBloodGroupEditQuestion,
+} from "../lib/bloodGroup.js";
 import { RecordDonationModal } from "./BloodBankInventory.jsx";
 import { formatFullDate, formatHeaderDate } from "../lib/dates.js";
 import {
@@ -28,6 +31,7 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedDonor, setSelectedDonor] = useState(null); // a roster row, or null
   const [recordingDonationFor, setRecordingDonationFor] = useState(null); // a roster row, or null
+  const [editingGroupFor, setEditingGroupFor] = useState(null); // a roster row, or null
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -67,9 +71,10 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
     setFilters((current) => applyDonorRosterFilterChange(current, changes));
   }
 
-  /** After recording a donation, close both overlays and reload, since the donor's figures changed. */
-  async function handleDonationRecorded() {
+  /** After a donation or a blood group edit, close every overlay and reload, since the donor's row changed. */
+  async function handleDonorChanged() {
     setRecordingDonationFor(null);
+    setEditingGroupFor(null);
     setSelectedDonor(null);
     try {
       const data = await getDonorRoster(buildDonorRosterParams(filters), bloodBankId);
@@ -190,6 +195,8 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
         .bd-b-green { background: var(--green); }
         .bd-b-amber { background: var(--amber); }
         .bd-empty { font-size: clamp(10px, 1.5vh, 13px); color: var(--ink-muted); padding: clamp(8px, 1.4vh, 14px) 2px; }
+        .bd-edit-btn { white-space: nowrap; }
+        .bd-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
         /* paging footer */
         .bd-pager {
@@ -260,13 +267,16 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
         .bi-modal-sub { font-size: clamp(10.5px, 1.5vh, 13px); color: var(--ink-muted); margin-bottom: clamp(12px, 2vh, 18px); }
         .bi-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: clamp(10px, 1.6vh, 15px); }
         .bi-field label { font-size: clamp(10px, 1.4vh, 12.5px); font-weight: 600; color: #3D3D3D; }
-        .bi-field select, .bi-field input {
+        .bi-field select, .bi-field input, .bi-field textarea {
           width: 100%; font-family: inherit; font-size: clamp(11.5px, 1.6vh, 14px); font-weight: 500;
           color: var(--ink); padding: clamp(8px, 1.35vh, 11px) 12px;
           border: 1.5px solid var(--line); border-radius: 8px; background: #FBFBFC;
         }
-        .bi-field select:focus, .bi-field input:focus { outline: none; border-color: var(--navy); background: #FFF; }
+        .bi-field select:focus, .bi-field input:focus, .bi-field textarea:focus { outline: none; border-color: var(--navy); background: #FFF; }
+        .bi-field textarea { resize: vertical; min-height: 64px; }
+        .bi-field-count { font-size: clamp(9px, 1.25vh, 11px); color: var(--ink-muted); align-self: flex-end; }
         .bi-field-err { font-size: clamp(9px, 1.25vh, 11px); font-weight: 500; color: var(--red); }
+        .bi-field-note { font-size: clamp(9px, 1.25vh, 11px); font-weight: 600; color: var(--green); }
         .bi-modal-alert {
           background: rgba(200,16,46,.07); border: 1.5px solid rgba(200,16,46,.28); color: #8E0B21;
           border-radius: 8px; padding: clamp(7px, 1.2vh, 10px) 12px;
@@ -404,17 +414,18 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
               <table className="bd-table">
                 <thead>
                   <tr>
-                    <th style={{ width: "22%" }}>Name</th>
-                    <th style={{ width: "11%" }}>Blood group</th>
-                    <th style={{ width: "18%" }}>Phone</th>
-                    <th style={{ width: "16%" }}>Last donation (any bank)</th>
-                    <th style={{ width: "18%" }}>Eligibility</th>
-                    <th style={{ width: "15%" }}>Donations here</th>
+                    <th style={{ width: "19%" }}>Name</th>
+                    <th style={{ width: "10%" }}>Blood group</th>
+                    <th style={{ width: "15%" }}>Phone</th>
+                    <th style={{ width: "15%" }}>Last donation (any bank)</th>
+                    <th style={{ width: "16%" }}>Eligibility</th>
+                    <th style={{ width: "10%" }}>Donations here</th>
+                    <th style={{ width: "15%" }}><span className="bd-sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {emptyMessage && (
-                    <tr><td colSpan={6} className="bd-empty">{emptyMessage}</td></tr>
+                    <tr><td colSpan={7} className="bd-empty">{emptyMessage}</td></tr>
                   )}
                   {rows.map((row) => {
                     const badge = describeDonorEligibility(
@@ -429,6 +440,16 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
                         </td>
                         <td><span className={`bd-badge bd-b-${badge.tone}`}>{badge.text}</span></td>
                         <td>{row.donationsHere}</td>
+                        <td>
+                          {/* Its own action, so the click must not also open the history panel. */}
+                          <button
+                            type="button" className="bd-pager-btn bd-edit-btn"
+                            aria-label={`Edit ${row.fullName}'s blood group`}
+                            onClick={(e) => { e.stopPropagation(); setEditingGroupFor(row); }}
+                          >
+                            Edit blood group
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -482,9 +503,104 @@ export default function BloodBankDonors({ bloodBankId, user, onSignOut, onNaviga
           bloodBankId={bloodBankId}
           initialPhone={recordingDonationFor.phone}
           onClose={() => setRecordingDonationFor(null)}
-          onRecorded={handleDonationRecorded}
+          onRecorded={handleDonorChanged}
         />
       )}
+
+      {editingGroupFor && (
+        <EditBloodGroupModal
+          donor={editingGroupFor}
+          onClose={() => setEditingGroupFor(null)}
+          onSaved={handleDonorChanged}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Edit blood group" (Business Rule 28): the tested group and a required note, then a confirmation step;
+ * the checks are lib/bloodGroup.js's, and the server still decides.
+ */
+function EditBloodGroupModal({ donor, onClose, onSaved }) {
+  const [bloodType, setBloodType] = useState("");
+  const [note, setNote] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  function handleContinue(event) {
+    event.preventDefault();
+    const problems = bloodGroupEditProblems({ currentBloodType: donor.bloodType, bloodType, note });
+    setFieldErrors(problems);
+    setError(null);
+    if (Object.keys(problems).length === 0) setConfirming(true);
+  }
+
+  async function handleConfirm() {
+    setSaving(true);
+    setError(null);
+    try {
+      await correctDonorBloodGroup(donor.donorId, { bloodType, note: note.trim() });
+      await onSaved();
+    } catch (err) {
+      // Back to the form so a field the server refused can be corrected.
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+      setConfirming(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="bi-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="bi-modal" onSubmit={handleContinue} noValidate>
+        <div className="bi-modal-title">Edit blood group</div>
+        <div className="bi-modal-sub">
+          {donor.fullName} · {donor.bloodType ? `currently ${donor.bloodType}` : "no group on file"}.
+          Use this after a test, when no donation is being recorded.
+        </div>
+
+        {error && <div className="bi-modal-alert" role="alert">{error}</div>}
+
+        <div className="bi-field">
+          <label htmlFor="edit-group">Blood Group (as tested)</label>
+          <select id="edit-group" value={bloodType} disabled={confirming}
+                  onChange={(e) => setBloodType(e.target.value)}>
+            <option value="">Select tested group…</option>
+            {BLOOD_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+          {fieldErrors.bloodType && <span className="bi-field-err">{fieldErrors.bloodType}</span>}
+        </div>
+
+        <div className="bi-field">
+          <label htmlFor="edit-group-note">Note — how or where the test was done</label>
+          <textarea id="edit-group-note" value={note} disabled={confirming} maxLength={BLOOD_GROUP_NOTE_MAX}
+                    placeholder="e.g. Retested at our lab, sample 4471"
+                    onChange={(e) => setNote(e.target.value)} />
+          <span className="bi-field-count">{note.length} / {BLOOD_GROUP_NOTE_MAX}</span>
+          {fieldErrors.note && <span className="bi-field-err">{fieldErrors.note}</span>}
+        </div>
+
+        {confirming ? (
+          <div className="bi-donor-warn" role="alert">
+            <strong>{describeBloodGroupEditQuestion(donor.fullName, donor.bloodType, bloodType)}</strong>
+            <div className="bi-modal-actions">
+              <button type="button" className="bi-modal-cancel" onClick={() => setConfirming(false)}>Go back</button>
+              <button type="button" className="bi-modal-submit" disabled={saving} onClick={handleConfirm}>
+                {saving ? "Saving…" : "Confirm"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bi-modal-actions">
+            <button type="button" className="bi-modal-cancel" onClick={onClose}>Cancel</button>
+            <button type="submit" className="bi-modal-submit">Continue</button>
+          </div>
+        )}
+      </form>
     </div>
   );
 }

@@ -96,7 +96,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 |---|---|
 | id | UUID, PK |
 | user_id | UUID, FK -> User (1:1) |
-| blood_type | enum: A+, A-, B+, B-, O+, O-, AB+, AB- |
+| blood_type | enum: A+, A-, B+, B-, O+, O-, AB+, AB- — nullable ("I don't know yet" at registration); set or changed only from a blood bank's test (Business Rule 28) |
 | date_of_birth | date |
 | gender | enum |
 | last_donation_date | date, nullable |
@@ -281,9 +281,9 @@ message template ("<bank> needs <group> donors. …"); later appeals are stamped
 | field | type |
 |---|---|
 | id | UUID, PK |
-| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3) |
-| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions only |
+| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test) |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28) |
+| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions and for DONOR_BLOOD_GROUP_UPDATED (the donor's account) only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
@@ -336,7 +336,8 @@ BloodBank 1–N Notification (as appeal source)
    counted, so it can never hold a group above a threshold it has really fallen below.
 4. **`Donation.blood_type` is independently recorded, not copied from `Donor.blood_type`.** Blood type
    is re-verified by testing at every donation; the donation record must reflect what was tested at
-   that time, not silently follow later edits to the donor's profile.
+   that time, not silently follow later edits to the donor's profile. The reverse now holds by design:
+   the profile follows the test (Business Rule 28), never the donation the profile.
 5. **BloodRequest status lifecycle** — **superseded by Business Rule 20.** It now reads
    PENDING → PARTIALLY_FULFILLED → FULFILLED (or straight to FULFILLED), or PENDING → REJECTED;
    APPROVED no longer exists. What survives unchanged is the half that always mattered: units
@@ -1225,6 +1226,45 @@ BloodBank 1–N Notification (as appeal source)
       `lib/passwordChange.js` (tested), mirroring the server's.
     - **Known limits:** an account created before V25 with an administrator-shown password is not flagged; a
       flagged account whose temporary password is lost must be recreated (as Business Rule 14 already says).
+28. **A donor's profile blood group comes from the blood bank's test.** The project owner's decisions, final.
+    Registration is unchanged: a donor may choose a group or "I don't know yet" (null). The group blood bank staff
+    record from a test is the source of truth for the profile. Schema: `V26` (the audit action only; no column).
+    All of it lives in `DonorBloodGroupService` (`com.bloodlink.donor`).
+    - **Record Donation updates the profile** (`DonationService`, same transaction, donor row locked by
+      `findByIdForUpdate`): an empty profile group is set to the tested group; the same group changes nothing and
+      writes no audit entry; a **different** group replaces the profile's only when the request carries
+      `confirmBloodGroupChange: true`. Without it: **409 with `code: "BLOOD_GROUP_CHANGE_UNCONFIRMED"`** ("This
+      donor's profile says A+, but the tested group is B+. Confirm the change …") and **nothing is written, not even
+      the donation** — checked after the eligibility check and before the first write. The donation row still keeps
+      the tested group exactly as before (Business Rule 4). The receipt's `profileBloodTypeUpdated` says whether the
+      profile changed. `ConflictException` gained an optional code for this, sent as `ApiError.code`.
+    - **Manual correction after a test, no donation: `PATCH /api/donors/{donorId}/blood-group`** with
+      `{ bloodType, note }`. **ACTIVE BLOOD_BANK_STAFF of any bank, for any donor** (donors are city-wide), through
+      `ActingBankResolver.resolveForStockChange` before anything is read; ADMIN, hospital staff and donors are a 403
+      (SecurityConfig, matched before `/api/donors/**`, and again in the service); a suspended account's token is
+      already a 401 at the filter. `note` is required (not blank) and at most 500 characters (400 on `note`); the
+      same group as now is a 400 on `bloodType`; an unknown donor a 404. The donor row is locked as for a donation.
+      Answers `{ donorId, fullName, previousBloodType, bloodType }`.
+    - **Every profile change is audited as DONOR_BLOOD_GROUP_UPDATED**, in the same transaction: actor the staff
+      member, target the donor's user account (`target_user_id`, like the ACCOUNT_ actions — `AuditAction.isAccountAction`
+      includes it), `created_at` the time, and details such as "Blood group changed from A+ to B+. Source: donation
+      at X." / "Blood group set to B+ (none was recorded before). Source: manual correction by staff of X. Note: …".
+      The Admin Audit Log labels it "Blood group" (amber) with subject kind "Donor".
+    - **Appeals follow at once.** `DonorRepository.findByBloodTypeWithUser` matches the profile group, so a donor
+      with none receives no appeal; once a group is set they receive appeals for it, subject as always to Business
+      Rule 2's eligibility (a donor typed by their first donation is in recovery for 90 days, so is counted in the
+      reach preview's `donorsInRecovery` until then) and to the active-account rule.
+    - **Frontend.** Record Donation (`BloodBankInventory.jsx`): with no group on file it says "This donor's blood
+      group will be saved to their profile."; with a different tested group it warns before saving, and Record
+      Donation opens a confirmation step ("Change X's blood group from A+ to B+ and record this donation?"); the
+      flag is sent only from that step. A coded 409 (the profile changed since the lookup) re-reads the donor. The
+      Donors page has an "Edit blood group" button per row: group, required note (500 counter), then "Change X's
+      blood group from A+ to B+?" or "Set X's blood group to B+?". The Donor Portal shows "Not recorded" and "Your
+      blood group isn't recorded yet. Visit a blood bank to be tested, and it will be added after your first
+      donation." when there is none. Wording and checks in `lib/bloodGroup.js` (tested).
+    - **Known limits:** the confirmation is a yes/no flag, not "I confirm replacing A+": if another staff member
+      changes the profile between the lookup and a confirmed submit, the confirmed donation still replaces it (both
+      changes are audited). A donor is not notified when their group is set or changed.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1244,6 +1284,9 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for first sign-in (Business Rule 27, V25).** `User` gains
   `must_change_password`; the "create account" use case now ends with the holder setting their own password, and
   the first administrator is created from startup settings rather than by hand.
+- **Chapters 3, 4 and 5 — use cases and narrative for donor blood groups (Business Rule 28, V26).** The profile
+  group now comes from the blood bank's test: set or changed when a donation is recorded (a change confirmed by
+  staff), or corrected by staff after a test; `audit_log` gains DONOR_BLOOD_GROUP_UPDATED, actor bank staff.
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for appeal acceptance (Business Rule 25, V20–V22).**
   `Notification` gains `accepted`, `source_blood_bank_id` (BloodBank 1–N Notification), `blood_type` and
   `acceptance_alert_sent`; the donor's "respond to donation appeals" use case now has a real flow.
@@ -1260,11 +1303,11 @@ listed so nothing is forgotten when the chapters are next revised.
 
 ## Actors (roles) and what each can do
 
-- **Donor** — view own profile/history/eligibility, accept donation appeals while eligible (Business Rule 25)
+- **Donor** — view own profile/history/eligibility (the blood group as a blood bank recorded it, Business Rule 28), accept donation appeals while eligible (Business Rule 25)
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions and stock write-offs (Business Rule 17), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
 
 ## Conventions
@@ -1298,7 +1341,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

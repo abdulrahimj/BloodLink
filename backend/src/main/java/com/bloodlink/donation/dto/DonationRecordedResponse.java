@@ -25,5 +25,7 @@ public record DonationRecordedResponse(
     LocalDate stockExpiryDate,
     StockStatus stockStatus,
     /** The expiry date given to this donation's own batch: as entered, or the default. */
-    LocalDate batchExpiryDate
+    LocalDate batchExpiryDate,
+    /** True when the donor's profile blood group was set or changed to the tested one (Business Rule 28). */
+    boolean profileBloodTypeUpdated
 ) {}

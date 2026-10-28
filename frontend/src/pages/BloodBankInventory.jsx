@@ -9,6 +9,10 @@ import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 import { refreshesInventory } from "../lib/batchStock.js";
+import {
+  describeDonationGroupCheck, describeDonationGroupChangeQuestion, describeDonationRecorded,
+  isUnconfirmedBloodGroupChange, needsBloodGroupChangeConfirmation,
+} from "../lib/bloodGroup.js";
 import BatchDialog from "./BloodBankBatches.jsx";
 
 /* BloodLink — Blood Bank: Blood Inventory: usable, expiring and expired stock per group, each group's batches
@@ -149,11 +153,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
    */
   async function handleDonationRecorded(receipt) {
     setDonationModalOpen(false);
-    setDonationNotice(
-      `Donation recorded — ${receipt.unitsDonated} unit${receipt.unitsDonated === 1 ? "" : "s"} `
-      + `of ${receipt.bloodType} from ${receipt.donorName}. `
-      + `${receipt.bloodType} stock is now ${receipt.stockAfter} units.`
-    );
+    setDonationNotice(describeDonationRecorded(receipt));
     await load();
   }
 
@@ -463,6 +463,7 @@ export default function BloodBankInventory({ bloodBankId, user, onSignOut, onNav
         }
         .bi-field select:focus, .bi-field input:focus { outline: none; border-color: var(--navy); background: #FFF; }
         .bi-field-err { font-size: clamp(9px, 1.25vh, 11px); font-weight: 500; color: var(--red); }
+        .bi-field-note { font-size: clamp(9px, 1.25vh, 11px); font-weight: 600; color: var(--green); }
         .bi-modal-alert {
           background: rgba(200,16,46,.07); border: 1.5px solid rgba(200,16,46,.28); color: #8E0B21;
           border-radius: 8px; padding: clamp(7px, 1.2vh, 10px) 12px;
@@ -816,6 +817,8 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  // The "change their profile group?" step (Business Rule 28); the confirmation is sent only from it.
+  const [confirmingGroupChange, setConfirmingGroupChange] = useState(false);
 
   async function handleLookup() {
     const trimmed = phone.trim();
@@ -824,6 +827,7 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
     setLookingUp(true);
     setLookupError(null);
     setError(null);
+    setConfirmingGroupChange(false);
     try {
       setDonor(await lookupDonorByPhone(trimmed));
       // A new donor starts a new form; the tested group must never carry over (Business Rule 4).
@@ -845,7 +849,15 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
     // `locked` as well as the disabled button: pressing Enter in the units field
     // submits a form without ever touching that button.
     if (!donor || locked || submitting) return;
+    // A test that contradicts the profile's group is confirmed first, then sent with the confirmation.
+    if (needsBloodGroupChangeConfirmation(donor.profileBloodType, bloodType)) {
+      setConfirmingGroupChange(true);
+      return;
+    }
+    await submitDonation(false);
+  }
 
+  async function submitDonation(confirmBloodGroupChange) {
     setError(null);
     setFieldErrors({});
     setSubmitting(true);
@@ -855,11 +867,17 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
         bloodType,
         unitsDonated: Number(unitsDonated),
         bloodBankId,
+        confirmBloodGroupChange,
       });
       await onRecorded(receipt);
     } catch (err) {
       setError(err.message);
       setFieldErrors(err.fieldErrors ?? {});
+      setConfirmingGroupChange(false);
+      // The profile changed since the lookup: re-read it so the warning shows before the next try.
+      if (isUnconfirmedBloodGroupChange(err)) {
+        lookupDonorByPhone(phone.trim()).then(setDonor).catch(() => {});
+      }
     } finally {
       setSubmitting(false);
     }
@@ -868,7 +886,7 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
   const eligible = donor?.eligibilityStatus === "ELIGIBLE";
   // Found, but inside the recovery window: nothing below may be filled in.
   const locked = Boolean(donor) && !eligible;
-  const groupMismatch = donor?.profileBloodType && bloodType && donor.profileBloodType !== bloodType;
+  const groupCheck = donor ? describeDonationGroupCheck(donor.profileBloodType, bloodType) : null;
 
   return (
     <div className="bi-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -927,16 +945,13 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
           <label htmlFor="donation-group">Blood Group (as tested today)</label>
           <select
             id="donation-group" value={bloodType} disabled={!donor || locked}
-            onChange={(e) => setBloodType(e.target.value)}
+            onChange={(e) => { setBloodType(e.target.value); setConfirmingGroupChange(false); }}
           >
             <option value="">Select tested group…</option>
             {BLOOD_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
           </select>
-          {groupMismatch && (
-            <span className="bi-field-err">
-              Differs from this donor&rsquo;s profile group ({donor.profileBloodType}). Today&rsquo;s
-              test is what will be recorded.
-            </span>
+          {groupCheck && (
+            <span className={groupCheck.tone === "warn" ? "bi-field-err" : "bi-field-note"}>{groupCheck.text}</span>
           )}
           {fieldErrors.bloodType && <span className="bi-field-err">{fieldErrors.bloodType}</span>}
         </div>
@@ -950,12 +965,29 @@ export function RecordDonationModal({ bloodBankId, onClose, onRecorded, initialP
           {fieldErrors.unitsDonated && <span className="bi-field-err">{fieldErrors.unitsDonated}</span>}
         </div>
 
-        <div className="bi-modal-actions">
-          <button type="button" className="bi-modal-cancel" onClick={onClose}>Cancel</button>
-          <button type="submit" className="bi-modal-submit" disabled={submitting || !donor || locked || !bloodType}>
-            {submitting ? "Recording…" : "Record Donation"}
-          </button>
-        </div>
+        {confirmingGroupChange ? (
+          <div className="bi-donor-warn" role="alert">
+            <strong>
+              {describeDonationGroupChangeQuestion(donor.fullName, donor.profileBloodType, bloodType)}
+            </strong>
+            <div className="bi-modal-actions">
+              <button type="button" className="bi-modal-cancel" onClick={() => setConfirmingGroupChange(false)}>
+                Go back
+              </button>
+              <button type="button" className="bi-modal-submit" disabled={submitting}
+                      onClick={() => submitDonation(true)}>
+                {submitting ? "Recording…" : "Confirm and record"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bi-modal-actions">
+            <button type="button" className="bi-modal-cancel" onClick={onClose}>Cancel</button>
+            <button type="submit" className="bi-modal-submit" disabled={submitting || !donor || locked || !bloodType}>
+              {submitting ? "Recording…" : "Record Donation"}
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );
