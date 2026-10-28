@@ -26,6 +26,7 @@ import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
+import com.bloodlink.domain.enums.BookingCancellation;
 import com.bloodlink.domain.enums.NotificationType;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.domain.enums.StockStatus;
@@ -457,17 +458,17 @@ public class NotificationService {
             NotificationType.DONATION_BOOKED, booking.getBloodBank(), null, null);
     }
 
-    /** DONATION_BOOKING_CANCELLED to the booked bank's active staff; automatic when a donation elsewhere closed it. */
+    /** DONATION_BOOKING_CANCELLED to the booked bank's active staff, worded by why the booking was cancelled. */
     @Transactional
-    public void notifyBookingCancelled(DonationBooking booking, boolean automatic) {
-        dispatch(activeBankStaff(booking.getBloodBank().getId()), cancelledMessage(booking, automatic),
+    public void notifyBookingCancelled(DonationBooking booking, BookingCancellation reason) {
+        dispatch(activeBankStaff(booking.getBloodBank().getId()), cancelledMessage(booking, reason),
             NotificationType.DONATION_BOOKING_CANCELLED, booking.getBloodBank(), null, null);
     }
 
-    /** The day-before DONATION_BOOKING_REMINDER to the donor, stamped with the job's instant. */
+    /** DONATION_BOOKING_REMINDER to the donor, the day before or (if that was missed) on the day; job's instant. */
     @Transactional
-    public void sendBookingReminder(DonationBooking booking, Instant now) {
-        dispatch(List.of(booking.getDonor().getUser()), reminderMessage(booking),
+    public void sendBookingReminder(DonationBooking booking, Instant now, boolean visitIsToday) {
+        dispatch(List.of(booking.getDonor().getUser()), reminderMessage(booking, visitIsToday),
             NotificationType.DONATION_BOOKING_REMINDER, booking.getBloodBank(), null, now);
     }
 
@@ -478,20 +479,26 @@ public class NotificationService {
             booking.getTimeOfDay().inWords());
     }
 
-    /** The donor's own cancellation, or the automatic one when they donated at a different bank. */
-    static String cancelledMessage(DonationBooking booking, boolean automatic) {
+    /** The donor's own cancellation, the automatic one after a donation elsewhere, or one forced by a suspension. */
+    static String cancelledMessage(DonationBooking booking, BookingCancellation reason) {
         String name = booking.getDonor().getUser().getFullName();
         String when = "%s, %s".formatted(EXPIRY_DATE.format(booking.getBookingDate()), booking.getTimeOfDay().inWords());
-        return automatic
-            ? "%s's donation booking for %s was cancelled automatically: they have since donated at another blood bank."
-                .formatted(name, when)
-            : "%s cancelled their donation booking for %s.".formatted(name, when);
+        return switch (reason) {
+            case BY_DONOR -> "%s cancelled their donation booking for %s.".formatted(name, when);
+            case DONATED_ELSEWHERE -> ("%s's donation booking for %s was cancelled automatically: they have since "
+                + "donated at another blood bank.").formatted(name, when);
+            case ACCOUNT_SUSPENDED -> "%s's donation booking for %s was cancelled because the donor's account was suspended."
+                .formatted(name, when);
+        };
     }
 
-    /** "Your donation at Makeni Regional Blood Bank is tomorrow morning." */
-    static String reminderMessage(DonationBooking booking) {
-        return "Your donation at %s is tomorrow %s.".formatted(
-            booking.getBloodBank().getName(), booking.getTimeOfDay().inWords());
+    /** "Your donation at X is tomorrow morning." the day before, or "… is today, morning." on the day. */
+    static String reminderMessage(DonationBooking booking, boolean visitIsToday) {
+        String bank = booking.getBloodBank().getName();
+        String half = booking.getTimeOfDay().inWords();
+        return visitIsToday
+            ? "Your donation at %s is today, %s.".formatted(bank, half)
+            : "Your donation at %s is tomorrow %s.".formatted(bank, half);
     }
 
     // ======================================== Shared plumbing ========================================

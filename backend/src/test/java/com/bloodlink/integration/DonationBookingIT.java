@@ -2,6 +2,7 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -343,6 +344,96 @@ class DonationBookingIT {
     }
 
     @Test
+    void aVisitBookedAfterSixForTomorrowGetsATodayReminderOnTheDayAndNoVisitGetsTwo() throws Exception {
+        Donor early = donor("Early Booker", null);
+        Donor late = donor("Late Booker", null);
+        String earlyToken = signIn(early.getUser());
+        String lateToken = signIn(late.getUser());
+
+        // 05:00: one visit booked for tomorrow before today's run; 06:00 run; 10:00: another booked for tomorrow.
+        moveClockTo(today, 5);
+        book(earlyToken, bank, today.plusDays(1), "MORNING").andExpect(status().isCreated());
+        flush();
+        moveClockTo(today, 6);
+        job.runBookings();
+        moveClockTo(today, 10);
+        book(lateToken, bank, today.plusDays(1), "AFTERNOON").andExpect(status().isCreated());
+        flush();
+        assertThat(messages(late.getUser(), NotificationType.DONATION_BOOKING_REMINDER))
+            .as("no day-before reminder for a booking made after the run").isEmpty();
+
+        // The visit day: the 06:00 run, then a restart catch-up the same morning.
+        moveClockTo(today.plusDays(1), 6);
+        job.runBookings();
+        moveClockTo(today.plusDays(1), 9);
+        job.catchUpOnStartup();
+        flush();
+
+        assertThat(messages(late.getUser(), NotificationType.DONATION_BOOKING_REMINDER))
+            .containsExactly("Your donation at " + bank.getName() + " is today, afternoon.");
+        assertThat(messages(early.getUser(), NotificationType.DONATION_BOOKING_REMINDER))
+            .as("the early booker had the day-before reminder only, never a second")
+            .containsExactly("Your donation at " + bank.getName() + " is tomorrow morning.");
+    }
+
+    @Test
+    void aSuspendedDonorGetsNoTodayReminderEither() throws Exception {
+        Donor donor = donor("Suspended On The Day", null);
+        book(signIn(donor.getUser()), bank, today, "MORNING").andExpect(status().isCreated());
+        donor.getUser().setStatus(AccountStatus.SUSPENDED);
+        userRepository.save(donor.getUser());
+        flush();
+
+        job.runBookings();
+        flush();
+
+        assertThat(messages(donor.getUser(), NotificationType.DONATION_BOOKING_REMINDER)).isEmpty();
+        assertThat(bookingRepository.findByDonorIdOrderByCreatedAtAsc(donor.getId()).get(0).getReminderSentAt()).isNull();
+    }
+
+    // ---------- suspending a donor ----------
+
+    @Test
+    void suspendingADonorCancelsTheirOpenVisitTellsTheBankAndReactivationDoesNotRestoreIt() throws Exception {
+        Donor donor = donor("Suspended Booker", null);
+        String token = signIn(donor.getUser());
+        book(token, bank, today.plusDays(4), "MORNING").andExpect(status().isCreated());
+        flush();
+
+        setStatus(donor.getUser(), "SUSPENDED").andExpect(status().isOk());
+        flush();
+
+        DonationBooking booking = bookingRepository.findByDonorIdOrderByCreatedAtAsc(donor.getId()).get(0);
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(booking.getClosedAt()).isNotNull();
+        assertThat(messages(staff, NotificationType.DONATION_BOOKING_CANCELLED)).containsExactly(
+            "Suspended Booker's donation booking for " + DATE.format(today.plusDays(4))
+                + ", morning was cancelled because the donor's account was suspended.");
+        assertThat(messages(suspendedStaff, NotificationType.DONATION_BOOKING_CANCELLED)).isEmpty();
+        assertThat(messages(otherStaff, NotificationType.DONATION_BOOKING_CANCELLED)).isEmpty();
+        assertThat(upcoming(staffToken)).isEmpty();
+
+        setStatus(donor.getUser(), "ACTIVE").andExpect(status().isOk());
+        flush();
+
+        assertThat(bookingRepository.findByDonorIdOrderByCreatedAtAsc(donor.getId())).singleElement()
+            .satisfies(b -> assertThat(b.getStatus()).isEqualTo(BookingStatus.CANCELLED));
+        mockMvc.perform(get("/api/bookings/me").header("Authorization", bearer(token))).andExpect(status().isNoContent());
+        assertThat(messages(staff, NotificationType.DONATION_BOOKING_CANCELLED)).hasSize(1);
+    }
+
+    @Test
+    void suspendingADonorWithNoBookingChangesNothingElse() throws Exception {
+        Donor donor = donor("Never Booked", null);
+
+        setStatus(donor.getUser(), "SUSPENDED").andExpect(status().isOk());
+        flush();
+
+        assertThat(bookingRepository.findByDonorIdOrderByCreatedAtAsc(donor.getId())).isEmpty();
+        assertThat(messages(staff, NotificationType.DONATION_BOOKING_CANCELLED)).isEmpty();
+    }
+
+    @Test
     void anOpenBookingWhoseDatePassedBecomesMissedAndTodaysStaysBooked() throws Exception {
         Donor past = donor("Missed Donor", null);
         Donor current = donor("Current Donor", null);
@@ -390,6 +481,13 @@ class DonationBookingIT {
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(Map.of(
                 "donorId", donor.getId().toString(), "bloodType", "O+", "unitsDonated", 1))));
+    }
+
+    private ResultActions setStatus(User account, String newStatus) throws Exception {
+        return mockMvc.perform(patch("/api/admin/users/{id}", account.getId())
+            .header("Authorization", bearer(adminToken))
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(Map.of("status", newStatus))));
     }
 
     private void moveClockTo(LocalDate date, int hourUtc) {

@@ -1130,7 +1130,7 @@
     },
     {
       "name": "Donation Bookings",
-      "description": "Business Rule 29: an active donor who is eligible today books one donation visit at a time (blood bank, date from today to today + 30 in UTC, MORNING or AFTERNOON). A booking never changes stock. Recording a donation closes it (ATTENDED at that bank, otherwise CANCELLED); the daily 06:00 UTC job marks past ones MISSED and sends the donor a reminder the day before.",
+      "description": "Business Rule 29: an active donor who is eligible today books one donation visit at a time (blood bank, date from today to today + 30 in UTC, MORNING or AFTERNOON). A booking never changes stock. Recording a donation closes it (ATTENDED at that bank, otherwise CANCELLED); the daily 06:00 UTC job marks past ones MISSED and sends the donor one reminder: the day before, or on the day if that was missed. Suspending a donor cancels their open booking.",
       "item": [
         {
           "name": "Book a Donation Visit",

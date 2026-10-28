@@ -45,8 +45,8 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | BATCH_EXPIRY_REMINDER | that bank's **active** BLOOD_BANK_STAFF | the daily job finds batches 7 days from expiry (Business Rule 26) |
 | BATCH_EXPIRED | that bank's **active** BLOOD_BANK_STAFF | the daily job finds expired batches still holding units, every day until written off (Business Rule 26) |
 | DONATION_BOOKED | the booked bank's **active** BLOOD_BANK_STAFF | a donor books a donation visit (Business Rule 29) |
-| DONATION_BOOKING_CANCELLED | the booked bank's **active** BLOOD_BANK_STAFF | the donor cancels, or a donation at a different bank cancels it automatically (Business Rule 29) |
-| DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job, the day before the visit, once per booking (Business Rule 29) |
+| DONATION_BOOKING_CANCELLED | the booked bank's **active** BLOOD_BANK_STAFF | the donor cancels, a donation at a different bank cancels it automatically, or an administrator suspends the donor (Business Rule 29) |
+| DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job: the day before the visit, or on the day if that one was never sent; once per booking (Business Rule 29) |
 
 Eleven types in all (V27).
 
@@ -1308,7 +1308,8 @@ Donation 0..1–1 DonationBooking
       /api/bookings/me/cancel`** → cancels it while BOOKED and its date is today or later (409 once the date has
       passed, 404 when there is none). There is no booking id in either address, so a donor can only ever reach their own.
     - **Statuses:** BOOKED → ATTENDED (a donation recorded at that bank, linked by `donation_id`), CANCELLED (by the
-      donor, or automatically when they donate at a different bank) or MISSED (the date passed with no donation).
+      donor, automatically when they donate at a different bank, or when an administrator suspends them) or MISSED (the
+      date passed with no donation).
       `closed_at` is stamped on every close.
     - **Record Donation closes the open booking in its own transaction** (`DonationBookingService.closeOnDonation`,
       `Propagation.MANDATORY`, under the donor row lock): ATTENDED and linked if it was at the recording bank,
@@ -1321,22 +1322,32 @@ Donation 0..1–1 DonationBooking
     - **Notifications** (each a row first, pushed after commit; `source_blood_bank_id` is the booked bank):
       DONATION_BOOKED ("Aminata Kamara booked a donation for 31 Oct 2026, morning.") and DONATION_BOOKING_CANCELLED
       ("… cancelled their donation booking for 31 Oct 2026, morning.") to the bank's ACTIVE staff;
-      DONATION_BOOKING_REMINDER ("Your donation at X is tomorrow morning.") to the ACTIVE donor.
+      DONATION_BOOKING_REMINDER ("Your donation at X is tomorrow morning." / "… is today, morning.") to the ACTIVE donor.
     - **The daily job** (`BatchExpiryNotificationJob.runBookings`, after the expiry notices, same 06:00 UTC schedule and
       same startup catch-up): marks every BOOKED visit dated before today MISSED (one bulk update, no notification),
-      then reminds every BOOKED visit dated **tomorrow** whose `reminder_sent_at` is null. **Once per booking:**
+      then reminds every BOOKED visit whose `reminder_sent_at` is null and is dated **tomorrow** ("is tomorrow
+      morning.") or **today** ("is today, morning." — a visit booked after that day's run for the next day, or whose
+      day-before run never happened). **Once per booking, so never both:**
       `reminder_sent_at` is stamped by a conditional update (`… where reminder_sent_at is null`) before the notice is
       written, so a second run or a second server sends nothing; a suspended donor is skipped and not stamped. Each
       step is its own transaction and a failure is logged without stopping the other.
     - **Frontend.** Donor Portal: "Book a Donation" opens a form (blood bank list, date limited to today..+30 in UTC,
       Morning/Afternoon, then "Book a donation at X on 31 Oct 2026, morning?"); after booking, a card shows the visit
       with Cancel and a confirmation ("Cancel your donation visit to X on …?"). A 409 re-reads the profile and booking.
-      Bell dots: booked green, cancelled navy, reminder amber. Blood Bank Dashboard: the list under the requests
-      panel, re-read when a booked or cancelled notice arrives. Checks and wording in `lib/donationBooking.js` (tested).
-    - **Known limits:** a booking made after 06:00 for the next day gets no reminder (it was not due when that day's
-      job ran, and the next run is the visit day); likewise a day the server never runs at all loses that day's
-      reminders. Changing the date of a booking means cancelling and booking again. Suspending a donor does not cancel
-      their booking. Staff cannot mark a no-show by hand; the daily job does it the next morning.
+      Bell dots: booked green, cancelled navy, reminder amber. Blood Bank Dashboard: the left column is Blood Inventory
+      (at the height of its rows) with Upcoming Donation Visits under it (compact rows, about five shown, then it
+      scrolls; empty: "No upcoming visits"); the right column is Incoming Hospital Requests at full height. On phones and
+      tablets they stack in that order (Inventory, Visits, Requests); checked in headless Chrome at 1920×1080, 1366×768,
+      1280×720, 820×1180 and 390×844. The list is re-read when a booked or cancelled notice arrives. Checks and wording
+      in `lib/donationBooking.js` (tested).
+    - **Suspending a donor cancels their open booking** (`AdminUserService.updateStatus` →
+      `DonationBookingService.cancelOnSuspension`, `Propagation.MANDATORY`, donor row locked), in the suspension's
+      transaction: CANCELLED with `closed_at`, and the bank's active staff told "…was cancelled because the donor's
+      account was suspended." — no more about why. One whose date had already passed is just MISSED, with no notice. Only
+      a real ACTIVE → SUSPENDED change of a DONOR does this; reactivating restores nothing; no booking, nothing happens.
+    - **Known limits:** a visit booked after the day's run for that same day gets no reminder (the next run is the day
+      after, which marks it MISSED). Changing the date of a booking means cancelling and booking again. Staff cannot
+      mark a no-show by hand; the daily job does it the next morning.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 

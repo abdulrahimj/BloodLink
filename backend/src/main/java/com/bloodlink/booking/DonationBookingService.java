@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ import com.bloodlink.domain.Donation;
 import com.bloodlink.domain.DonationBooking;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.enums.AccountStatus;
+import com.bloodlink.domain.enums.BookingCancellation;
 import com.bloodlink.domain.enums.BookingStatus;
 import com.bloodlink.domain.enums.BookingTimeOfDay;
 import com.bloodlink.domain.enums.Role;
@@ -36,7 +38,7 @@ import com.bloodlink.web.error.NotFoundException;
 
 /**
  * Donation visits (Business Rule 29): an active, eligible donor books one bank, date and half-day; staff see their
- * bank's upcoming visits; a donation or the daily job closes a booking. Never touches stock. "Today" is the UTC Clock.
+ * bank's upcoming visits; a donation, a suspension or the daily job closes one. Never touches stock. "Today" is the UTC Clock.
  */
 @Service
 public class DonationBookingService {
@@ -125,7 +127,7 @@ public class DonationBookingService {
 
         booking.close(BookingStatus.CANCELLED, clock.instant());
         bookingRepository.save(booking);
-        notificationService.notifyBookingCancelled(booking, false);
+        notificationService.notifyBookingCancelled(booking, BookingCancellation.BY_DONOR);
         return BookingResponse.from(booking);
     }
 
@@ -170,8 +172,29 @@ public class DonationBookingService {
         } else {
             booking.close(BookingStatus.CANCELLED, now);
             bookingRepository.save(booking);
-            notificationService.notifyBookingCancelled(booking, true);
+            notificationService.notifyBookingCancelled(booking, BookingCancellation.DONATED_ELSEWHERE);
         }
+    }
+
+    /**
+     * An administrator suspending a donor cancels their open booking in the same transaction and tells the bank's
+     * staff; one whose date already passed is just MISSED. Reactivating restores nothing. No booking: nothing happens.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void cancelOnSuspension(UUID donorUserId) {
+        donorRepository.findByUserIdForUpdate(donorUserId)
+            .flatMap(donor -> bookingRepository.findOpenByDonorId(donor.getId()))
+            .ifPresent(booking -> {
+                Instant now = clock.instant();
+                if (booking.getBookingDate().isBefore(LocalDate.now(clock))) {
+                    booking.close(BookingStatus.MISSED, now);
+                    bookingRepository.save(booking);
+                    return;
+                }
+                booking.close(BookingStatus.CANCELLED, now);
+                bookingRepository.save(booking);
+                notificationService.notifyBookingCancelled(booking, BookingCancellation.ACCOUNT_SUSPENDED);
+            });
     }
 
     /** The daily job: every open booking dated before today becomes MISSED. No notification. */
@@ -181,19 +204,24 @@ public class DonationBookingService {
     }
 
     /**
-     * The daily job: one reminder per open booking dated tomorrow, to an ACTIVE donor. The conditional stamp means a
-     * second run (a restart, another server) sends nothing; a suspended donor is skipped and not stamped.
+     * The daily job: one reminder per open booking, to an ACTIVE donor: "tomorrow" for tomorrow's visits, "today" for
+     * today's that never had one. The stamp makes it once per booking; a suspended donor is skipped, not stamped.
      */
     @Transactional
     public int sendDueReminders(Instant now) {
-        LocalDate tomorrow = LocalDate.ofInstant(now, clock.getZone()).plusDays(1);
+        LocalDate today = LocalDate.ofInstant(now, clock.getZone());
+        return remind(today.plusDays(1), now, false) + remind(today, now, true);
+    }
+
+    /** Reminds every unreminded open booking on one date, winning each booking's stamp before writing its notice. */
+    private int remind(LocalDate date, Instant now, boolean visitIsToday) {
         int sent = 0;
-        for (DonationBooking booking : bookingRepository.findDueReminders(tomorrow)) {
+        for (DonationBooking booking : bookingRepository.findDueReminders(date)) {
             if (booking.getDonor().getUser().getStatus() != AccountStatus.ACTIVE) {
                 continue;
             }
             if (bookingRepository.stampReminderSent(booking.getId(), now) == 1) {
-                notificationService.sendBookingReminder(booking, now);
+                notificationService.sendBookingReminder(booking, now, visitIsToday);
                 sent++;
             }
         }

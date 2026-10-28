@@ -3,6 +3,7 @@ package com.bloodlink.booking;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,6 +35,7 @@ import com.bloodlink.domain.DonationBooking;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
+import com.bloodlink.domain.enums.BookingCancellation;
 import com.bloodlink.domain.enums.BookingStatus;
 import com.bloodlink.domain.enums.BookingTimeOfDay;
 import com.bloodlink.domain.enums.Role;
@@ -230,7 +232,7 @@ class DonationBookingServiceTest {
 
         assertThat(response.status()).isEqualTo(BookingStatus.CANCELLED);
         assertThat(open.getClosedAt()).isEqualTo(NOW);
-        verify(notificationService).notifyBookingCancelled(open, false);
+        verify(notificationService).notifyBookingCancelled(open, BookingCancellation.BY_DONOR);
     }
 
     @Test
@@ -278,7 +280,7 @@ class DonationBookingServiceTest {
 
         assertThat(open.getStatus()).isEqualTo(BookingStatus.CANCELLED);
         assertThat(open.getDonation()).isNull();
-        verify(notificationService).notifyBookingCancelled(open, true);
+        verify(notificationService).notifyBookingCancelled(open, BookingCancellation.DONATED_ELSEWHERE);
     }
 
     @Test
@@ -304,8 +306,8 @@ class DonationBookingServiceTest {
 
         assertThat(service.sendDueReminders(NOW)).isEqualTo(1);
 
-        verify(notificationService).sendBookingReminder(won, NOW);
-        verify(notificationService, never()).sendBookingReminder(eq(alreadyStamped), any());
+        verify(notificationService).sendBookingReminder(won, NOW, false);
+        verify(notificationService, never()).sendBookingReminder(eq(alreadyStamped), any(), anyBoolean());
         verify(bookingRepository, never()).stampReminderSent(eq(suspended.getId()), any());
     }
 
@@ -355,5 +357,46 @@ class DonationBookingServiceTest {
         assertThat(saved.getValue().getBloodBank()).isSameAs(bank);
         assertThat(saved.getValue().getStatus()).isEqualTo(BookingStatus.BOOKED);
         assertThat(saved.getValue().getTimeOfDay()).isEqualTo(BookingTimeOfDay.AFTERNOON);
+    }
+
+    // ---------- the "today" reminder and suspension ----------
+
+    @Test
+    void aVisitTodayThatNeverHadAReminderGetsTheTodayOne() {
+        DonationBooking bookedLate = booking(donor(null, AccountStatus.ACTIVE), bank, TODAY);
+        when(bookingRepository.findDueReminders(TODAY.plusDays(1))).thenReturn(List.of());
+        when(bookingRepository.findDueReminders(TODAY)).thenReturn(List.of(bookedLate));
+        when(bookingRepository.stampReminderSent(bookedLate.getId(), NOW)).thenReturn(1);
+
+        assertThat(service.sendDueReminders(NOW)).isEqualTo(1);
+
+        verify(notificationService).sendBookingReminder(bookedLate, NOW, true);
+    }
+
+    @Test
+    void suspendingADonorCancelsTheirOpenVisitAndTellsTheBank() {
+        Donor donor = stubDonor(null, AccountStatus.SUSPENDED);
+        DonationBooking open = booking(donor, bank, TODAY.plusDays(2));
+        when(bookingRepository.findOpenByDonorId(donor.getId())).thenReturn(Optional.of(open));
+
+        service.cancelOnSuspension(USER_ID);
+
+        assertThat(open.getStatus()).isEqualTo(BookingStatus.CANCELLED);
+        assertThat(open.getClosedAt()).isEqualTo(NOW);
+        verify(notificationService).notifyBookingCancelled(open, BookingCancellation.ACCOUNT_SUSPENDED);
+    }
+
+    @Test
+    void suspendingADonorWithNoOpenVisitChangesNothingAndAPastOneIsSimplyMissed() {
+        Donor without = stubDonor(null, AccountStatus.SUSPENDED);
+        service.cancelOnSuspension(USER_ID);
+        verify(bookingRepository, never()).save(any());
+
+        DonationBooking past = booking(without, bank, TODAY.minusDays(1));
+        when(bookingRepository.findOpenByDonorId(without.getId())).thenReturn(Optional.of(past));
+        service.cancelOnSuspension(USER_ID);
+
+        assertThat(past.getStatus()).isEqualTo(BookingStatus.MISSED);
+        verifyNoInteractions(notificationService);
     }
 }

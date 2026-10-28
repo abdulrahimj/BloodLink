@@ -275,10 +275,16 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           padding: clamp(11px, 1.7vh, 18px) clamp(12px, 1.2vw, 20px);
           display: flex; flex-direction: column; min-height: 0;
         }
-        /* The right column: requests take the room, booked visits a capped share of it (Business Rule 29). */
+        /* Left column: inventory at the height of its rows, booked visits (Business Rule 29) under it, shrinking
+           only if the screen is too short; the requests card is the right column at full height. */
         .bb-col { min-height: 0; display: flex; flex-direction: column; gap: clamp(9px, 1.1vh, 16px); }
-        .bb-panel--grow { flex: 1 1 auto; }
-        .bb-panel--visits { flex: 0 1 auto; max-height: 38%; }
+        .bb-panel--fit { flex: 0 0 auto; }
+        .bb-panel--visits { flex: 0 1 auto; min-height: 0; }
+        /* Compact rows so about five visits fit even on a 768px-tall laptop; then the list scrolls. The cap is five
+           rows (badge, padding, border), the four gaps between them, and a little slack for line height. */
+        .bb-list.bb-list--visits { gap: clamp(3px, .5vh, 7px); max-height: calc(5 * (clamp(24px, 3.4vh, 32px) + 2 * clamp(3px, .6vh, 7px) + 2px) + 4 * clamp(3px, .5vh, 7px) + 6px); }
+        .bb-list--visits .bb-item { padding: clamp(3px, .6vh, 7px) clamp(7px, .7vw, 11px); }
+        .bb-list--visits .bb-item-grp { width: clamp(24px, 3.4vh, 32px); height: clamp(24px, 3.4vh, 32px); font-size: clamp(8.5px, 1.2vh, 11px); }
         .bb-panel-head { flex: 0 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: clamp(7px, 1.2vh, 13px); }
         .bb-panel-title { font-size: clamp(12px, 1.85vh, 16px); font-weight: 700; letter-spacing: -.01em; }
         .bb-panel-link { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; color: var(--red); cursor: pointer; }
@@ -498,40 +504,68 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
               <Stat tone="navy" icon={<UsersFillIcon />} figure={dashboard.registeredDonorsCount} label="Registered Donors" note="Linked to this bank" />
             </div>
 
+            {/* Left: inventory at the height of its rows, booked visits under it; right: requests at full height.
+                On phones and tablets responsive.css stacks them in this same order. */}
             <div className="bb-panels">
-              <div className="bb-panel">
-                <div className="bb-panel-head">
-                  <div className="bb-panel-title">Blood Inventory</div>
-                  <div className="bb-panel-link" onClick={() => onNavigate("inventory")}>Manage stock</div>
-                </div>
-                <table className="bb-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "16%" }}>Group</th>
-                      <th style={{ width: "18%" }}>Units</th>
-                      <th style={{ width: "36%" }}>Level</th>
-                      <th style={{ width: "30%" }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stock.map((s) => (
-                      <tr key={s.bloodType}>
-                        <td className="bb-grp">{s.bloodType}</td>
-                        <td>{s.unitsAvailable}</td>
-                        <td>
-                          <div className="bb-bar">
-                            <span style={{ width: `${Math.min(100, (s.unitsAvailable / 120) * 100)}%`, background: stateColor(s.status) }} />
-                          </div>
-                        </td>
-                        <td><span className={`bb-badge bb-b-${s.status.toLowerCase()}`}>{titleCase(s.status)}</span></td>
+              <div className="bb-col">
+                <div className="bb-panel bb-panel--fit">
+                  <div className="bb-panel-head">
+                    <div className="bb-panel-title">Blood Inventory</div>
+                    <div className="bb-panel-link" onClick={() => onNavigate("inventory")}>Manage stock</div>
+                  </div>
+                  <table className="bb-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "16%" }}>Group</th>
+                        <th style={{ width: "18%" }}>Units</th>
+                        <th style={{ width: "36%" }}>Level</th>
+                        <th style={{ width: "30%" }}>Status</th>
                       </tr>
+                    </thead>
+                    <tbody>
+                      {stock.map((s) => (
+                        <tr key={s.bloodType}>
+                          <td className="bb-grp">{s.bloodType}</td>
+                          <td>{s.unitsAvailable}</td>
+                          <td>
+                            <div className="bb-bar">
+                              <span style={{ width: `${Math.min(100, (s.unitsAvailable / 120) * 100)}%`, background: stateColor(s.status) }} />
+                            </div>
+                          </td>
+                          <td><span className={`bb-badge bb-b-${s.status.toLowerCase()}`}>{titleCase(s.status)}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="bb-panel bb-panel--visits">
+                  <div className="bb-panel-head">
+                    <div className="bb-panel-title">Upcoming Donation Visits</div>
+                    <div className="bb-panel-link">{visits.rows ? `${visits.rows.length} booked` : ""}</div>
+                  </div>
+                  <div className="bb-list bb-list--visits">
+                    {visits.error && <div className="bb-item-error">{visits.error}</div>}
+                    {!visits.error && !visits.rows && <div className="bb-empty">Loading visits…</div>}
+                    {visits.rows && visits.rows.length === 0 && (
+                      <div className="bb-empty">No upcoming visits</div>
+                    )}
+                    {(visits.rows ?? []).map((visit) => (
+                      <div className="bb-item" key={visit.id}>
+                        <div className="bb-item-grp">{visit.bloodType ?? "—"}</div>
+                        <div className="bb-item-body">
+                          <div className="bb-item-main">{visit.donorName}</div>
+                          <div className="bb-item-sub">
+                            {describeBookingWhen(visit)} · Blood group: {upcomingBloodGroupLabel(visit.bloodType)}
+                          </div>
+                        </div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </div>
               </div>
 
-              <div className="bb-col">
-              <div className="bb-panel bb-panel--grow">
+              <div className="bb-panel">
                 <div className="bb-panel-head">
                   <div className="bb-panel-title">Incoming Hospital Requests</div>
                   <div className="bb-panel-link">View All</div>
@@ -553,32 +587,6 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                     />
                   ))}
                 </div>
-              </div>
-
-              <div className="bb-panel bb-panel--visits">
-                <div className="bb-panel-head">
-                  <div className="bb-panel-title">Upcoming Donation Visits</div>
-                  <div className="bb-panel-link">{visits.rows ? `${visits.rows.length} booked` : ""}</div>
-                </div>
-                <div className="bb-list">
-                  {visits.error && <div className="bb-item-error">{visits.error}</div>}
-                  {!visits.error && !visits.rows && <div className="bb-empty">Loading visits…</div>}
-                  {visits.rows && visits.rows.length === 0 && (
-                    <div className="bb-empty">No donation visits booked.</div>
-                  )}
-                  {(visits.rows ?? []).map((visit) => (
-                    <div className="bb-item" key={visit.id}>
-                      <div className="bb-item-grp">{visit.bloodType ?? "—"}</div>
-                      <div className="bb-item-body">
-                        <div className="bb-item-main">{visit.donorName}</div>
-                        <div className="bb-item-sub">
-                          {describeBookingWhen(visit)} · Blood group: {upcomingBloodGroupLabel(visit.bloodType)}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
               </div>
             </div>
           </>

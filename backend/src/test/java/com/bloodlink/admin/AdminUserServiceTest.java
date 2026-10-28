@@ -33,6 +33,7 @@ import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.admin.dto.EditAccountPayload;
 import com.bloodlink.audit.AuditLogService;
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Hospital;
@@ -63,6 +64,7 @@ class AdminUserServiceTest {
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private HospitalRepository hospitalRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private DonationBookingService donationBookingService;
 
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -71,7 +73,8 @@ class AdminUserServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AdminUserService(userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService);
+        service = new AdminUserService(
+            userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService);
     }
 
     /** Creates an account as the test administrator — the actor the audit log records. */
@@ -836,5 +839,34 @@ class AdminUserServiceTest {
         service.editAccount(target.getId(), edit("+23276111111", sameBank, null), admin());
 
         verifyNoInteractions(auditLogService);
+    }
+
+    // ---------- suspending a donor cancels their open visit (Business Rule 29) ----------
+
+    @Test
+    void suspendingADonorCancelsTheirOpenVisitInTheSameCall() {
+        User target = donor();
+        when(userRepository.findById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(target.getId(), AccountStatus.SUSPENDED, admin());
+
+        verify(donationBookingService).cancelOnSuspension(target.getId());
+    }
+
+    @Test
+    void reactivatingADonorSuspendingStaffOrRepeatingASuspensionTouchesNoVisit() {
+        User suspendedDonor = donor();
+        suspendedDonor.setStatus(AccountStatus.SUSPENDED);
+        User staff = bankStaff();
+        when(userRepository.findById(suspendedDonor.getId())).thenReturn(Optional.of(suspendedDonor));
+        when(userRepository.findById(staff.getId())).thenReturn(Optional.of(staff));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateStatus(suspendedDonor.getId(), AccountStatus.SUSPENDED, admin());
+        service.updateStatus(suspendedDonor.getId(), AccountStatus.ACTIVE, admin());
+        service.updateStatus(staff.getId(), AccountStatus.SUSPENDED, admin());
+
+        verifyNoInteractions(donationBookingService);
     }
 }

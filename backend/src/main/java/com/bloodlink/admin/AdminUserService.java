@@ -20,6 +20,7 @@ import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.admin.dto.EditAccountPayload;
 import com.bloodlink.audit.AuditLogService;
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.common.LikePattern;
 import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.domain.BloodBank;
@@ -55,19 +56,22 @@ public class AdminUserService {
     private final HospitalRepository hospitalRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuditLogService auditLogService;
+    private final DonationBookingService donationBookingService;
 
     AdminUserService(
         UserRepository userRepository,
         BloodBankRepository bloodBankRepository,
         HospitalRepository hospitalRepository,
         PasswordEncoder passwordEncoder,
-        AuditLogService auditLogService
+        AuditLogService auditLogService,
+        DonationBookingService donationBookingService
     ) {
         this.userRepository = userRepository;
         this.bloodBankRepository = bloodBankRepository;
         this.hospitalRepository = hospitalRepository;
         this.passwordEncoder = passwordEncoder;
         this.auditLogService = auditLogService;
+        this.donationBookingService = donationBookingService;
     }
 
     /**
@@ -335,6 +339,10 @@ public class AdminUserService {
                 saved,
                 suspended ? "Account suspended." : "Account reactivated."
             );
+            // A suspended donor's open visit is cancelled with them (Business Rule 29); reactivating restores nothing.
+            if (suspended && saved.getRole() == Role.DONOR) {
+                donationBookingService.cancelOnSuspension(saved.getId());
+            }
         }
         return AdminUserResponse.from(saved);
     }
