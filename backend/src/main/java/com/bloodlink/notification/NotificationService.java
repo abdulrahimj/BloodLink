@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.BloodRequest;
+import com.bloodlink.domain.DonationBooking;
 import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.Notification;
 import com.bloodlink.domain.User;
@@ -45,7 +46,7 @@ import com.bloodlink.web.error.NotFoundException;
 @Service
 public class NotificationService {
 
-    /** Dates in the expiry notices: "31 Oct 2026", the way the portals show dates. */
+    /** Dates in the expiry and booking notices: "31 Oct 2026", the way the portals show dates. */
     private static final DateTimeFormatter EXPIRY_DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     private final NotificationRepository notificationRepository;
@@ -445,6 +446,52 @@ public class NotificationService {
         return "%s at %s %s expired and still %s units. Please write %s off: %s.".formatted(
             batches(batches.size()), bank.getName(),
             one ? "has" : "have", one ? "holds" : "hold", one ? "it" : "them", list);
+    }
+
+    // ==================== Donation bookings (Business Rule 29) ====================
+
+    /** DONATION_BOOKED to the booked bank's active staff, in the booking's transaction. */
+    @Transactional
+    public void notifyBookingMade(DonationBooking booking) {
+        dispatch(activeBankStaff(booking.getBloodBank().getId()), bookedMessage(booking),
+            NotificationType.DONATION_BOOKED, booking.getBloodBank(), null, null);
+    }
+
+    /** DONATION_BOOKING_CANCELLED to the booked bank's active staff; automatic when a donation elsewhere closed it. */
+    @Transactional
+    public void notifyBookingCancelled(DonationBooking booking, boolean automatic) {
+        dispatch(activeBankStaff(booking.getBloodBank().getId()), cancelledMessage(booking, automatic),
+            NotificationType.DONATION_BOOKING_CANCELLED, booking.getBloodBank(), null, null);
+    }
+
+    /** The day-before DONATION_BOOKING_REMINDER to the donor, stamped with the job's instant. */
+    @Transactional
+    public void sendBookingReminder(DonationBooking booking, Instant now) {
+        dispatch(List.of(booking.getDonor().getUser()), reminderMessage(booking),
+            NotificationType.DONATION_BOOKING_REMINDER, booking.getBloodBank(), null, now);
+    }
+
+    /** "Aminata Kamara booked a donation for 31 Oct 2026, morning." */
+    static String bookedMessage(DonationBooking booking) {
+        return "%s booked a donation for %s, %s.".formatted(
+            booking.getDonor().getUser().getFullName(), EXPIRY_DATE.format(booking.getBookingDate()),
+            booking.getTimeOfDay().inWords());
+    }
+
+    /** The donor's own cancellation, or the automatic one when they donated at a different bank. */
+    static String cancelledMessage(DonationBooking booking, boolean automatic) {
+        String name = booking.getDonor().getUser().getFullName();
+        String when = "%s, %s".formatted(EXPIRY_DATE.format(booking.getBookingDate()), booking.getTimeOfDay().inWords());
+        return automatic
+            ? "%s's donation booking for %s was cancelled automatically: they have since donated at another blood bank."
+                .formatted(name, when)
+            : "%s cancelled their donation booking for %s.".formatted(name, when);
+    }
+
+    /** "Your donation at Makeni Regional Blood Bank is tomorrow morning." */
+    static String reminderMessage(DonationBooking booking) {
+        return "Your donation at %s is tomorrow %s.".formatted(
+            booking.getBloodBank().getName(), booking.getTimeOfDay().inWords());
     }
 
     // ======================================== Shared plumbing ========================================

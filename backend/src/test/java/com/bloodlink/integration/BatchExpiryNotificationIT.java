@@ -20,6 +20,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bloodlink.common.PhoneNumber;
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
 import com.bloodlink.domain.Hospital;
@@ -64,6 +65,7 @@ class BatchExpiryNotificationIT {
     @Autowired private NotificationRepository notificationRepository;
     @Autowired private NotificationService notificationService;
     @Autowired private BatchWriteOffService writeOffService;
+    @Autowired private DonationBookingService donationBookingService;
     @Autowired private BatchStockCutoverIT.MutableClock clock;
 
     private BatchExpiryNotificationJob job;
@@ -83,7 +85,7 @@ class BatchExpiryNotificationIT {
         clock.reset();
         today = LocalDate.now(clock);
         job = new BatchExpiryNotificationJob(
-            notificationService, bloodBankRepository, clock, BatchExpiryNotificationJob.DEFAULT_CRON);
+            notificationService, bloodBankRepository, donationBookingService, clock, BatchExpiryNotificationJob.DEFAULT_CRON);
         bank = newBank("Expiry Bank");
         otherBank = newBank("Expiry Other Bank");
         Hospital hospital = hospitalRepository.findAllByOrderByNameAsc().get(0);

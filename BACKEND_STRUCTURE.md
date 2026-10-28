@@ -12,6 +12,7 @@ so once one is familiar the rest read the same way.
 | `appeal` | A blood bank asking donors of one blood group to come in and donate — the "Send Appeal" feature. |
 | `auth` | Signing up (donors only) and signing in — issuing the login token every other request depends on. |
 | `bloodbank` | Blood bank reference data (name, location) and the shared rule for "which blood bank is this staff member acting on behalf of." |
+| `booking` | Donors booking a donation visit (a blood bank, a date, morning or afternoon), cancelling it, and the bank's list of upcoming visits; never touches stock. |
 | `config` | Application-wide setup: security rules (who can reach which endpoint) and the real-time (WebSocket) connection. |
 | `domain` | The core data shapes — User, Donor, BloodBank, Hospital, Donation, BloodRequest, BloodInventoryBatch, Notification — matching the database tables directly. Its `enums/` subfolder holds the fixed-choice values used throughout (blood type, urgency level, request status, account status, and the like). |
 | `donation` | Recording an actual donation event: the blood drawn, the units added to stock, the donor's eligibility clock reset, and their profile blood group taken from the test. |

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getInventory } from "../api/inventory.js";
 import { getBankDashboard } from "../api/bloodBanks.js";
 import { actOnRequest, getRequests } from "../api/requests.js";
+import { getUpcomingBookings } from "../api/bookings.js";
+import { describeBookingWhen, refreshesBookings, upcomingBloodGroupLabel } from "../lib/donationBooking.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
@@ -9,7 +11,7 @@ import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 
 /* BloodLink — Blood Bank Dashboard (home view): stock, incoming requests (Contribute / confirmed Decline,
-   Business Rule 20) and donations. Live notifications trigger a full reload, never a patch. */
+   Business Rule 20), booked donation visits (Rule 29) and donations. Live notifications trigger a reload, never a patch. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -39,6 +41,15 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   // The request awaiting a confirmed Reject (null when closed), held whole so the dialog can name it.
   const [confirmingReject, setConfirmingReject] = useState(null);
   const cancelRejectRef = useRef(null);
+
+  // Booked donation visits (Business Rule 29), loaded on their own so a failure here never blanks the dashboard.
+  const [visits, setVisits] = useState({ rows: null, error: null });
+  const loadVisits = useCallback(() => {
+    getUpcomingBookings()
+      .then((rows) => setVisits({ rows, error: null }))
+      .catch((err) => setVisits((current) => ({ rows: current.rows, error: err.message })));
+  }, []);
+  useEffect(() => { loadVisits(); }, [loadVisits]);
 
   /**
    * Loads the screen's three calls together; reused after an action, since contributing changes the cards
@@ -77,6 +88,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           || notification.type === "REQUEST_PROGRESS") {
         refresh();
       }
+      if (refreshesBookings(notification.type)) loadVisits();
     },
   });
 
@@ -263,6 +275,10 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
           padding: clamp(11px, 1.7vh, 18px) clamp(12px, 1.2vw, 20px);
           display: flex; flex-direction: column; min-height: 0;
         }
+        /* The right column: requests take the room, booked visits a capped share of it (Business Rule 29). */
+        .bb-col { min-height: 0; display: flex; flex-direction: column; gap: clamp(9px, 1.1vh, 16px); }
+        .bb-panel--grow { flex: 1 1 auto; }
+        .bb-panel--visits { flex: 0 1 auto; max-height: 38%; }
         .bb-panel-head { flex: 0 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: clamp(7px, 1.2vh, 13px); }
         .bb-panel-title { font-size: clamp(12px, 1.85vh, 16px); font-weight: 700; letter-spacing: -.01em; }
         .bb-panel-link { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; color: var(--red); cursor: pointer; }
@@ -514,7 +530,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                 </table>
               </div>
 
-              <div className="bb-panel">
+              <div className="bb-col">
+              <div className="bb-panel bb-panel--grow">
                 <div className="bb-panel-head">
                   <div className="bb-panel-title">Incoming Hospital Requests</div>
                   <div className="bb-panel-link">View All</div>
@@ -536,6 +553,32 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                     />
                   ))}
                 </div>
+              </div>
+
+              <div className="bb-panel bb-panel--visits">
+                <div className="bb-panel-head">
+                  <div className="bb-panel-title">Upcoming Donation Visits</div>
+                  <div className="bb-panel-link">{visits.rows ? `${visits.rows.length} booked` : ""}</div>
+                </div>
+                <div className="bb-list">
+                  {visits.error && <div className="bb-item-error">{visits.error}</div>}
+                  {!visits.error && !visits.rows && <div className="bb-empty">Loading visits…</div>}
+                  {visits.rows && visits.rows.length === 0 && (
+                    <div className="bb-empty">No donation visits booked.</div>
+                  )}
+                  {(visits.rows ?? []).map((visit) => (
+                    <div className="bb-item" key={visit.id}>
+                      <div className="bb-item-grp">{visit.bloodType ?? "—"}</div>
+                      <div className="bb-item-body">
+                        <div className="bb-item-main">{visit.donorName}</div>
+                        <div className="bb-item-sub">
+                          {describeBookingWhen(visit)} · Blood group: {upcomingBloodGroupLabel(visit.bloodType)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
               </div>
             </div>
           </>

@@ -22,8 +22,8 @@ function relativeTime(instantIso) {
 }
 
 /**
- * Dot colour by notification type: red shortage or expired stock, amber awaiting a decision or expiring soon,
- * navy settled, green an appeal.
+ * Dot colour by notification type: red shortage or expired stock, amber awaiting a decision or coming up soon,
+ * navy settled, green an appeal or a booked visit (Business Rule 29).
  */
 const TYPE_TONE = {
   LOW_STOCK_ALERT: 'var(--red)',
@@ -33,6 +33,9 @@ const TYPE_TONE = {
   DONATION_APPEAL_ACCEPTED: 'var(--navy)',
   BATCH_EXPIRY_REMINDER: 'var(--amber)',
   BATCH_EXPIRED: 'var(--red)',
+  DONATION_BOOKED: 'var(--green)',
+  DONATION_BOOKING_CANCELLED: 'var(--navy)',
+  DONATION_BOOKING_REMINDER: 'var(--amber)',
 };
 
 /**

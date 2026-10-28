@@ -26,6 +26,7 @@ import org.springframework.security.access.AccessDeniedException;
 
 import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.bloodbank.ActingBankResolver;
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.Donation;
 import com.bloodlink.domain.Donor;
@@ -66,6 +67,7 @@ class DonationServiceTest {
     @Mock private ActingBankResolver actingBankResolver;
     @Mock private InventoryService inventoryService;
     @Mock private AuditLogService auditLogService;
+    @Mock private DonationBookingService donationBookingService;
 
     private DonationService service;
 
@@ -73,7 +75,8 @@ class DonationServiceTest {
     void setUp() {
         // The real blood group rule over the same mocks, so its effects (profile, audit) are checked as written.
         DonorBloodGroupService bloodGroups = new DonorBloodGroupService(donorRepository, actingBankResolver, auditLogService);
-        service = new DonationService(donationRepository, donorRepository, actingBankResolver, inventoryService, bloodGroups);
+        service = new DonationService(
+            donationRepository, donorRepository, actingBankResolver, inventoryService, bloodGroups, donationBookingService);
     }
 
     // ---------- fixtures ----------
@@ -142,6 +145,7 @@ class DonationServiceTest {
         verify(donationRepository, never()).save(any());
         verify(donorRepository, never()).save(any());
         verify(inventoryService, never()).receiveDonation(any(), any());
+        verify(donationBookingService, never()).closeOnDonation(any(), any(), any());
     }
 
     // ---------- the three effects ----------
@@ -170,6 +174,9 @@ class DonationServiceTest {
         // 3. the units, reported back so the screen can confirm the stock half
         assertThat(response.stockAfter()).isEqualTo(46);
         assertThat(response.donorName()).isEqualTo("Rahim Barrie");
+
+        // 4. any open booking is closed in the same call, against this donation and bank (Business Rule 29)
+        verify(donationBookingService).closeOnDonation(donor, written, written.getBloodBank());
     }
 
     /**

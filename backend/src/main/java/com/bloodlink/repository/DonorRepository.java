@@ -72,6 +72,12 @@ public interface DonorRepository extends JpaRepository<Donor, UUID> {
     @Query("select d from Donor d where d.id = :id")
     Optional<Donor> findByIdForUpdate(@Param("id") UUID id);
 
+    /** The caller's own donor row, write-locked with its account fetched: booking a visit (Business Rule 29)
+     *  takes the same lock as Record Donation, so the two cannot interleave. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select d from Donor d join fetch d.user u where u.id = :userId")
+    Optional<Donor> findByUserIdForUpdate(@Param("userId") UUID userId);
+
     /**
      * One page of a bank's roster, newest donation (at any bank) first, with d.id as tie-breaker for stable pages.
      * The user is fetch-joined; pageable is expected unsorted, as only this order is returned.

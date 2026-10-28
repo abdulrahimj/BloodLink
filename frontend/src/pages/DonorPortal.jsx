@@ -1,14 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { getMyDonorProfile, getMyDonationHistory } from "../api/donors.js";
 import { acceptDonationAppeal } from "../api/appeals.js";
+import { getBloodBanks } from "../api/bloodBanks.js";
+import { cancelMyBooking, createBooking, getMyBooking } from "../api/bookings.js";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
 import { useNotifications } from "../realtime/useNotifications.js";
 import { describeDonorPortalBloodGroup } from "../lib/bloodGroup.js";
+import {
+  bookingDateRange, bookingFormProblems, canCancelBooking, describeBookingQuestion, describeBookingWhen,
+  describeCancelQuestion,
+} from "../lib/donationBooking.js";
 
-/* BloodLink — Donor Portal: donation history, eligibility and live donation appeals from blood banks
-   (Business Rule 1), from GET /api/donors/me, /me/donations and the donor's notifications. */
+/* BloodLink — Donor Portal: history, eligibility, booking a donation visit (Business Rule 29) and live appeals from
+   blood banks (Business Rule 1), from /api/donors/me, /me/donations, /api/bookings/me and the donor's notifications. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 const ICON_W = { fill: "none", stroke: "#FFF", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -102,6 +108,11 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
   // capped at what the panel shows.
   const appeals = notifications.filter((item) => item.type === "DONATION_APPEAL").slice(0, 4);
 
+  // The donor's open donation visit (Business Rule 29), or null; the booking form and the cancel step.
+  const [booking, setBooking] = useState(null);
+  const [bookingFormOpen, setBookingFormOpen] = useState(false);
+  const [cancelStep, setCancelStep] = useState({ confirming: false, busy: false, error: null });
+
   useEffect(() => {
     let cancelled = false;
 
@@ -109,13 +120,15 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
       setLoading(true);
       setError(null);
       try {
-        const [profileData, historyData] = await Promise.all([
+        const [profileData, historyData, bookingData] = await Promise.all([
           getMyDonorProfile(),
           getMyDonationHistory(),
+          getMyBooking(),
         ]);
         if (!cancelled) {
           setProfile(profileData);
           setHistory(historyData);
+          setBooking(bookingData);
         }
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -160,6 +173,29 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
       setAcceptingAppealId(null);
     }
   }
+  /** After a refused booking (409: no longer eligible, or already booked), re-read profile and booking. */
+  async function refreshProfileAndBooking() {
+    try {
+      const [profileData, bookingData] = await Promise.all([getMyDonorProfile(), getMyBooking()]);
+      setProfile(profileData);
+      setBooking(bookingData);
+    } catch {
+      // Keep what is shown; the next load will try again.
+    }
+  }
+
+  async function confirmCancelBooking() {
+    setCancelStep({ confirming: true, busy: true, error: null });
+    try {
+      await cancelMyBooking();
+      setBooking(null);
+      setCancelStep({ confirming: false, busy: false, error: null });
+    } catch (err) {
+      setCancelStep({ confirming: false, busy: false, error: err.message });
+      refreshProfileAndBooking();
+    }
+  }
+
   const lastDonation = history[0] ?? null;
   const bloodGroupCard = describeDonorPortalBloodGroup(profile?.bloodType);
   // The panel's CSS clips overflow rather than scrolling it, so it is capped here at
@@ -323,6 +359,77 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
           font-size: clamp(10.5px, 1.5vh, 13px);
           padding: clamp(7px, 1.15vh, 11px) clamp(12px, 1.2vw, 20px);
         }
+
+        /* ===== DONATION VISIT (Business Rule 29) ===== */
+        .dn-booking {
+          flex: 0 0 auto; background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow);
+          border-left: 4px solid var(--navy);
+          padding: clamp(8px, 1.3vh, 13px) clamp(12px, 1.2vw, 20px);
+          display: flex; align-items: center; flex-wrap: wrap; gap: clamp(10px, 1vw, 15px);
+        }
+        .dn-booking-icon {
+          flex: 0 0 auto; width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
+          border-radius: 50%; background: var(--navy); color: #FFF; display: grid; place-items: center;
+        }
+        .dn-booking-icon svg { width: 55%; height: 55%; }
+        .dn-booking-body { flex: 1 1 200px; min-width: 0; }
+        .dn-booking-main { font-size: clamp(11.5px, 1.7vh, 15px); font-weight: 700; }
+        .dn-booking-sub { font-size: clamp(9.5px, 1.35vh, 12px); color: var(--ink-muted); margin-top: 1px; }
+        .dn-booking-err { font-size: clamp(9px, 1.25vh, 11px); color: var(--red); font-weight: 600; margin-top: 2px; }
+        .dn-booking-confirm {
+          display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+          font-size: clamp(10px, 1.45vh, 12.5px); font-weight: 600; color: #8A5510;
+        }
+        .dn-booking-cancel, .dn-booking-keep {
+          flex: 0 0 auto; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 700;
+          font-size: clamp(9.5px, 1.35vh, 12px); padding: clamp(5px, .85vh, 8px) clamp(10px, .9vw, 14px);
+        }
+        .dn-booking-cancel { background: transparent; color: var(--red); border: 1.5px solid rgba(200,16,46,.4); }
+        .dn-booking-cancel:hover { background: #FBE9EC; }
+        .dn-booking-keep { background: var(--navy); color: #FFF; border: 1.5px solid var(--navy); }
+        .dn-booking-cancel:disabled, .dn-booking-keep:disabled { opacity: .6; cursor: progress; }
+
+        .dn-modal-backdrop {
+          position: fixed; inset: 0; z-index: 50; background: rgba(17,17,17,.45);
+          display: grid; place-items: center; padding: 16px;
+        }
+        .dn-modal {
+          background: var(--card-bg); border-radius: var(--radius); box-shadow: 0 12px 40px rgba(0,0,0,.22);
+          width: min(440px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto;
+          padding: clamp(16px, 2.4vh, 24px) clamp(16px, 1.6vw, 26px);
+        }
+        .dn-modal-title { font-size: clamp(15px, 2.2vh, 19px); font-weight: 800; letter-spacing: -.02em; margin-bottom: 4px; }
+        .dn-modal-sub { font-size: clamp(10.5px, 1.5vh, 13px); color: var(--ink-muted); margin-bottom: clamp(12px, 2vh, 18px); }
+        .dn-modal-alert {
+          background: rgba(200,16,46,.07); border: 1.5px solid rgba(200,16,46,.28); color: #8E0B21;
+          border-radius: 8px; padding: clamp(7px, 1.2vh, 10px) 12px;
+          font-size: clamp(10px, 1.42vh, 12.5px); font-weight: 500; margin-bottom: clamp(9px, 1.5vh, 14px);
+        }
+        .dn-field { display: flex; flex-direction: column; gap: 5px; margin: 0 0 clamp(10px, 1.6vh, 15px); border: none; padding: 0; }
+        .dn-field label, .dn-field legend { font-size: clamp(10px, 1.4vh, 12.5px); font-weight: 600; color: #3D3D3D; padding: 0; }
+        .dn-field select, .dn-field input[type="date"] {
+          width: 100%; font-family: inherit; font-size: clamp(11.5px, 1.6vh, 14px); font-weight: 500;
+          color: var(--ink); padding: clamp(8px, 1.35vh, 11px) 12px;
+          border: 1.5px solid var(--line); border-radius: 8px; background: #FBFBFC;
+        }
+        .dn-field select:focus, .dn-field input:focus { outline: none; border-color: var(--navy); background: #FFF; }
+        .dn-field--choice { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+        .dn-field--choice legend { width: 100%; margin-bottom: 5px; }
+        .dn-choice { display: flex; align-items: center; gap: 6px; font-size: clamp(11px, 1.55vh, 13.5px); font-weight: 600; cursor: pointer; }
+        .dn-field-err { width: 100%; font-size: clamp(9px, 1.25vh, 11px); font-weight: 500; color: var(--red); }
+        .dn-modal-confirm {
+          font-size: clamp(10.5px, 1.5vh, 13px); line-height: 1.45; color: #8A5510; background: #FBF1E3;
+          border-left: 3px solid var(--amber); border-radius: 6px; padding: clamp(8px, 1.2vh, 12px) clamp(10px, 1vw, 14px);
+        }
+        .dn-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: clamp(8px, 1.2vh, 12px); }
+        .dn-modal-primary, .dn-modal-secondary {
+          font-family: inherit; font-weight: 700; cursor: pointer; border-radius: 7px;
+          font-size: clamp(11px, 1.55vh, 13.5px); padding: clamp(8px, 1.15vh, 11px) clamp(13px, 1.3vw, 20px);
+        }
+        .dn-modal-primary { background: var(--red); color: #FFF; border: 1.5px solid var(--red); }
+        .dn-modal-primary:hover { background: var(--red-dark); }
+        .dn-modal-primary:disabled { opacity: .65; cursor: progress; }
+        .dn-modal-secondary { background: #FFF; color: #3A3A3A; border: 1.5px solid var(--line); }
 
         /* ===== PANELS ===== */
         .dn-panels { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: clamp(9px, 1.1vw, 18px); }
@@ -535,8 +642,42 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
                     : `Eligible again from ${formatFullDate(profile.eligibleSince)} · 90 days must pass since your last donation`}
                 </div>
               </div>
-              {isEligible && <button type="button" className="dn-elig-btn">Book a Donation</button>}
+              {/* Eligible donors only, and only one open visit at a time (Business Rule 29); the server checks both. */}
+              {isEligible && !booking && (
+                <button type="button" className="dn-elig-btn" onClick={() => setBookingFormOpen(true)}>
+                  Book a Donation
+                </button>
+              )}
             </div>
+
+            {booking && (
+              <div className="dn-booking">
+                <div className="dn-booking-icon"><CalendarIcon /></div>
+                <div className="dn-booking-body">
+                  <div className="dn-booking-main">Your donation visit · {booking.bloodBankName}</div>
+                  <div className="dn-booking-sub">{describeBookingWhen(booking)}</div>
+                  {cancelStep.error && <div className="dn-booking-err" role="alert">{cancelStep.error}</div>}
+                </div>
+                {cancelStep.confirming ? (
+                  <div className="dn-booking-confirm" role="alert">
+                    <span>{describeCancelQuestion(booking)}</span>
+                    <button type="button" className="dn-booking-keep" disabled={cancelStep.busy}
+                            onClick={() => setCancelStep({ confirming: false, busy: false, error: null })}>
+                      Keep it
+                    </button>
+                    <button type="button" className="dn-booking-cancel" disabled={cancelStep.busy}
+                            onClick={confirmCancelBooking}>
+                      {cancelStep.busy ? "Cancelling…" : "Yes, cancel"}
+                    </button>
+                  </div>
+                ) : canCancelBooking(booking) && (
+                  <button type="button" className="dn-booking-cancel"
+                          onClick={() => setCancelStep({ confirming: true, busy: false, error: null })}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* ---- panels ---- */}
             <div className="dn-panels">
@@ -623,6 +764,119 @@ export default function DonorPortal({ user, onSignOut, onUserUpdated }) {
           </>
         )}
       </main>
+
+      {bookingFormOpen && (
+        <BookingDialog
+          onClose={() => setBookingFormOpen(false)}
+          onBooked={(created) => { setBooking(created); setBookingFormOpen(false); }}
+          onRefused={refreshProfileAndBooking}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Book a Donation" (Business Rule 29): blood bank, date (today to today + 30, UTC), morning or afternoon, then a
+ * confirmation step. Checks in lib/donationBooking.js; a 409 re-reads the profile and booking behind it.
+ */
+function BookingDialog({ onClose, onBooked, onRefused }) {
+  const [banks, setBanks] = useState(null);
+  const [banksError, setBanksError] = useState(null);
+  const [form, setForm] = useState({ bloodBankId: "", bookingDate: "", timeOfDay: "" });
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [error, setError] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [range] = useState(() => bookingDateRange());
+
+  useEffect(() => {
+    getBloodBanks().then(setBanks).catch((err) => setBanksError(err.message));
+  }, []);
+
+  const bankName = banks?.find((bank) => bank.id === form.bloodBankId)?.name ?? "";
+
+  function update(changes) {
+    setForm((current) => ({ ...current, ...changes }));
+  }
+
+  function handleContinue(event) {
+    event.preventDefault();
+    const problems = bookingFormProblems(form);
+    setFieldErrors(problems);
+    setError(null);
+    if (Object.keys(problems).length === 0) setConfirming(true);
+  }
+
+  async function handleConfirm() {
+    setSaving(true);
+    setError(null);
+    try {
+      onBooked(await createBooking(form));
+    } catch (err) {
+      setError(err.message);
+      setFieldErrors(err.fieldErrors ?? {});
+      setConfirming(false);
+      setSaving(false);
+      if (err.status === 409) onRefused();
+    }
+  }
+
+  return (
+    <div className="dn-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="dn-modal" onSubmit={handleContinue} noValidate>
+        <div className="dn-modal-title">Book a Donation</div>
+        <div className="dn-modal-sub">Choose a blood bank, a day within the next 30 days, and morning or afternoon.</div>
+
+        {error && <div className="dn-modal-alert" role="alert">{error}</div>}
+        {banksError && <div className="dn-modal-alert" role="alert">{banksError}</div>}
+
+        <div className="dn-field">
+          <label htmlFor="booking-bank">Blood bank</label>
+          <select id="booking-bank" value={form.bloodBankId} disabled={confirming || !banks}
+                  onChange={(e) => update({ bloodBankId: e.target.value })}>
+            <option value="">{banks ? "Select a blood bank…" : "Loading blood banks…"}</option>
+            {(banks ?? []).map((bank) => <option key={bank.id} value={bank.id}>{bank.name}</option>)}
+          </select>
+          {fieldErrors.bloodBankId && <span className="dn-field-err">{fieldErrors.bloodBankId}</span>}
+        </div>
+
+        <div className="dn-field">
+          <label htmlFor="booking-date">Date</label>
+          <input id="booking-date" type="date" min={range.min} max={range.max} value={form.bookingDate}
+                 disabled={confirming} onChange={(e) => update({ bookingDate: e.target.value })} />
+          {fieldErrors.bookingDate && <span className="dn-field-err">{fieldErrors.bookingDate}</span>}
+        </div>
+
+        <fieldset className="dn-field dn-field--choice" disabled={confirming}>
+          <legend>Time of day</legend>
+          {["MORNING", "AFTERNOON"].map((value) => (
+            <label key={value} className="dn-choice">
+              <input type="radio" name="booking-time" value={value} checked={form.timeOfDay === value}
+                     onChange={() => update({ timeOfDay: value })} />
+              {value === "MORNING" ? "Morning" : "Afternoon"}
+            </label>
+          ))}
+          {fieldErrors.timeOfDay && <span className="dn-field-err">{fieldErrors.timeOfDay}</span>}
+        </fieldset>
+
+        {confirming ? (
+          <div className="dn-modal-confirm" role="alert">
+            <strong>{describeBookingQuestion(bankName, form.bookingDate, form.timeOfDay)}</strong>
+            <div className="dn-modal-actions">
+              <button type="button" className="dn-modal-secondary" onClick={() => setConfirming(false)}>Go back</button>
+              <button type="button" className="dn-modal-primary" disabled={saving} onClick={handleConfirm}>
+                {saving ? "Booking…" : "Confirm booking"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="dn-modal-actions">
+            <button type="button" className="dn-modal-secondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="dn-modal-primary">Continue</button>
+          </div>
+        )}
+      </form>
     </div>
   );
 }

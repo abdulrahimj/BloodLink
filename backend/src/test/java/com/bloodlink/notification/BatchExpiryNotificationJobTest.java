@@ -17,12 +17,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.notification.NotificationService.ExpiryNotices;
 import com.bloodlink.repository.BloodBankRepository;
 
 /**
- * The daily expiry job's own decisions (Business Rule 26): when the startup catch-up runs, that the date comes
+ * The daily job's own decisions (Business Rules 26, 29): when the startup catch-up runs, that the date comes
  * from the injected Clock, and that one bank failing does not stop the rest. What is sent: BatchExpiryNotificationIT.
  */
 @ExtendWith(MockitoExtension.class)
@@ -30,10 +31,11 @@ class BatchExpiryNotificationJobTest {
 
     @Mock private NotificationService notificationService;
     @Mock private BloodBankRepository bloodBankRepository;
+    @Mock private DonationBookingService donationBookingService;
 
     private BatchExpiryNotificationJob jobAt(String instant, String cron) {
         Clock clock = Clock.fixed(Instant.parse(instant), ZoneOffset.UTC);
-        return new BatchExpiryNotificationJob(notificationService, bloodBankRepository, clock, cron);
+        return new BatchExpiryNotificationJob(notificationService, bloodBankRepository, donationBookingService, clock, cron);
     }
 
     private static BloodBank bank(String name) {
@@ -64,7 +66,7 @@ class BatchExpiryNotificationJobTest {
     @Test
     void startingBeforeTodaysTimeSendsNothingStartingAfterItCatchesUp() {
         jobAt("2026-10-24T05:00:00Z", BatchExpiryNotificationJob.DEFAULT_CRON).catchUpOnStartup();
-        verifyNoInteractions(notificationService, bloodBankRepository);
+        verifyNoInteractions(notificationService, bloodBankRepository, donationBookingService);
 
         BloodBank bank = bank("Makeni Regional Blood Bank");
         when(bloodBankRepository.findAll()).thenReturn(List.of(bank));
@@ -88,5 +90,32 @@ class BatchExpiryNotificationJobTest {
         // Both banks are tried, each with the clock's instant, never the system time.
         verify(notificationService).notifyBatchExpiry(broken.getId(), now);
         verify(notificationService).notifyBatchExpiry(fine.getId(), now);
+    }
+
+    // ---------- donation bookings (Business Rule 29) ----------
+
+    @Test
+    void theDailyRunAndTheCatchUpBothCloseMissedBookingsAndSendRemindersAtTheClocksInstant() {
+        when(bloodBankRepository.findAll()).thenReturn(List.of());
+        Instant scheduled = Instant.parse("2026-10-24T06:00:00Z");
+        jobAt("2026-10-24T06:00:00Z", BatchExpiryNotificationJob.DEFAULT_CRON).runScheduled();
+        verify(donationBookingService).markMissed(scheduled);
+        verify(donationBookingService).sendDueReminders(scheduled);
+
+        Instant late = Instant.parse("2026-10-24T09:00:00Z");
+        jobAt("2026-10-24T09:00:00Z", BatchExpiryNotificationJob.DEFAULT_CRON).catchUpOnStartup();
+        verify(donationBookingService).markMissed(late);
+        verify(donationBookingService).sendDueReminders(late);
+    }
+
+    @Test
+    void markingMissedBookingsFailingStillSendsTheReminders() {
+        when(bloodBankRepository.findAll()).thenReturn(List.of());
+        Instant now = Instant.parse("2026-10-24T06:00:00Z");
+        when(donationBookingService.markMissed(now)).thenThrow(new IllegalStateException("boom"));
+
+        jobAt("2026-10-24T06:00:00Z", BatchExpiryNotificationJob.DEFAULT_CRON).runScheduled();
+
+        verify(donationBookingService).sendDueReminders(now);
     }
 }

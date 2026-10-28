@@ -14,5 +14,11 @@ public enum NotificationType {
     /** Batches of one bank 7 days from expiry, sent once per batch (Business Rule 26, V23). Informational only. */
     BATCH_EXPIRY_REMINDER,
     /** Expired batches of one bank still holding units, daily until written off (Business Rule 26, V23). */
-    BATCH_EXPIRED
+    BATCH_EXPIRED,
+    /** A donor booked a donation visit, sent to that bank's active staff (Business Rule 29, V27). */
+    DONATION_BOOKED,
+    /** A booking was cancelled, by the donor or automatically on a donation elsewhere (Business Rule 29, V27). */
+    DONATION_BOOKING_CANCELLED,
+    /** The day-before reminder to the donor, once per booking (Business Rule 29, V27). */
+    DONATION_BOOKING_REMINDER
 }

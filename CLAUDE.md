@@ -44,6 +44,11 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | REQUEST_PROGRESS | BLOOD_BANK_STAFF at every other bank still watching it | a bank contributes, changing the units outstanding (Business Rule 20) |
 | BATCH_EXPIRY_REMINDER | that bank's **active** BLOOD_BANK_STAFF | the daily job finds batches 7 days from expiry (Business Rule 26) |
 | BATCH_EXPIRED | that bank's **active** BLOOD_BANK_STAFF | the daily job finds expired batches still holding units, every day until written off (Business Rule 26) |
+| DONATION_BOOKED | the booked bank's **active** BLOOD_BANK_STAFF | a donor books a donation visit (Business Rule 29) |
+| DONATION_BOOKING_CANCELLED | the booked bank's **active** BLOOD_BANK_STAFF | the donor cancels, or a donation at a different bank cancels it automatically (Business Rule 29) |
+| DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job, the day before the visit, once per booking (Business Rule 29) |
+
+Eleven types in all (V27).
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -51,8 +56,8 @@ Delivery is per-user via `/user/queue/notifications` — nothing is broadcast.
 
 **Every notification goes to ACTIVE accounts only** — a suspended staff member, hospital user or donor is
 never a recipient of any type (and is not counted in an appeal's reach preview); `NotificationService`'s
-`activeBankStaff` / `activeHospitalStaff` and the ACTIVE filter in `DonorRepository.findByBloodTypeWithUser`
-are where this is decided.
+`activeBankStaff` / `activeHospitalStaff`, the ACTIVE filter in `DonorRepository.findByBloodTypeWithUser` and the
+ACTIVE check in `DonationBookingService.sendDueReminders` (Business Rule 29) are where this is decided.
 
 **Every push is also a Notification row, written first, in the same transaction as the event.** The
 socket is an accelerator; the row is the record. A client that was offline reads what it missed from
@@ -242,6 +247,25 @@ There is deliberately no database-level cap on the sum per request — a CHECK c
 and a trigger could not see an uncommitted concurrent one; the pessimistic row lock in
 `RequestService` is the real guard. See Business Rule 20.
 
+### DonationBooking
+| field | type |
+|---|---|
+| id | UUID, PK |
+| donor_id | UUID, FK -> Donor |
+| blood_bank_id | UUID, FK -> BloodBank |
+| booking_date | date — today to today + 30 (UTC) when booked, checked in code |
+| time_of_day | enum: MORNING, AFTERNOON (DB CHECK) |
+| status | enum: BOOKED, CANCELLED, ATTENDED, MISSED (DB CHECK) |
+| donation_id | UUID, FK -> Donation, nullable, unique — set exactly when ATTENDED (DB CHECK) |
+| created_at | timestamp |
+| closed_at | timestamp, nullable — null exactly while BOOKED (DB CHECK) |
+| reminder_sent_at | timestamp, nullable — when the day-before reminder went out, so it goes once |
+
+Table `donation_bookings` (V27, Business Rule 29). **At most one BOOKED row per donor**
+(`uq_donation_bookings_one_open_per_donor`, a partial unique index), plus
+`idx_donation_bookings_open_by_bank_date (blood_bank_id, booking_date) where status = 'BOOKED'`. Foreign keys
+NO ACTION. A booking never touches stock.
+
 ### AppealCooldown
 | field | type |
 |---|---|
@@ -265,11 +289,11 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29) |
 | is_read | boolean |
 | created_at | timestamp |
 | accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
-| source_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V21; set on DONATION_APPEAL rows (the bank that sent the appeal) and on BATCH_EXPIRY_REMINDER / BATCH_EXPIRED rows (the bank the batches belong to, Business Rule 26) |
+| source_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V21; set on DONATION_APPEAL rows (the bank that sent the appeal) and on BATCH_EXPIRY_REMINDER / BATCH_EXPIRED rows (the bank the batches belong to, Business Rule 26), and on the three booking types (the booked bank, Business Rule 29) |
 | blood_type | enum (as above), nullable — added in V21; set on DONATION_APPEAL rows only: the group appealed for |
 | acceptance_alert_sent | boolean, default false — added in V22; true once the sending bank's staff have been told of this row's acceptance |
 
@@ -309,7 +333,8 @@ BloodRequest 1–N BloodRequestDecline · BloodBank 1–N BloodRequestDecline ·
 BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContribution ·
 BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
 BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target) ·
-BloodBank 1–N Notification (as appeal source)
+BloodBank 1–N Notification (as appeal source) · Donor 1–N DonationBooking · BloodBank 1–N DonationBooking ·
+Donation 0..1–1 DonationBooking
 
 ---
 
@@ -1265,6 +1290,53 @@ BloodBank 1–N Notification (as appeal source)
     - **Known limits:** the confirmation is a yes/no flag, not "I confirm replacing A+": if another staff member
       changes the profile between the lookup and a confirmed submit, the confirmed donation still replaces it (both
       changes are audited). A donor is not notified when their group is set or changed.
+29. **An eligible donor books a donation visit: one blood bank, one date, morning or afternoon.** The project owner's
+    decisions, final. No exact times and no capacity limits; **a booking never changes stock.** Schema: `V27`
+    (`donation_bookings`, three notification types). Package `com.bloodlink.booking` (`DonationBookingService`).
+    "Today" is the UTC date from the injected `Clock` everywhere in this rule.
+    - **Who may book: ACTIVE donors ELIGIBLE TODAY** (Business Rule 2, `Donor.isEligibleToDonate()`). The Donor Portal
+      shows "Book a Donation" only to an eligible donor without an open booking; the server refuses anyway: an
+      ineligible donor is a 409 naming the date they may book from, a suspended one is a 401 at the filter (and a 403
+      in the service), any other role a 403 (SecurityConfig `/api/bookings/**` DONOR only, and the service).
+    - **What: `POST /api/bookings` `{ bloodBankId, bookingDate, timeOfDay }`** → 201. The date must be today to today
+      + 30 (`MAX_DAYS_AHEAD`), else a 400 on `bookingDate`; `timeOfDay` MORNING or AFTERNOON, else a 400 on it; an
+      unknown bank a 404. **One open booking per donor:** a second is a 409 (and V27's partial unique index guards
+      it); the donor row is write-locked (`DonorRepository.findByUserIdForUpdate`, the lock Record Donation takes) so
+      booking, cancelling and a donation for one donor never interleave. An open booking whose date has already
+      passed (the daily job has not reached it yet) is closed as MISSED instead of blocking the new one.
+    - **`GET /api/bookings/me`** → the donor's open booking dated today or later, or **204**. **`POST
+      /api/bookings/me/cancel`** → cancels it while BOOKED and its date is today or later (409 once the date has
+      passed, 404 when there is none). There is no booking id in either address, so a donor can only ever reach their own.
+    - **Statuses:** BOOKED → ATTENDED (a donation recorded at that bank, linked by `donation_id`), CANCELLED (by the
+      donor, or automatically when they donate at a different bank) or MISSED (the date passed with no donation).
+      `closed_at` is stamped on every close.
+    - **Record Donation closes the open booking in its own transaction** (`DonationBookingService.closeOnDonation`,
+      `Propagation.MANDATORY`, under the donor row lock): ATTENDED and linked if it was at the recording bank,
+      otherwise CANCELLED, and the booked bank's staff are told ("…was cancelled automatically: they have since donated
+      at another blood bank.") — whatever the booking's date.
+    - **Staff list: `GET /api/bookings/upcoming`** → the caller's bank's BOOKED visits dated today or later, by date
+      then morning first: date, half-day, donor name and profile blood group (null → "Not recorded" on screen). Active
+      BLOOD_BANK_STAFF of that bank only, through `ActingBankResolver.resolveForStockChange` before anything is read
+      (ADMIN, hospital staff and donors 403). Shown on the Blood Bank Dashboard as "Upcoming Donation Visits".
+    - **Notifications** (each a row first, pushed after commit; `source_blood_bank_id` is the booked bank):
+      DONATION_BOOKED ("Aminata Kamara booked a donation for 31 Oct 2026, morning.") and DONATION_BOOKING_CANCELLED
+      ("… cancelled their donation booking for 31 Oct 2026, morning.") to the bank's ACTIVE staff;
+      DONATION_BOOKING_REMINDER ("Your donation at X is tomorrow morning.") to the ACTIVE donor.
+    - **The daily job** (`BatchExpiryNotificationJob.runBookings`, after the expiry notices, same 06:00 UTC schedule and
+      same startup catch-up): marks every BOOKED visit dated before today MISSED (one bulk update, no notification),
+      then reminds every BOOKED visit dated **tomorrow** whose `reminder_sent_at` is null. **Once per booking:**
+      `reminder_sent_at` is stamped by a conditional update (`… where reminder_sent_at is null`) before the notice is
+      written, so a second run or a second server sends nothing; a suspended donor is skipped and not stamped. Each
+      step is its own transaction and a failure is logged without stopping the other.
+    - **Frontend.** Donor Portal: "Book a Donation" opens a form (blood bank list, date limited to today..+30 in UTC,
+      Morning/Afternoon, then "Book a donation at X on 31 Oct 2026, morning?"); after booking, a card shows the visit
+      with Cancel and a confirmation ("Cancel your donation visit to X on …?"). A 409 re-reads the profile and booking.
+      Bell dots: booked green, cancelled navy, reminder amber. Blood Bank Dashboard: the list under the requests
+      panel, re-read when a booked or cancelled notice arrives. Checks and wording in `lib/donationBooking.js` (tested).
+    - **Known limits:** a booking made after 06:00 for the next day gets no reminder (it was not due when that day's
+      job ran, and the next run is the visit day); likewise a day the server never runs at all loses that day's
+      reminders. Changing the date of a booking means cancelling and booking again. Suspending a donor does not cancel
+      their booking. Staff cannot mark a no-show by hand; the daily job does it the next morning.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1280,13 +1352,17 @@ listed so nothing is forgotten when the chapters are next revised.
   sequence is gone; a request is now filled by one or more contributions (Business Rule 20).
 - **Chapter 3/4 — notification types.** A fifth type, REQUEST_PROGRESS, exists (V15), a sixth,
   DONATION_APPEAL_ACCEPTED (Business Rule 25, V21), and a seventh and eighth, BATCH_EXPIRY_REMINDER and
-  BATCH_EXPIRED (Business Rule 26, V23), sent by a daily scheduled job — the first scheduled task in the system.
+  BATCH_EXPIRED (Business Rule 26, V23), sent by a daily scheduled job — the first scheduled task in the system — and a
+  ninth to eleventh, DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (Business Rule 29, V27).
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for first sign-in (Business Rule 27, V25).** `User` gains
   `must_change_password`; the "create account" use case now ends with the holder setting their own password, and
   the first administrator is created from startup settings rather than by hand.
 - **Chapters 3, 4 and 5 — use cases and narrative for donor blood groups (Business Rule 28, V26).** The profile
   group now comes from the blood bank's test: set or changed when a donation is recorded (a change confirmed by
   staff), or corrected by staff after a test; `audit_log` gains DONOR_BLOOD_GROUP_UPDATED, actor bank staff.
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for donation visits (Business Rule 29, V27).** New entity
+  `DonationBooking` (Donor 1–N, BloodBank 1–N, Donation 0..1–1) with its four statuses; use cases "book a donation
+  visit" and "cancel it" for the donor, "view upcoming visits" for bank staff; the daily job now also closes and reminds.
 - **Chapters 3, 4 and 5 — ERD, use cases and narrative for appeal acceptance (Business Rule 25, V20–V22).**
   `Notification` gains `accepted`, `source_blood_bank_id` (BloodBank 1–N Notification), `blood_type` and
   `acceptance_alert_sent`; the donor's "respond to donation appeals" use case now has a real flow.
@@ -1303,9 +1379,9 @@ listed so nothing is forgotten when the chapters are next revised.
 
 ## Actors (roles) and what each can do
 
-- **Donor** — view own profile/history/eligibility (the blood group as a blood bank recorded it, Business Rule 28), accept donation appeals while eligible (Business Rule 25)
+- **Donor** — view own profile/history/eligibility (the blood group as a blood bank recorded it, Business Rule 28), accept donation appeals while eligible (Business Rule 25), book one donation visit at a time while eligible and cancel it (Business Rule 29)
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
@@ -1341,7 +1417,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

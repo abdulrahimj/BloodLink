@@ -124,6 +124,11 @@ public class SecurityConfig {
                 // Bank staff only, never ADMIN; refused again in DonorBloodGroupService. Before /api/donors/**.
                 .requestMatchers(HttpMethod.PATCH, "/api/donors/*/blood-group").hasRole(Role.BLOOD_BANK_STAFF.name())
 
+                // --- Donation visits (Business Rule 29): staff list their bank's, donors manage their own ---
+                // Both refused again in DonationBookingService; the staff rule is matched first.
+                .requestMatchers(HttpMethod.GET, "/api/bookings/upcoming").hasRole(Role.BLOOD_BANK_STAFF.name())
+                .requestMatchers("/api/bookings", "/api/bookings/**").hasRole(Role.DONOR.name())
+
                 // --- Donor's own profile, history and eligibility ---
                 .requestMatchers("/api/donors/**")
                     .hasAnyRole(Role.DONOR.name(), Role.ADMIN.name())

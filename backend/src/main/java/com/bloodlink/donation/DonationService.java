@@ -14,6 +14,7 @@ import com.bloodlink.domain.Donor;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.donation.dto.DonationRecordedResponse;
 import com.bloodlink.donation.dto.RecordDonationPayload;
+import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.donor.DonorBloodGroupService;
 import com.bloodlink.inventory.InventoryService;
 import com.bloodlink.inventory.dto.InventoryItemResponse;
@@ -40,19 +41,22 @@ public class DonationService {
     private final ActingBankResolver actingBankResolver;
     private final InventoryService inventoryService;
     private final DonorBloodGroupService donorBloodGroupService;
+    private final DonationBookingService donationBookingService;
 
     DonationService(
         DonationRepository donationRepository,
         DonorRepository donorRepository,
         ActingBankResolver actingBankResolver,
         InventoryService inventoryService,
-        DonorBloodGroupService donorBloodGroupService
+        DonorBloodGroupService donorBloodGroupService,
+        DonationBookingService donationBookingService
     ) {
         this.donationRepository = donationRepository;
         this.donorRepository = donorRepository;
         this.actingBankResolver = actingBankResolver;
         this.inventoryService = inventoryService;
         this.donorBloodGroupService = donorBloodGroupService;
+        this.donationBookingService = donationBookingService;
     }
 
     /**
@@ -102,6 +106,9 @@ public class DonationService {
         // The profile group follows the test (Business Rule 28): filled if empty, replaced if confirmed, audited.
         boolean profileUpdated = donorBloodGroupService.updateFromDonation(
             donor, testedBloodType, bank, principal.getId());
+
+        // An open booking ends here (Business Rule 29): ATTENDED at this bank, otherwise cancelled and that bank told.
+        donationBookingService.closeOnDonation(donor, saved, bank);
 
         // 3. The units, as a new batch linked to this donation (Business Rule 24); receiveDonation also runs
         // the low-stock check and cooldown recovery, as Add New Batch does.

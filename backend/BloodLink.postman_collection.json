@@ -1129,6 +1129,116 @@
       ]
     },
     {
+      "name": "Donation Bookings",
+      "description": "Business Rule 29: an active donor who is eligible today books one donation visit at a time (blood bank, date from today to today + 30 in UTC, MORNING or AFTERNOON). A booking never changes stock. Recording a donation closes it (ATTENDED at that bank, otherwise CANCELLED); the daily 06:00 UTC job marks past ones MISSED and sends the donor a reminder the day before.",
+      "item": [
+        {
+          "name": "Book a Donation Visit",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bloodBankId\": \"{{makeniBloodBankId}}\",\n  \"bookingDate\": \"2026-11-05\",\n  \"timeOfDay\": \"MORNING\"\n}"
+            },
+            "description": "DONOR only (any other role 403). Change `bookingDate` to a date from today to today + 30. 201 with the booking; the bank's active staff get DONATION_BOOKED. 409 if the donor is not eligible today (it names the date they may book from) or already has an open booking; 400 on `bookingDate` outside the window, on `timeOfDay` other than MORNING/AFTERNOON; 404 for an unknown bank."
+          }
+        },
+        {
+          "name": "Get My Booking",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                "me"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "The donor's open booking dated today or later, or 204 No Content when there is none."
+          }
+        },
+        {
+          "name": "Cancel My Booking",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/me/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                "me",
+                "cancel"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{donorToken}}"
+              }
+            ],
+            "description": "Cancels the donor's own open booking while its date is today or later; the bank's active staff get DONATION_BOOKING_CANCELLED. 404 when there is none, 409 once its date has passed."
+          }
+        },
+        {
+          "name": "List Upcoming Visits (Bank Staff)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/upcoming",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "bookings",
+                "upcoming"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bankStaffToken}}"
+              }
+            ],
+            "description": "The caller's own bank's BOOKED visits dated today or later, by date then morning first: `{ id, bookingDate, timeOfDay, donorName, bloodType }` (`bloodType` null when not recorded). Active blood bank staff only; ADMIN, hospital staff and donors 403."
+          }
+        }
+      ]
+    },
+    {
       "name": "Notifications",
       "description": "The stored side of the bell: every notification is a row, whether or not it was also pushed live. Notifications only ever go to active accounts.",
       "item": [
@@ -1993,7 +2103,7 @@
               "mode": "raw",
               "raw": "{\n  \"donorId\": \"{{donorLookupId}}\",\n  \"bloodType\": \"O+\",\n  \"unitsDonated\": 1,\n  \"expiryDate\": null,\n  \"confirmBloodGroupChange\": false\n}"
             },
-            "description": "Run Look Up Donor by Phone first. `bloodType` is the group as tested today, always stated (Business Rule 4). `unitsDonated` is 1–10. `expiryDate` is optional: leave it `null` for donation date + 42 days, or give the bag label's date (today to 365 days ahead). The donor must be eligible: a donor inside the 90-day recovery window is a 409 and nothing is written. The donation is recorded at the caller's own bank, dated today. Business Rule 28: the donor's profile group follows the test. An empty profile group is set to it; a different one is replaced only with `confirmBloodGroupChange: true` — without it the answer is a 409 with `code: \"BLOOD_GROUP_CHANGE_UNCONFIRMED\"` and nothing is written, not even the donation. Every profile change is audited; the receipt's `profileBloodTypeUpdated` says whether one happened."
+            "description": "Run Look Up Donor by Phone first. `bloodType` is the group as tested today, always stated (Business Rule 4). `unitsDonated` is 1–10. `expiryDate` is optional: leave it `null` for donation date + 42 days, or give the bag label's date (today to 365 days ahead). The donor must be eligible: a donor inside the 90-day recovery window is a 409 and nothing is written. The donation is recorded at the caller's own bank, dated today. Business Rule 28: the donor's profile group follows the test. An empty profile group is set to it; a different one is replaced only with `confirmBloodGroupChange: true` — without it the answer is a 409 with `code: \"BLOOD_GROUP_CHANGE_UNCONFIRMED\"` and nothing is written, not even the donation. Every profile change is audited; the receipt's `profileBloodTypeUpdated` says whether one happened. Business Rule 29: the donor's open donation visit, if any, is closed too — ATTENDED if it was at this bank, otherwise CANCELLED and the booked bank told."
           }
         }
       ]
