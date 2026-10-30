@@ -63,6 +63,8 @@ services:
       # Demo only, deliberately fixed: the placeholder JWT secret is tolerated
       # under this profile, and under no non-demo one.
       SPRING_PROFILES_ACTIVE: demo
+      # The image's JVM flags are sized for a 512 MB host (DEPLOYMENT.md); empty keeps the local demo as it was.
+      JAVA_TOOL_OPTIONS: ""
       # Overrides application-demo.properties's localhost default to reach
       # Postgres by its Docker network hostname instead.
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/bloodlink_demo

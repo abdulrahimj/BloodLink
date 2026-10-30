@@ -8,7 +8,7 @@ import java.util.Set;
  * Decides at startup whether the JWT secret is safe (Business Rule 15): missing or short is refused everywhere,
  * and the public placeholder only allowed on the listed local-only profiles. Free of Spring types for testing.
  */
-final class JwtSecretPolicy {
+public final class JwtSecretPolicy {
 
     /**
      * The development default in application.properties(.example) and .env.example;
@@ -63,11 +63,15 @@ final class JwtSecretPolicy {
 
         // Every active profile must be local-only, not merely one of them: "demo,prod"
         // is a production start that happens to carry a demo profile too.
-        boolean allLocalOnly = Arrays.stream(activeProfiles).allMatch(LOCAL_ONLY_PROFILES::contains);
-        if (!allLocalOnly) {
+        if (!isLocalOnly(activeProfiles)) {
             throw InsecureJwtSecretException.publicPlaceholder(activeProfiles);
         }
         return Verdict.ACCEPTED_WITH_WARNING;
+    }
+
+    /** True when every active profile is local-only (none active means default); shared with HostedDemoPasswords. */
+    public static boolean isLocalOnly(String[] activeProfiles) {
+        return Arrays.stream(activeProfiles).allMatch(LOCAL_ONLY_PROFILES::contains);
     }
 
     /** How the active profiles read in a message: "[prod, staging]", or the default. */

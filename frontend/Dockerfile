@@ -3,7 +3,8 @@
 # which is smaller and simpler than running a Node server in production.
 #
 # Stage 1 — build.
-FROM node:20-alpine AS build
+# Node 24 LTS (20 reached end of life in April 2026); keep in step with .node-version.
+FROM node:24-alpine AS build
 WORKDIR /app
 
 # Copy just the manifest files first so the npm install layer is cached

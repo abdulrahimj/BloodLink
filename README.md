@@ -212,6 +212,8 @@ Docker Compose takes the secret from `.env` (copied from `.env.example`) unless 
 
 Run the backend jar with a non-demo profile (for example `SPRING_PROFILES_ACTIVE=prod`), its own database through `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`, `BLOODLINK_ALLOWED_ORIGINS` set to the frontend's address, and its own `BLOODLINK_JWT_SECRET`. Generate a separate secret for each environment; do not reuse your development one. `docker-compose.yml` is for the demo only.
 
+[DEPLOYMENT.md](DEPLOYMENT.md) walks through a free hosted setup step by step (Neon for the database, Render for the backend, Cloudflare Pages for the frontend), including the `prod` profile, the memory settings for a 512 MB server, and how a public demo replaces the published demo password.
+
 ## Demo mode
 
 Demo mode starts BloodLink with a realistic, fully populated data set instead of an empty database: a large number of donors, both blood banks stocked, and sample requests and notifications. It is kept entirely separate from your development database.

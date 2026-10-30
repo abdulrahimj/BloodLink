@@ -21,6 +21,17 @@ visible in real time instead of tracked manually per facility.
 - **Database:** PostgreSQL, schema managed by Flyway migrations (not `ddl-auto`)
 - **Real-time:** Spring WebSocket with STOMP over SockJS
 - **Auth:** Spring Security, stateless JWT
+- **Hosting (prepared, see `DEPLOYMENT.md`):** Render free web service (`backend/Dockerfile`, 512 MB / 0.1 CPU),
+  Neon PostgreSQL 18 (direct, non-pooled connection, `sslmode=require`), Cloudflare Pages (`frontend/`, `dist`).
+  The `prod` profile (`application-prod.properties`, committed, no secrets) takes the datasource, JWT secret and
+  allowed origins from the environment only, listens on `$PORT`, and caps Tomcat at 20 threads and Hikari at 5
+  connections; the JVM flags are `JAVA_TOOL_OPTIONS` in the Dockerfile (cleared by `docker-compose.yml`), which also
+  runs the jar extracted (`-Djarmode=tools extract`: half the startup CPU, ~70 MB less memory, measured). The public
+  demo runs `demo,prod`: `HostedDemoPasswords` (a Flyway callback, `com.bloodlink.demo`) refuses to start without
+  `BLOODLINK_DEMO_PASSWORD` and `BLOODLINK_DEMO_ADMIN_PASSWORD` and re-hashes every `@blooddemo.example.com` account
+  with them at each start, so the published `BloodLink@2026` never works there; the plain local `demo` is unchanged.
+  The frontend's backend address is `VITE_API_BASE_URL` (`lib/apiBaseUrl.js`); a Cloudflare build (`CF_PAGES`)
+  fails without an https one. Pages' built-in SPA fallback is used (no `404.html`, no `_redirects`).
 
 ## Architecture (three layers)
 
