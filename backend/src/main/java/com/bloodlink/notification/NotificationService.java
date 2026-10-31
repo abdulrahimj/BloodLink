@@ -484,6 +484,25 @@ public class NotificationService {
         }
     }
 
+    /** "Password reset requested for +23276900005 (Aminata Kamara). Call back the registered number." */
+    static String passwordResetRequestedMessage(User requester) {
+        return "Password reset requested for %s (%s). Call back the registered number."
+            .formatted(requester.getPhone(), requester.getFullName());
+    }
+
+    /**
+     * PASSWORD_RESET_REQUESTED to every ACTIVE administrator except the one asking, in the request's transaction
+     * (Business Rule 33). Returns how many were told.
+     */
+    @Transactional
+    public int notifyPasswordResetRequested(User requester) {
+        List<User> admins = userRepository.findByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE).stream()
+            .filter(admin -> !admin.getId().equals(requester.getId()))
+            .toList();
+        dispatch(admins, passwordResetRequestedMessage(requester), NotificationType.PASSWORD_RESET_REQUESTED);
+        return admins.size();
+    }
+
     /** "Aminata Kamara booked a donation for 31 Oct 2026, morning." */
     static String bookedMessage(DonationBooking booking) {
         return "%s booked a donation for %s, %s.".formatted(

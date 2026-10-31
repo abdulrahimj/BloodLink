@@ -28,3 +28,16 @@ export async function login(phone, password, remember = true) {
   saveSession(auth, remember);
   return auth;
 }
+
+/**
+ * POST /api/auth/password-reset-requests ("Forgot password?", Business Rule 33), no token: the answer is the same
+ * whether or not the number is registered; a malformed number is a 400 on phone, as at sign-in.
+ */
+export function requestPasswordReset(phone) {
+  return apiRequest('/api/auth/password-reset-requests', { method: 'POST', body: { phone }, auth: false });
+}
+
+/** GET /api/auth/support-contact, no token: { phone } to show under the answer, or null when none is set. */
+export function getSupportContact() {
+  return apiRequest('/api/auth/support-contact', { auth: false });
+}

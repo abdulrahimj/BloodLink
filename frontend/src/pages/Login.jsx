@@ -1,12 +1,13 @@
-import React, { useState } from "react";
-import { login } from "../api/auth.js";
+import React, { useEffect, useState } from "react";
+import { getSupportContact, login, requestPasswordReset } from "../api/auth.js";
+import { REQUEST_SENT_MESSAGE, phoneFieldProblem, telHref } from "../lib/passwordRequests.js";
 
 /* BloodLink — Login, in the shared design system, wired to POST /api/auth/login
    with an error banner and a busy button added to the mockup. */
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 
-export default function Login({ onSignedIn, notice = null }) {
+export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -172,6 +173,8 @@ export default function Login({ onSignedIn, notice = null }) {
         .au-foot { text-align: center; margin-top: clamp(14px, 2.4vh, 24px); font-size: clamp(11px, 1.55vh, 13.5px); color: var(--ink-muted); }
         .au-foot a { color: var(--red); font-weight: 700; text-decoration: none; }
         .au-foot a:hover { text-decoration: underline; }
+        .au-support { font-size: clamp(11px, 1.55vh, 13.5px); color: #3D3D3D; margin: 0; }
+        .au-support a { color: var(--red); font-weight: 700; text-decoration: none; white-space: nowrap; }
 
         @media (max-width: 900px) {
           .au-root { grid-template-columns: 1fr; }
@@ -225,6 +228,7 @@ export default function Login({ onSignedIn, notice = null }) {
 
       {/* ================= FORM PANEL ================= */}
       <div className="au-formside">
+        {mode === "forgot" ? <ForgotPasswordForm /> : (
         <form className="au-form" onSubmit={handleSubmit} noValidate>
           <h2 className="au-h">Welcome back</h2>
           <p className="au-p">Sign in to continue to your BloodLink account.</p>
@@ -291,8 +295,100 @@ export default function Login({ onSignedIn, notice = null }) {
             Don&rsquo;t have an account? <a href="#register">Create one</a>
           </div>
         </form>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Forgot password?" (Business Rule 33): asks for an administrator to call back. The answer is the same whether or
+ * not the number is registered; the support phone line shows only when the server has one set.
+ */
+function ForgotPasswordForm() {
+  const [phone, setPhone] = useState("");
+  const [fieldError, setFieldError] = useState(null);
+  const [error, setError] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [supportPhone, setSupportPhone] = useState(null);
+
+  // Optional, so a failure just leaves the line out.
+  useEffect(() => {
+    let cancelled = false;
+    getSupportContact()
+      .then((contact) => { if (!cancelled) setSupportPhone(contact?.phone ?? null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (sending) return;
+
+    const problem = phoneFieldProblem(phone);
+    setError(null);
+    setFieldError(problem);
+    if (problem) return;
+
+    setSending(true);
+    try {
+      await requestPasswordReset(phone.trim());
+      setSent(true);
+    } catch (err) {
+      // Only a malformed number (the same 400 as sign-in) or a network failure lands here.
+      setFieldError(err.fieldErrors?.phone ?? null);
+      setError(err.fieldErrors?.phone ? null : err.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const supportHref = telHref(supportPhone);
+
+  return (
+    <form className="au-form" onSubmit={handleSubmit} noValidate>
+      <h2 className="au-h">Forgot your password?</h2>
+      <p className="au-p">
+        Enter the phone number you sign in with. An administrator will call that number to help you set a new password.
+      </p>
+
+      {sent ? (
+        <>
+          <div className="au-alert au-alert--notice" role="status">{REQUEST_SENT_MESSAGE}</div>
+          {supportHref && (
+            <p className="au-support">Or call BloodLink on <a href={supportHref}>{supportPhone}</a></p>
+          )}
+        </>
+      ) : (
+        <>
+          {error && <div className="au-alert" role="alert">{error}</div>}
+          <div className="au-field">
+            <label className="au-label" htmlFor="au-forgot-phone">Phone Number</label>
+            <div className="au-inwrap">
+              <PhoneIcon />
+              <input
+                id="au-forgot-phone"
+                className={`au-input${fieldError ? " au-input--bad" : ""}`}
+                type="tel"
+                placeholder="+232 76 000 000"
+                autoComplete="tel"
+                value={phone}
+                aria-invalid={Boolean(fieldError)}
+                aria-describedby={fieldError ? "au-forgot-phone-err" : undefined}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </div>
+            {fieldError && <span className="au-err" id="au-forgot-phone-err">{fieldError}</span>}
+          </div>
+          <button type="submit" className="au-submit" disabled={sending}>
+            {sending ? "Sending…" : "Send request"}
+          </button>
+        </>
+      )}
+
+      <div className="au-foot"><a href="#login">Back to sign in</a></div>
+    </form>
   );
 }
 

@@ -49,7 +49,7 @@ public class AuditLog {
     private AuditAction action;
 
     /** The account the action was done to — set for the four ACCOUNT_ actions, DONOR_BLOOD_GROUP_UPDATED and
-     *  ADMIN_PASSWORD_RESET, null for a facility creation (V14). */
+     *  ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED, null for a facility creation (V14). */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_user_id", updatable = false)
     private User target;

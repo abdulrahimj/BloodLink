@@ -2,7 +2,7 @@
   "info": {
     "name": "BloodLink API",
     "_postman_id": "b1000d10-0000-4000-8000-000000000001",
-    "description": "Every REST endpoint in the BloodLink backend (Spring Boot 4 / Java 25), grouped by module. Checked against the controllers at Stage 5 of the batch-stock work.\n\n**Quick start.** The phone and password variables are pre-filled with the demo accounts, so start the backend in demo mode (see the README) and run the four **Login as …** requests in the Auth folder. Each saves a token (`donorToken`, `hospitalStaffToken`, `bankStaffToken`, `adminToken`) that every other request uses.\n\n**Accounts.** Only donors register themselves (`POST /api/auth/register`). Hospital staff, blood bank staff and administrators are created by an administrator with **Admin > Users > Create Staff Account** (Business Rule 14), which returns a one-time **temporary** password. On an empty database with no administrator yet, start the backend with the four `BLOODLINK_BOOTSTRAP_ADMIN_*` settings (README, \"Creating the first administrator\"), or use demo mode.\n\n**Temporary passwords (Business Rule 27).** An account an administrator created (and the first administrator) signs in with `user.mustChangePassword: true`. Until it changes its password with **My Account > Change My Password** (the temporary password as `currentPassword`), every other request gets 403 with `code: \"PASSWORD_CHANGE_REQUIRED\"`; only Get My Account, Change My Password and the public Auth requests still work, and the WebSocket refuses to connect. The change answers with a fresh token, which works normally straight after it.\n\n**Who may change stock.** Only active blood bank staff, at their own bank: Add New Batch, Write Off Units, Record Donation and Contribute Units. An administrator gets 403 on all four (Business Rule 8); administrators can still read stock, batches and batch history, and may decline a request on a named bank's behalf.\n\n**Blood groups in URLs.** In a path or query string, `+` must be written `%2B` (a raw `+` means a space). In a JSON body, write `O+` as normal. Every request below already does this.\n\n**Error shape.** Every failure (400, 401, 403, 404, 405, 409, 500) returns `{ timestamp, status, error, code?, message, fieldErrors? }`. `fieldErrors` appears only for a validation failure and maps the field name to a message. `code` appears only on a refusal the client must act on: today, `PASSWORD_CHANGE_REQUIRED` (403, Business Rule 27) and `PASSWORD_CHANGED` (401: the token was issued before the account's password last changed, so sign in again; Business Rule 32).\n\n**Real-time channel.** `/ws` (STOMP over SockJS) pushes all eight notification types to the user they are for, and only to active accounts. It is not a request/response endpoint, so it is not in this collection. Every push is also a stored notification, read with `GET /api/notifications`.",
+    "description": "Every REST endpoint in the BloodLink backend (Spring Boot 4 / Java 25), grouped by module. Checked against the controllers at Stage 5 of the batch-stock work.\n\n**Quick start.** The phone and password variables are pre-filled with the demo accounts, so start the backend in demo mode (see the README) and run the four **Login as …** requests in the Auth folder. Each saves a token (`donorToken`, `hospitalStaffToken`, `bankStaffToken`, `adminToken`) that every other request uses.\n\n**Accounts.** Only donors register themselves (`POST /api/auth/register`). Hospital staff, blood bank staff and administrators are created by an administrator with **Admin > Users > Create Staff Account** (Business Rule 14), which returns a one-time **temporary** password. On an empty database with no administrator yet, start the backend with the four `BLOODLINK_BOOTSTRAP_ADMIN_*` settings (README, \"Creating the first administrator\"), or use demo mode.\n\n**Temporary passwords (Business Rule 27).** An account an administrator created (and the first administrator) signs in with `user.mustChangePassword: true`. Until it changes its password with **My Account > Change My Password** (the temporary password as `currentPassword`), every other request gets 403 with `code: \"PASSWORD_CHANGE_REQUIRED\"`; only Get My Account, Change My Password and the public Auth requests still work, and the WebSocket refuses to connect. The change answers with a fresh token, which works normally straight after it.\n\n**Who may change stock.** Only active blood bank staff, at their own bank: Add New Batch, Write Off Units, Record Donation and Contribute Units. An administrator gets 403 on all four (Business Rule 8); administrators can still read stock, batches and batch history, and may decline a request on a named bank's behalf.\n\n**Blood groups in URLs.** In a path or query string, `+` must be written `%2B` (a raw `+` means a space). In a JSON body, write `O+` as normal. Every request below already does this.\n\n**Error shape.** Every failure (400, 401, 403, 404, 405, 409, 500) returns `{ timestamp, status, error, code?, message, fieldErrors? }`. `fieldErrors` appears only for a validation failure and maps the field name to a message. `code` appears only on a refusal the client must act on: today, `PASSWORD_CHANGE_REQUIRED` (403, Business Rule 27) and `PASSWORD_CHANGED` (401: the token was issued before the account's password last changed, so sign in again; Business Rule 32).\n\n**Forgot password (Business Rule 33).** Auth > Request Password Reset is public and always answers the same; administrators handle the result in Admin > Password Requests and reset with Users > Reset User Password.\n\n**Real-time channel.** `/ws` (STOMP over SockJS) pushes all eight notification types to the user they are for, and only to active accounts. It is not a request/response endpoint, so it is not in this collection. Every push is also a stored notification, read with `GET /api/notifications`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -264,6 +264,64 @@
               }
             }
           ]
+        },
+        {
+          "name": "Request Password Reset (Forgot password?)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/password-reset-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password-reset-requests"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{donorPhone}}\"\n}"
+            },
+            "description": "Business Rule 33. Public: no token. `phone` is checked exactly as at sign-in (a malformed number is a 400 on `phone`). Every well-formed number then gets the same 202, `{ \"message\": \"If this number is registered, an administrator will contact you.\" }`, never sooner than the minimum answer time (500 ms by default), whether it is unknown, suspended, already waiting or new. For an active account it records a waiting request and notifies every active administrator (PASSWORD_RESET_REQUESTED); asking again within an hour adds nothing, after an hour it re-alerts. It never resets a password."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('always the same answer', () => pm.expect(pm.response.json().message).to.eql('If this number is registered, an administrator will contact you.'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Support Contact",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/support-contact",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "support-contact"
+              ]
+            },
+            "header": [],
+            "description": "Business Rule 33. Public: `{ phone }`, the support number the Sign in page shows after a request (`BLOODLINK_SUPPORT_PHONE`, as typed), or `null` when none is set."
+          }
         }
       ]
     },
@@ -1656,6 +1714,122 @@
           ]
         },
         {
+          "name": "Password Requests",
+          "description": "Business Rule 33: \"Forgot password?\" requests from the Sign in page. Administrators only (other roles 403, no token 401). Resetting the password itself is Users > Reset User Password, which also closes the account's waiting request (resolution RESET).",
+          "item": [
+            {
+              "name": "List Password Requests",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/password-reset-requests?status=WAITING&page=0&size=20",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "password-reset-requests"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "WAITING"
+                    },
+                    {
+                      "key": "page",
+                      "value": "0"
+                    },
+                    {
+                      "key": "size",
+                      "value": "20"
+                    }
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "One page of WAITING (default) or DONE requests: waiting newest asked first, done most recently handled first. Each item: `id`, `account` (the User Accounts shape, so the Manage box can open), `requestedAt`, `status`, `resolution` (RESET / CLOSED, null while waiting), `handledById`, `handledByName`, `handledAt`, `note`. Saves the first id to `passwordRequestId`. A bad `status`, `page` or `size` is a 400."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 200 && pm.response.json().content.length > 0) {",
+                      "    pm.collectionVariables.set('passwordRequestId', pm.response.json().content[0].id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Count Waiting Password Requests",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/password-reset-requests/count",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "password-reset-requests",
+                    "count"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "`{ waiting }`: the Admin Console's menu badge and User Accounts banner."
+              }
+            },
+            {
+              "name": "Mark Password Request Done",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/password-reset-requests/{{passwordRequestId}}/close",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "password-reset-requests",
+                    "{{passwordRequestId}}",
+                    "close"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"note\": \"Called back; they remembered it.\"\n}"
+                },
+                "description": "Closes a waiting request without a reset: status DONE, resolution CLOSED, audited as PASSWORD_REQUEST_CLOSED. `note` is optional (blank is none), at most 200 characters (400 on `note`). Already done is a 409, an unknown id a 404. The body may be left out."
+              }
+            }
+          ]
+        },
+        {
           "name": "Facilities",
           "description": "Adding blood banks and hospitals (Business Rule 19). Create only: there is no edit or delete.",
           "item": [
@@ -2283,6 +2457,10 @@
       "key": "otherUserId",
       "value": "",
       "description": "Set by List Users or Create Staff Account."
+    },
+    {
+      "key": "passwordRequestId",
+      "value": ""
     }
   ]
 }

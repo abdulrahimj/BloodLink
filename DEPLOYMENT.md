@@ -122,6 +122,7 @@ under a second, so you will barely notice it.
    | `BLOODLINK_ALLOWED_ORIGINS` | `https://<pages-project>.pages.dev` (no slash at the end) |
    | `BLOODLINK_DEMO_PASSWORD` | `<demo password 1>`: every demo account except the administrator **(real site: leave out)** |
    | `BLOODLINK_DEMO_ADMIN_PASSWORD` | `<demo password 2>`: the demo administrator **(real site: leave out)** |
+   | `BLOODLINK_SUPPORT_PHONE` | optional: a phone number people can call, shown on Sign in after "Forgot password?" ("Or call BloodLink on …"), exactly as typed; leave out to show nothing |
 
    **(real site)** add the four first-administrator settings instead of the two demo passwords:
    `BLOODLINK_BOOTSTRAP_ADMIN_PHONE`, `BLOODLINK_BOOTSTRAP_ADMIN_NAME`, `BLOODLINK_BOOTSTRAP_ADMIN_EMAIL`,

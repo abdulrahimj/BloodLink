@@ -33,6 +33,7 @@ import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
+import com.bloodlink.passwordreset.PasswordResetRequestService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
@@ -63,6 +64,7 @@ public class AdminUserService {
     private final AuditLogService auditLogService;
     private final DonationBookingService donationBookingService;
     private final NotificationService notificationService;
+    private final PasswordResetRequestService passwordResetRequestService;
     private final ApplicationEventPublisher eventPublisher;
 
     AdminUserService(
@@ -73,6 +75,7 @@ public class AdminUserService {
         AuditLogService auditLogService,
         DonationBookingService donationBookingService,
         NotificationService notificationService,
+        PasswordResetRequestService passwordResetRequestService,
         ApplicationEventPublisher eventPublisher
     ) {
         this.userRepository = userRepository;
@@ -82,6 +85,7 @@ public class AdminUserService {
         this.auditLogService = auditLogService;
         this.donationBookingService = donationBookingService;
         this.notificationService = notificationService;
+        this.passwordResetRequestService = passwordResetRequestService;
         this.eventPublisher = eventPublisher;
     }
 
@@ -379,10 +383,13 @@ public class AdminUserService {
         user.setMustChangePassword(true);
         User saved = userRepository.save(user);
         eventPublisher.publishEvent(new PasswordChangedEvent(saved.getId(), changedAt));
+        // From the Password requests page or from Manage alike, a waiting request is closed as RESET (Rule 33).
+        boolean closedRequest = passwordResetRequestService.closeOnReset(saved, principal.getId(), changedAt);
 
         auditLogService.record(principal.getId(), AuditAction.ADMIN_PASSWORD_RESET, saved,
             "Password reset to a temporary one; they must choose a new password at their next sign-in."
-                + (saved.getStatus() == AccountStatus.SUSPENDED ? " The account stays suspended." : ""));
+                + (saved.getStatus() == AccountStatus.SUSPENDED ? " The account stays suspended." : "")
+                + (closedRequest ? " Their waiting password reset request is closed." : ""));
         notificationService.notifyPasswordResetByAdmin(saved);
 
         return new PasswordResetResponse(AdminUserResponse.from(saved), temporaryPassword);

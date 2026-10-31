@@ -71,3 +71,11 @@ bloodlink.bootstrap-admin.phone=${BLOODLINK_BOOTSTRAP_ADMIN_PHONE:}
 bloodlink.bootstrap-admin.name=${BLOODLINK_BOOTSTRAP_ADMIN_NAME:}
 bloodlink.bootstrap-admin.email=${BLOODLINK_BOOTSTRAP_ADMIN_EMAIL:}
 bloodlink.bootstrap-admin.password=${BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD:}
+
+# --- "Forgot password?" (Business Rule 33) ---
+# Optional. A phone number the Sign in page shows under the "Forgot password?" answer
+# ("Or call BloodLink on ..."), shown as entered. Empty (the default) shows nothing.
+bloodlink.support-phone=${BLOODLINK_SUPPORT_PHONE:}
+# The request form always answers after at least this many milliseconds, so a registered
+# number cannot be told from an unknown one by how fast the answer comes. Default 500.
+bloodlink.password-reset-requests.min-response-ms=${BLOODLINK_PASSWORD_RESET_MIN_RESPONSE_MS:500}

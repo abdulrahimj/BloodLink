@@ -22,8 +22,8 @@ function relativeTime(instantIso) {
 }
 
 /**
- * Dot colour by notification type: red shortage or expired stock, amber awaiting a decision or coming up soon,
- * navy settled, green an appeal or a booked visit (Business Rule 29), red a password reset by an administrator (31).
+ * Dot colour by notification type: red shortage, expired stock or a password reset by an administrator (31), amber
+ * awaiting a decision or coming up soon (a password reset request too, 33), navy settled, green an appeal or booked visit.
  */
 const TYPE_TONE = {
   LOW_STOCK_ALERT: 'var(--red)',
@@ -37,13 +37,14 @@ const TYPE_TONE = {
   DONATION_BOOKING_CANCELLED: 'var(--navy)',
   DONATION_BOOKING_REMINDER: 'var(--amber)',
   PASSWORD_RESET_BY_ADMIN: 'var(--red)',
+  PASSWORD_RESET_REQUESTED: 'var(--amber)',
 };
 
 /**
- * notifications newest first; unreadCount drives the badge (hidden at zero);
- * connected is the live socket state; onMarkAllRead clears the badge.
+ * notifications newest first; unreadCount drives the badge (hidden at zero); connected is the live socket state;
+ * onMarkAllRead clears the badge; optional onOpen { canOpen(item), open(item) } makes some notices clickable.
  */
-export default function NotificationBell({ notifications, unreadCount, connected, onMarkAllRead }) {
+export default function NotificationBell({ notifications, unreadCount, connected, onMarkAllRead, onOpen }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
@@ -131,6 +132,13 @@ export default function NotificationBell({ notifications, unreadCount, connected
           padding: 9px 14px; border-bottom: 1px solid var(--line);
         }
         .nb-item:last-child { border-bottom: none; }
+        .nb-item--open {
+          width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent;
+          font: inherit; text-align: left; cursor: pointer;
+        }
+        .nb-item--open.nb-item--unread { background: #F7F9FB; }
+        .nb-item--open:hover { background: #EEF2F6; }
+        .nb-item--open:focus-visible { outline: 2px solid var(--navy); outline-offset: -2px; }
         /* An unread row is tinted rather than badged — it reads at a glance
            without adding another piece of furniture to each line. */
         .nb-item--unread { background: #F7F9FB; }
@@ -174,15 +182,29 @@ export default function NotificationBell({ notifications, unreadCount, connected
             {notifications.length === 0 && (
               <div className="nb-empty">Nothing yet. Alerts will appear here as they happen.</div>
             )}
-            {notifications.map((item) => (
-              <div className={`nb-item${item.read ? '' : ' nb-item--unread'}`} key={item.id}>
-                <span className="nb-dot" style={{ background: TYPE_TONE[item.type] ?? 'var(--ink-muted)' }} />
-                <div className="nb-text">
-                  <div className="nb-message">{item.message}</div>
-                  <div className="nb-when">{relativeTime(item.createdAt)}</div>
-                </div>
-              </div>
-            ))}
+            {notifications.map((item) => {
+              const body = (
+                <>
+                  <span className="nb-dot" style={{ background: TYPE_TONE[item.type] ?? 'var(--ink-muted)' }} />
+                  <div className="nb-text">
+                    <div className="nb-message">{item.message}</div>
+                    <div className="nb-when">{relativeTime(item.createdAt)}</div>
+                  </div>
+                </>
+              );
+              const className = `nb-item${item.read ? '' : ' nb-item--unread'}`;
+              // A notice the portal can open (e.g. a password reset request) is a button that closes the panel.
+              return onOpen?.canOpen(item) ? (
+                <button
+                  type="button" className={`${className} nb-item--open`} key={item.id}
+                  onClick={() => { setOpen(false); onOpen.open(item); }}
+                >
+                  {body}
+                </button>
+              ) : (
+                <div className={className} key={item.id}>{body}</div>
+              );
+            })}
           </div>
 
           {!connected && (

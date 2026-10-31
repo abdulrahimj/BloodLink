@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   getAdminUsers, getUserCounts, createStaffAccount, updateUserStatus, editAccountDetails, resetUserPassword, getAuditLog,
   getDonationTrends, getRequestOutcomes, createBloodBank, createHospital,
+  getPasswordResetRequests, getWaitingPasswordResetCount, closePasswordResetRequest,
 } from "../api/admin.js";
 import {
   USER_ACCOUNT_PAGE_SIZES, USER_ACCOUNT_SORTS, USER_ACCOUNT_STATUSES,
@@ -17,6 +18,12 @@ import {
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
+import NotificationBell from "../components/NotificationBell.jsx";
+import { useNotifications } from "../realtime/useNotifications.js";
+import {
+  MAX_NOTE_LENGTH, OWN_REQUEST_NOTE, PASSWORD_REQUEST_NOTIFICATION, badgeLabel, noteProblem, requestActions,
+  resolutionLabel, telHref, waitingBannerText,
+} from "../lib/passwordRequests.js";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import AdminReports from "./AdminReports.jsx";
 import { formatDateTime, formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
@@ -54,7 +61,7 @@ const CREATABLE_ROLES = ["HOSPITAL_STAFF", "BLOOD_BANK_STAFF", "ADMIN"];
 /** The views this console switches between, held as plain state like BloodBankPortal's,
  * since App.jsx's hash routing only picks the portal. */
 const VIEW = {
-  DASHBOARD: "dashboard", USERS: "users", BANKS: "banks", HOSPITALS: "hospitals",
+  DASHBOARD: "dashboard", USERS: "users", REQUESTS: "requests", BANKS: "banks", HOSPITALS: "hospitals",
   REPORTS: "reports", AUDIT: "audit", SETTINGS: "settings",
 };
 
@@ -66,6 +73,7 @@ const SELF_LOADING_VIEWS = [VIEW.SETTINGS, VIEW.AUDIT, VIEW.REPORTS];
 const HEADINGS = {
   [VIEW.DASHBOARD]: { title: "System Administration", sub: "BloodLink · Makeni City deployment" },
   [VIEW.USERS]: { title: "User Accounts", sub: "Create accounts, and manage each one: details, password reset, suspend and reactivate" },
+  [VIEW.REQUESTS]: { title: "Password requests", sub: "People who forgot their password: call the registered number, check who they are, then reset it" },
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
@@ -85,6 +93,7 @@ const AUDIT_ACTION = {
   STOCK_WRITTEN_OFF: { label: "Written off", tone: "ad-au-written-off" },
   DONOR_BLOOD_GROUP_UPDATED: { label: "Blood group", tone: "ad-au-edited" },
   ADMIN_PASSWORD_RESET: { label: "Password reset", tone: "ad-au-edited" },
+  PASSWORD_REQUEST_CLOSED: { label: "Request closed", tone: "ad-au-edited" },
 };
 
 /** The line under an audit entry's subject: the account's role, the kind of facility, or a stock batch. */
@@ -129,6 +138,20 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [today] = useState(() => new Date());
+
+  // Password reset requests waiting (Business Rule 33): the menu badge and the User Accounts banner.
+  const [waitingRequests, setWaitingRequests] = useState(0);
+  function reloadWaitingRequests() {
+    getWaitingPasswordResetCount().then((data) => setWaitingRequests(data.waiting)).catch(() => {});
+  }
+  useEffect(reloadWaitingRequests, []);
+  // The bell, re-read every 30 seconds; that same poll, and any new request notice, refresh the count.
+  const bell = useNotifications({
+    onPoll: reloadWaitingRequests,
+    onNotification: (notification) => {
+      if (notification.type === PASSWORD_REQUEST_NOTIFICATION) reloadWaitingRequests();
+    },
+  });
 
   async function load() {
     const [countsData, trendsData, outcomesData, banks, hospitals] = await Promise.all([
@@ -273,12 +296,43 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-top-right { display: flex; align-items: center; gap: clamp(10px, 1vw, 16px); }
         .ad-date { display: flex; align-items: center; gap: 8px; font-size: clamp(10px, 1.5vh, 13px); font-weight: 600; color: #3A3A3A; }
         .ad-date svg { width: clamp(14px, 2vh, 17px); height: clamp(14px, 2vh, 17px); }
-        .ad-bell { position: relative; display: grid; place-items: center; }
-        .ad-bell svg { width: clamp(16px, 2.3vh, 20px); height: clamp(16px, 2.3vh, 20px); }
-        .ad-bell::after {
-          content: ''; position: absolute; top: 0; right: 0;
-          width: 7px; height: 7px; border-radius: 50%;
-          background: var(--red); border: 1.5px solid var(--page-bg);
+        /* Password requests (Business Rule 33): the sidebar's red count, the User Accounts banner and the page. */
+        .ad-nav-badge {
+          margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+          background: var(--red); color: #FFF; font-size: 10.5px; font-weight: 800; line-height: 18px; text-align: center;
+        }
+        .ad-req-banner {
+          display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+          background: rgba(200,16,46,.06); border: 1.5px solid rgba(200,16,46,.25); border-radius: var(--radius);
+          padding: clamp(8px, 1.2vh, 11px) 14px; margin-bottom: clamp(10px, 1.6vh, 14px);
+          font-size: clamp(11px, 1.55vh, 13.5px); font-weight: 600; color: #8E0B21;
+        }
+        .ad-req-banner button {
+          background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: var(--red); font-weight: 700;
+        }
+        .ad-req-banner button:hover { text-decoration: underline; }
+        .ad-req-banner button:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; border-radius: 3px; }
+        .ad-req-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+        .ad-req-actions a.ad-act { text-decoration: none; display: inline-flex; align-items: center; }
+        /* The action and outcome cell wraps (table cells elsewhere stay on one line), so notes are never cut off. */
+        .ad-req-table td:last-child { white-space: normal; overflow: visible; }
+        .ad-req-own { flex-basis: 100%; font-size: clamp(9.5px, 1.3vh, 11.5px); color: var(--ink-muted); line-height: 1.4; }
+        .ad-req-confirm { display: flex; flex-direction: column; gap: 6px; min-width: min(280px, 70vw); }
+        .ad-req-confirm textarea {
+          font-family: inherit; font-size: 12.5px; padding: 7px 9px; border: 1.5px solid var(--line); border-radius: 7px;
+          resize: vertical; min-height: 54px;
+        }
+        .ad-req-confirm textarea:focus { outline: none; border-color: var(--navy); }
+        .ad-req-confirm-row { display: flex; gap: 6px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+        .ad-req-done { font-size: clamp(10px, 1.4vh, 12.5px); line-height: 1.45; }
+        .ad-req-done .ad-req-note { color: var(--ink-muted); font-style: italic; overflow-wrap: anywhere; }
+        @media (max-width: 720px) {
+          /* Cards on a phone, so the shared 560px table minimum (responsive.css) does not apply. */
+          .ad-root.ad-root .ad-table.ad-req-table { min-width: 0; }
+          .ad-req-table thead { display: none; }
+          .ad-req-table, .ad-req-table tbody, .ad-req-table tr, .ad-req-table td { display: block; width: 100%; }
+          .ad-req-table tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+          .ad-req-table td { border: none; padding: 3px 4px; }
         }
         .ad-avatar {
           width: clamp(28px, 4.2vh, 38px); height: clamp(28px, 4.2vh, 38px);
@@ -689,6 +743,12 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         <nav className="ad-nav" onClick={() => setMobileMenuOpen(false)}>
           <NavButton view={VIEW.DASHBOARD} current={view} onSelect={setView}><GridIcon /> Dashboard</NavButton>
           <NavButton view={VIEW.USERS} current={view} onSelect={setView}><UsersIcon /> User Accounts</NavButton>
+          <NavButton view={VIEW.REQUESTS} current={view} onSelect={setView}>
+            <KeyIcon /> Password requests
+            {badgeLabel(waitingRequests) && (
+              <span className="ad-nav-badge" aria-label={waitingBannerText(waitingRequests)}>{badgeLabel(waitingRequests)}</span>
+            )}
+          </NavButton>
           <NavButton view={VIEW.BANKS} current={view} onSelect={setView}><BankIcon /> Blood Banks</NavButton>
           <NavButton view={VIEW.HOSPITALS} current={view} onSelect={setView}><HospitalIcon /> Hospitals</NavButton>
           <NavButton view={VIEW.REPORTS} current={view} onSelect={setView}><ChartIcon /> Reports</NavButton>
@@ -709,9 +769,15 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           </div>
           <div className="ad-top-right">
             <div className="ad-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
-            {/* Deliberately not a <NotificationBell>: no Notification type is addressed to ADMIN yet,
-                so this stays the mockup's static icon. */}
-            <div className="ad-bell"><BellIcon /></div>
+            {/* Live since Business Rule 33 sends administrators PASSWORD_RESET_REQUESTED; that notice opens the page. */}
+            <NotificationBell
+              notifications={bell.notifications} unreadCount={bell.unreadCount} connected={bell.connected}
+              onMarkAllRead={bell.markAllRead}
+              onOpen={{
+                canOpen: (item) => item.type === PASSWORD_REQUEST_NOTIFICATION,
+                open: () => setView(VIEW.REQUESTS),
+              }}
+            />
             <div className="ad-avatar">{initials(user.fullName)}</div>
           </div>
         </div>
@@ -748,6 +814,16 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
               onAccountsChanged={reloadUserCounts}
               banks={banks}
               hospitals={hospitals}
+              waitingRequests={waitingRequests}
+              onViewRequests={() => setView(VIEW.REQUESTS)}
+            />
+          ) : view === VIEW.REQUESTS ? (
+            <PasswordRequestsView
+              user={user}
+              banks={banks}
+              hospitals={hospitals}
+              waitingRequests={waitingRequests}
+              onRequestsChanged={reloadWaitingRequests}
             />
           ) : view === VIEW.BANKS || view === VIEW.HOSPITALS ? (
             // Keyed by view so switching between the two pages starts each with
@@ -829,7 +905,7 @@ function DashboardView({ counts, trends, outcomes, facilityCount }) {
  * User Accounts: create, edit, suspend and reactivate accounts. Search, filters, sort and paging go to the server
  * one page at a time (logic in lib/userAccounts.js); after a change the page is refetched, not patched.
  */
-function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals }) {
+function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals, waitingRequests = 0, onViewRequests }) {
   const [query, setQuery] = useState(initialUserAccountsState);
   // What is in the search box right now. It reaches `query` (and the server) only
   // after typing pauses — see the debounce effect below.
@@ -921,6 +997,13 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
 
   return (
     <>
+      {/* Business Rule 33: someone is waiting for a call back about a forgotten password. */}
+      {waitingBannerText(waitingRequests) && (
+        <div className="ad-req-banner" role="status">
+          <span>{waitingBannerText(waitingRequests)}</span>
+          <button type="button" onClick={onViewRequests}>View requests →</button>
+        </div>
+      )}
       <div className="ad-panel ad-table-panel">
         <div className="ad-panel-head">
           <div className="ad-panel-title">All Accounts</div>
@@ -1115,7 +1198,9 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
  * The "Manage" box for one account: Details (phone and facility, Business Rule 17), Password (reset, Business Rule 31)
  * and Account status (suspend / reactivate). Rules from lib/manageAccount.js; the server enforces each one again.
  */
-function ManageAccountDialog({ account: initialAccount, currentUserId, banks, hospitals, onClose, onChanged }) {
+function ManageAccountDialog({
+  account: initialAccount, currentUserId, banks, hospitals, onClose, onChanged, focusSection = null,
+}) {
   const [account, setAccount] = useState(initialAccount);
   // Which confirmation is open inside the box ("reset" or "suspend"), and which write is running.
   const [confirming, setConfirming] = useState(null);
@@ -1128,6 +1213,7 @@ function ManageAccountDialog({ account: initialAccount, currentUserId, banks, ho
   const dialogRef = useRef(null);
   const confirmCancelRef = useRef(null);
   const copyRef = useRef(null);
+  const resetButtonRef = useRef(null);
 
   const options = manageAccountOptions(account, { currentUserId });
 
@@ -1139,8 +1225,15 @@ function ManageAccountDialog({ account: initialAccount, currentUserId, banks, ho
   }
 
   // Focus starts inside the box; Escape cancels an open confirmation first, then closes; Tab stays inside.
+  // Opened from Password requests (Business Rule 33), it starts at Reset password instead.
   useEffect(() => {
-    focusables(dialogRef.current)[0]?.focus();
+    const start = focusSection === "password" ? resetButtonRef.current : null;
+    if (start) {
+      start.scrollIntoView({ block: "center" });
+      start.focus();
+    } else {
+      focusables(dialogRef.current)[0]?.focus();
+    }
   }, []);
   useEffect(() => {
     if (confirming) confirmCancelRef.current?.focus();
@@ -1280,7 +1373,7 @@ function ManageAccountDialog({ account: initialAccount, currentUserId, banks, ho
                 <div className="ad-hint ad-manage-hint">{RESET_PASSWORD_HINT}</div>
                 <div>
                   <button
-                    type="button" className="ad-act ad-act--edit" disabled={Boolean(busy)}
+                    type="button" className="ad-act ad-act--edit" disabled={Boolean(busy)} ref={resetButtonRef}
                     onClick={() => { setActionError(null); setConfirming("reset"); }}
                   >
                     Reset password
@@ -1486,6 +1579,269 @@ function trapTab(event, root) {
     event.preventDefault();
     first.focus();
   }
+}
+
+/** Requests per page on the Password requests page. */
+const REQUEST_PAGE_SIZE = 10;
+
+/**
+ * Password requests (Business Rule 33): who asked for help with a forgotten password. Waiting rows offer Call, Reset
+ * password (the Manage box at its Password section) and Mark done; done rows say who handled each, when and how.
+ */
+function PasswordRequestsView({ user, banks, hospitals, waitingRequests, onRequestsChanged }) {
+  const [status, setStatus] = useState("WAITING");
+  const [page, setPage] = useState(0);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [managing, setManaging] = useState(null);
+  const returnFocusRef = useRef(null);
+
+  // Re-read on a filter or page change, after any action, and whenever the waiting count moves (the 30-second poll).
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getPasswordResetRequests({ status, page, size: REQUEST_PAGE_SIZE })
+      .then((result) => {
+        if (cancelled) return;
+        // The last row of a later page was handled: step back rather than show an empty page.
+        if (result.content.length === 0 && page > 0) { setPage(page - 1); return; }
+        setData(result);
+        setLoadError(null);
+      })
+      .catch((err) => { if (!cancelled) setLoadError(err.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [status, page, reloadKey, waitingRequests]);
+
+  function refresh() {
+    setReloadKey((key) => key + 1);
+    onRequestsChanged?.();
+  }
+
+  function showStatus(next) {
+    setStatus(next);
+    setPage(0);
+    setData(null);
+  }
+
+  function openReset(request, event) {
+    returnFocusRef.current = event?.currentTarget ?? null;
+    setManaging(request.account);
+  }
+
+  function closeManage() {
+    setManaging(null);
+    returnFocusRef.current?.focus();
+  }
+
+  const rows = data?.content ?? [];
+  const waiting = status === "WAITING";
+
+  return (
+    <>
+      <div className="ad-panel ad-table-panel">
+        <div className="ad-panel-head">
+          <div className="ad-panel-title">{waiting ? "Waiting for a call back" : "Handled requests"}</div>
+          <div className="ad-panel-head-right">
+            {loading && data && <div className="ad-muted" role="status">Updating…</div>}
+          </div>
+        </div>
+
+        <div className="ad-filters" role="group" aria-label="Show requests">
+          {[["WAITING", "Waiting"], ["DONE", "Done"]].map(([value, label]) => (
+            <button
+              key={value} type="button" className={`ad-filter${status === value ? " is-on" : ""}`}
+              aria-pressed={status === value} onClick={() => showStatus(value)}
+            >
+              {label}
+              {value === "WAITING" && <span className="ad-filter-count">{waitingRequests}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="ad-hint">
+          {waiting
+            ? "Call the registered number, make sure you are speaking to the account holder, then reset the password. "
+              + "Never reset it for anyone calling from a different number."
+            : "Every request an administrator has handled, most recently handled first."}
+        </div>
+
+        <div className="ad-table-scroll">
+          <table className="ad-table ad-table--compact ad-req-table">
+            <thead>
+              <tr>
+                <th style={{ width: "22%" }}>User</th>
+                <th style={{ width: "15%" }}>Phone (registered)</th>
+                <th style={{ width: "13%" }}>Role</th>
+                <th style={{ width: "12%" }}>Requested</th>
+                <th style={{ width: "38%" }}>{waiting ? "Action" : "Outcome"}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!data && loading && !loadError && <tr><td colSpan={5} className="ad-empty">Loading requests…</td></tr>}
+              {loadError && (
+                <tr>
+                  <td colSpan={5} className="ad-empty">
+                    <span className="ad-users-error">Could not load requests: {loadError}</span>{" "}
+                    <button type="button" className="ad-act ad-act--edit" onClick={refresh}>Try again</button>
+                  </td>
+                </tr>
+              )}
+              {data && !loadError && rows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="ad-empty">
+                    {waiting ? "No password reset requests are waiting." : "No requests have been handled yet."}
+                  </td>
+                </tr>
+              )}
+              {!loadError && rows.map((request) => (
+                <PasswordRequestRow
+                  key={request.id} request={request} currentUserId={user.id}
+                  onReset={(event) => openReset(request, event)} onClosed={refresh}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {data && data.totalElements > 0 && (
+          <div className="ad-log-pager">
+            <div />
+            <div className="ad-log-nav">
+              <span className="ad-log-page-label">
+                {describeShowingRange(page, REQUEST_PAGE_SIZE, data.totalElements)}
+              </span>
+              <button
+                type="button" className="ad-act ad-act--edit"
+                disabled={!canGoToPreviousPage(page) || loading} onClick={() => setPage(page - 1)}
+              >
+                Previous
+              </button>
+              <button
+                type="button" className="ad-act ad-act--edit"
+                disabled={!canGoToNextPage(page, data.totalPages) || loading} onClick={() => setPage(page + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {managing && (
+        <ManageAccountDialog
+          account={managing}
+          currentUserId={user.id}
+          banks={banks}
+          hospitals={hospitals}
+          focusSection="password"
+          onClose={closeManage}
+          // A reset closes the request on the server, so the row leaves the Waiting list.
+          onChanged={refresh}
+        />
+      )}
+    </>
+  );
+}
+
+/** One request row: its actions while waiting (Mark done opens inline with an optional note), its outcome once done. */
+function PasswordRequestRow({ request, currentUserId, onReset, onClosed }) {
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const noteRef = useRef(null);
+  const markDoneRef = useRef(null);
+
+  const actions = requestActions(request, currentUserId);
+  const account = request.account;
+  const problem = noteProblem(note);
+
+  useEffect(() => {
+    if (confirming) noteRef.current?.focus();
+  }, [confirming]);
+
+  function cancel() {
+    setConfirming(false);
+    setNote("");
+    setError(null);
+    setTimeout(() => markDoneRef.current?.focus(), 0);
+  }
+
+  async function markDone() {
+    if (problem || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await closePasswordResetRequest(request.id, note.trim() || null);
+      onClosed();
+    } catch (err) {
+      // Already handled by someone else (409): the list is re-read so the row moves on.
+      setError(err.fieldErrors?.note ?? err.message);
+      if (err.status === 409) onClosed();
+      setBusy(false);
+    }
+  }
+
+  return (
+    <tr>
+      <td><b>{account.fullName}</b></td>
+      <td>{account.phone}</td>
+      <td><span className={`ad-pill ${rolePill(account.role)}`}>{ROLE_LABEL[account.role] ?? account.role}</span></td>
+      <td title={formatDateTime(request.requestedAt)}>{formatRelativeTime(request.requestedAt)}</td>
+      <td>
+        {request.status === "DONE" ? (
+          <div className="ad-req-done">
+            <b>{resolutionLabel(request.resolution)}</b> by {request.handledByName}, {formatDateTime(request.handledAt)}
+            {request.note && <div className="ad-req-note">“{request.note}”</div>}
+          </div>
+        ) : confirming ? (
+          <div className="ad-req-confirm" role="group" aria-label={`Mark the request from ${account.fullName} done`}>
+            <label className="ad-hint" htmlFor={`ad-req-note-${request.id}`}>
+              Close without a reset. Note (optional), e.g. why:
+            </label>
+            <textarea
+              id={`ad-req-note-${request.id}`} ref={noteRef} value={note} rows={2}
+              aria-invalid={Boolean(problem)} onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } }}
+            />
+            <div className="ad-req-confirm-row">
+              <span className={problem ? "ad-err" : "ad-hint"}>{problem ?? `${note.length}/${MAX_NOTE_LENGTH}`}</span>
+              <div className="ad-req-actions">
+                <button type="button" className="ad-act ad-act--edit" onClick={cancel} disabled={busy}>Cancel</button>
+                <button type="button" className="ad-act ad-act--go" onClick={markDone} disabled={busy || Boolean(problem)}>
+                  {busy ? "Saving…" : "Mark done"}
+                </button>
+              </div>
+            </div>
+            {error && <div className="ad-err" role="alert">{error}</div>}
+          </div>
+        ) : (
+          <div className="ad-req-actions">
+            {actions.canCall && (
+              <a
+                className="ad-act ad-act--go" href={telHref(account.phone)}
+                aria-label={`Call ${account.fullName} on ${account.phone}`}
+              >
+                Call
+              </a>
+            )}
+            {actions.canReset && (
+              <button type="button" className="ad-act ad-act--edit" onClick={onReset}>Reset password</button>
+            )}
+            {actions.canMarkDone && (
+              <button type="button" className="ad-act" ref={markDoneRef} onClick={() => setConfirming(true)}>
+                Mark done
+              </button>
+            )}
+            {actions.ownRequest && <span className="ad-req-own">{OWN_REQUEST_NOTE}</span>}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
 }
 
 /**
@@ -2179,7 +2535,7 @@ function CalendarIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><rect x="3"
 /* Drawn white, not currentColor: it only ever sits inside the filled navy
    "Create Account" button, where the surrounding text is white too. */
 function PlusIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><path d="M12 5v14M5 12h14"/></svg>); }
-function BellIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>); }
+function KeyIcon() { return (<svg viewBox="0 0 24 24" {...ICON}><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/></svg>); }
 function UsersFillIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><circle cx="9" cy="8" r="3.4"/><circle cx="17" cy="9" r="2.7"/><path d="M2 20c0-3.6 3.1-5.8 7-5.8s7 2.2 7 5.8z"/><path d="M16.5 14.4c3 .3 5.5 2.3 5.5 5.6h-5.2c0-2-.4-3.9-.3-5.6z"/></svg>); }
 function DropletIcon() { return (<svg viewBox="0 0 24 24" fill="#FFF"><path d="M12 2S5 10 5 14.5a7 7 0 0 0 14 0C19 10 12 2 12 2z"/></svg>); }
 function BuildingIcon() { return (<svg viewBox="0 0 24 24" {...ICON_W}><path d="M4 21V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v15M2 21h20"/><path d="M12 8v6M9 11h6"/></svg>); }

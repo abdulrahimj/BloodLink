@@ -9,10 +9,10 @@ import { PASSWORD_CHANGED_MESSAGE } from '../lib/sessionEnd.js';
 import { connectNotifications } from './notificationSocket.js';
 
 /**
- * options.onNotification is called on each live arrival for screens that react beyond the bell.
+ * options.onNotification runs on each live arrival, options.onPoll on each 30-second re-read (for a screen's own figure).
  * Returns { notifications, unreadCount, connected, markAllRead, reload }.
  */
-export function useNotifications({ onNotification } = {}) {
+export function useNotifications({ onNotification, onPoll } = {}) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [connected, setConnected] = useState(false);
@@ -20,6 +20,8 @@ export function useNotifications({ onNotification } = {}) {
   // Held in a ref so an inline callback doesn't reopen the WebSocket on every render.
   const onNotificationRef = useRef(onNotification);
   onNotificationRef.current = onNotification;
+  const onPollRef = useRef(onPoll);
+  onPollRef.current = onPoll;
 
   /** Re-reads both the list and the count from the API. */
   const reload = useCallback(async () => {
@@ -48,6 +50,7 @@ export function useNotifications({ onNotification } = {}) {
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       reload().catch(() => {});
+      onPollRef.current?.();
     }, 30_000);
 
     return () => window.clearInterval(intervalId);

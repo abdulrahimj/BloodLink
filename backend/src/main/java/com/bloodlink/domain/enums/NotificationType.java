@@ -22,5 +22,7 @@ public enum NotificationType {
     /** The day-before reminder to the donor, once per booking (Business Rule 29, V27). */
     DONATION_BOOKING_REMINDER,
     /** Tells an account holder an administrator reset their password (Business Rule 31, V28). Active accounts only. */
-    PASSWORD_RESET_BY_ADMIN
+    PASSWORD_RESET_BY_ADMIN,
+    /** Tells every active administrator someone asked for a password reset from Sign in (Business Rule 33, V30). */
+    PASSWORD_RESET_REQUESTED
 }

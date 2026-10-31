@@ -42,6 +42,7 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
+import com.bloodlink.passwordreset.PasswordResetRequestService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.security.PasswordChangedEvent;
@@ -70,6 +71,7 @@ class AdminUserServiceTest {
     @Mock private DonationBookingService donationBookingService;
     @Mock private NotificationService notificationService;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private PasswordResetRequestService passwordResetRequestService;
 
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -80,7 +82,7 @@ class AdminUserServiceTest {
     void setUp() {
         service = new AdminUserService(
             userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService,
-            notificationService, eventPublisher);
+            notificationService, passwordResetRequestService, eventPublisher);
     }
 
     /** Creates an account as the test administrator — the actor the audit log records. */
@@ -884,7 +886,7 @@ class AdminUserServiceTest {
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("Profile Settings");
 
-        verifyNoInteractions(userRepository, auditLogService, notificationService, eventPublisher);
+        verifyNoInteractions(userRepository, auditLogService, notificationService, eventPublisher, passwordResetRequestService);
     }
 
     @Test
@@ -906,6 +908,8 @@ class AdminUserServiceTest {
         // Business Rule 32: the reset is stamped and announced, so the holder's older tokens and sockets stop working.
         assertThat(target.getPasswordChangedAt()).isNotNull();
         verify(eventPublisher).publishEvent(new PasswordChangedEvent(target.getId(), target.getPasswordChangedAt()));
+        // Business Rule 33: any waiting "Forgot password?" request is closed by the same reset, in its transaction.
+        verify(passwordResetRequestService).closeOnReset(target, ADMIN_ID, target.getPasswordChangedAt());
     }
 
     @Test

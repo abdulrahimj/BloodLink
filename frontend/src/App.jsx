@@ -14,11 +14,12 @@ import { mustChangePassword } from './lib/passwordChange.js';
    (ADMIN goes to the Admin Console). No router dependency for a handful of screens. */
 
 /**
- * Reads the current screen from the hash: empty is the landing page, '#register' register,
- * anything else login.
+ * Reads the current screen from the hash: empty is the landing page, '#register' register, '#forgot' the
+ * "Forgot password?" form (Business Rule 33), anything else login.
  */
 function readRoute() {
   if (window.location.hash === '#register') return 'register';
+  if (window.location.hash === '#forgot') return 'forgot';
   if (window.location.hash === '') return 'landing';
   return 'login';
 }
@@ -107,7 +108,7 @@ export default function App() {
 
   return route === 'register'
     ? <Register onSignedIn={handleSignedIn} />
-    : <Login onSignedIn={handleSignedIn} notice={signInNotice} />;
+    : <Login onSignedIn={handleSignedIn} notice={signInNotice} mode={route === 'forgot' ? 'forgot' : 'signin'} />;
 }
 
 /**

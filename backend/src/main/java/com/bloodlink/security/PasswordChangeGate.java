@@ -15,7 +15,8 @@ public final class PasswordChangeGate {
     public static final String MESSAGE =
         "You must set your own password before you can use BloodLink. Change your temporary password to continue.";
 
-    private static final Set<String> PUBLIC_PATHS = Set.of("/api/auth/login", "/api/auth/register", "/api/health");
+    private static final Set<String> PUBLIC_PATHS = Set.of("/api/auth/login", "/api/auth/register", "/api/health",
+        "/api/auth/password-reset-requests", "/api/auth/support-contact");
 
     private PasswordChangeGate() {
     }

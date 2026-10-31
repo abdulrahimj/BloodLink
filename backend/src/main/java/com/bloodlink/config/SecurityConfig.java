@@ -70,6 +70,9 @@ public class SecurityConfig {
                 .requestMatchers("/api/health").permitAll()
                 // Registration and login must be reachable without a token, by definition.
                 .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
+                // "Forgot password?" (Business Rule 33): asked for by someone who cannot sign in, by definition.
+                .requestMatchers(HttpMethod.POST, "/api/auth/password-reset-requests").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/auth/support-contact").permitAll()
                 // The browser's pre-flight probe carries no Authorization header.
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Error dispatches to /error carry no credentials; without this every unhandled 500 would

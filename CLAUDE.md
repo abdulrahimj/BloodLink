@@ -59,8 +59,9 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | DONATION_BOOKING_CANCELLED | the booked bank's **active** BLOOD_BANK_STAFF | the donor cancels, a donation at a different bank cancels it automatically, or an administrator suspends the donor (Business Rule 29) |
 | DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job: the day before the visit, or on the day if that one was never sent; once per booking (Business Rule 29) |
 | PASSWORD_RESET_BY_ADMIN | the account holder, if **active** | an administrator resets their password (Business Rule 31) |
+| PASSWORD_RESET_REQUESTED | every **active** ADMIN except the one asking | someone asks for help from the Sign in page's "Forgot password?" (Business Rule 33) |
 
-Twelve types in all (V28).
+Thirteen types in all (V30).
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -302,7 +303,7 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29), PASSWORD_RESET_BY_ADMIN (added in V28, Business Rule 31) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29), PASSWORD_RESET_BY_ADMIN (added in V28, Business Rule 31), PASSWORD_RESET_REQUESTED (added in V30, Business Rule 33) |
 | is_read | boolean |
 | created_at | timestamp |
 | accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
@@ -319,8 +320,8 @@ message template ("<bank> needs <group> donors. …"); later appeals are stamped
 |---|---|
 | id | UUID, PK |
 | actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31) |
-| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET only |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31), PASSWORD_REQUEST_CLOSED (added in V30, Business Rule 33) |
+| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
@@ -336,6 +337,22 @@ foreign key is ON DELETE NO ACTION, so a user or facility that appears in the lo
 replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody;
 V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else.
 
+### PasswordResetRequest
+| field | type |
+|---|---|
+| id | UUID, PK |
+| user_id | UUID, FK -> User — the account that asked |
+| requested_at | timestamp — the latest ask; moved forward when they ask again an hour or more later |
+| status | enum: WAITING, DONE (DB CHECK) |
+| resolution | enum: RESET, CLOSED — null exactly while WAITING (DB CHECK) |
+| handled_by | UUID, FK -> User, nullable — the administrator who handled it; set exactly when DONE |
+| handled_at | timestamp, nullable — set exactly when DONE |
+| note | varchar(200), nullable — only on a CLOSED request, never blank (DB CHECKs) |
+
+Table `password_reset_requests` (V30, Business Rule 33). **At most one WAITING row per account**
+(`uq_password_reset_requests_one_waiting_per_user`, a partial unique index), plus `idx_password_reset_requests_status_requested
+(status, requested_at desc)` for the list. Foreign keys NO ACTION. A request never changes a password.
+
 ### Relationships
 User 1–1 Donor · Donor 1–N Donation · BloodBank 1–N BloodInventoryBatch · Donation 0..1–1 BloodInventoryBatch ·
 BloodInventoryBatch 1–N ContributionAllocation · BloodRequestContribution 1–N ContributionAllocation ·
@@ -347,7 +364,7 @@ BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContr
 BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
 BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target) ·
 BloodBank 1–N Notification (as appeal source) · Donor 1–N DonationBooking · BloodBank 1–N DonationBooking ·
-Donation 0..1–1 DonationBooking
+Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as requester) · User 1–N PasswordResetRequest (as handler)
 
 ---
 
@@ -1405,6 +1422,9 @@ Donation 0..1–1 DonationBooking
       did not ask for this, contact your blood bank or BloodLink administrator."), a row first then a push, to an
       **active** account only (a suspended one gets nothing). They read it once they have set their own password,
       since the gate (Business Rule 27) holds back everything else. Bell dot red.
+    - **A waiting "Forgot password?" request for the account is closed by the reset** (Business Rule 33), from the Password
+      requests page or from Manage alike: DONE, RESET, handled by that administrator, in the reset's transaction, and the
+      audit entry's details add " Their waiting password reset request is closed."
     - **Sign-ins made before the reset stop working at once** (Business Rule 32): every token the holder had is
       refused with a 401 `PASSWORD_CHANGED`, and their open notification sockets are closed. The administrator's own
       session is untouched.
@@ -1459,6 +1479,53 @@ Donation 0..1–1 DonationBooking
       fractions); sockets on another server would not be closed if BloodLink ever runs on more than one (their CONNECT
       would still be refused on reconnect, and the 30-second REST poll signs the tab out); suspension and other account
       changes do not use this mechanism (suspension is already checked on every request).
+33. **Someone who forgot their password asks for help from the Sign in page; active administrators are alerted, call back the
+    number saved in BloodLink, check who they are, and reset the password themselves (Business Rule 31).** The project owner's
+    decisions, final. **The server never resets a password from this form.** Schema: `V30` (`password_reset_requests`, one
+    notification type, one audit action). Package `com.bloodlink.passwordreset`.
+    - **`POST /api/auth/password-reset-requests` `{ phone }`, public** (SecurityConfig, and `PasswordChangeGate`'s public list).
+      The phone goes through `PhoneNumber.normalize`, exactly as sign-in: a malformed number is sign-in's own 400 on `phone`
+      (Business Rule 13 — it describes what was typed, so it reveals nothing). **Every well-formed number then gets the same
+      202 with `{ "message": "If this number is registered, an administrator will contact you." }`** and `Cache-Control:
+      no-store`, whether it is unknown, suspended, already waiting or new, and even if recording it failed (logged, type
+      only). **No faster for an unknown number:** the controller answers no sooner than
+      `bloodlink.password-reset-requests.min-response-ms` (default 500, `BLOODLINK_PASSWORD_RESET_MIN_RESPONSE_MS`; 150 in
+      tests), measured from after the format check.
+    - **What it records** (`PasswordResetRequestService.request`): an unknown or suspended number, nothing and nobody told. An
+      ACTIVE account of any role (one that must change its password included), with its row locked first so two asks take
+      turns: a WAITING request asked less than an hour ago → nothing more; one an hour old or more → `requested_at` moved to
+      now and the administrators alerted again; none → a new WAITING request and an alert. "Now" is the injected `Clock`.
+    - **The alert:** PASSWORD_RESET_REQUESTED to every ACTIVE ADMIN except the one asking, "Password reset requested for
+      +23276900005 (Aminata Kamara). Call back the registered number." — a row first, pushed after commit, like every notice.
+    - **Admin endpoints** (`AdminPasswordResetRequestController`, `/api/admin/**`, ADMIN only: other roles 403, no token 401):
+      `GET /api/admin/password-reset-requests?status=WAITING|DONE&page&size` (default WAITING, page 0, size 20, max 100; a bad
+      value a 400) in the usual `{ content, page, size, totalElements, totalPages }` envelope — waiting newest asked first,
+      done most recently handled first, id breaking ties; each item carries the account in `AdminUserResponse`'s shape (so
+      Reset password opens the Manage box) plus `requestedAt`, `status`, `resolution`, `handledById`, `handledByName`,
+      `handledAt`, `note`. `GET .../count` → `{ waiting }`. `POST .../{id}/close` `{ note? }` ("Mark done") → DONE, CLOSED, the
+      note trimmed (blank is none, more than 200 characters a 400 on `note`), audited as **PASSWORD_REQUEST_CLOSED** (actor the
+      administrator, subject the account; "Password reset request closed without a reset. Note: …"); already done a 409, an
+      unknown id a 404. The request row is locked, and so is a reset's (`lockWaitingForUser`), so the two cannot both close it.
+    - **Every administrator reset closes the account's waiting request** (Business Rule 31's `resetPassword` →
+      `closeOnReset`, `Propagation.MANDATORY`): DONE, RESET, `handled_by` that administrator, `handled_at` the reset's instant.
+    - **Support phone:** `bloodlink.support-phone` (`BLOODLINK_SUPPORT_PHONE`, empty by default), display only and shown as
+      entered, read by the public `GET /api/auth/support-contact` → `{ phone }` (null when empty). Documented in
+      `application.properties.example`, `backend/.env.example` and DEPLOYMENT.md.
+    - **Frontend.** Sign in's "Forgot password?" link (`#forgot`) swaps the form panel for `ForgotPasswordForm` (`Login.jsx`):
+      phone (only "something typed" is checked in the browser, as at sign-in) and Send request; afterwards always "If this
+      number is registered, an administrator will contact you. Keep your phone nearby.", then "Or call BloodLink on <number>"
+      (a tel: link) only when the support phone is set, and Back to sign in. The Admin Console gains a **Password requests**
+      menu item with a red count badge, refreshed by `useNotifications`' 30-second poll (`onPoll`) and by any new request
+      notice; the User Accounts page shows "<n> password reset request(s) waiting. View requests →" while any wait; the page
+      lists Waiting (default) or Done — User, Phone (registered), Role, Requested (relative time), then Call (tel:), Reset
+      password (the Manage box opened at its Password section; after the reset the row leaves Waiting) and Mark done (inline,
+      optional note with a 200 counter). On your own request Reset password is hidden, with "This is your own request. Another
+      administrator must reset your password." Done rows read "Password reset" or "Closed" by whom and when, and the note.
+      The console now has the shared notification bell (it had a static icon, no type being addressed to administrators
+      before); this notice has an amber dot and opens the page. Logic and wording in `lib/passwordRequests.js` (tested).
+    - **Known limits:** nothing stops someone sending requests for many different numbers (each real one alerts the
+      administrators at most once an hour); the minimum answer time holds a server thread for that long; a request stays
+      waiting if the holder later remembers and changes their password themselves (an administrator marks it done).
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1504,6 +1571,10 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapters 3, 4 and 5 — ERD and narrative for session sign-out (Business Rule 32, V29).** `User` gains
   `password_changed_at`; a password change or reset now ends every earlier session, and the security narrative's
   "tokens stay valid until they expire" limit is gone.
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for "Forgot password?" (Business Rule 33, V30).** New entity
+  `PasswordResetRequest` (User 1–N as requester and as handler); use cases "ask for a password reset" (any visitor) and
+  "handle password reset requests" (administrator); `audit_log` gains PASSWORD_REQUEST_CLOSED and `notifications`
+  PASSWORD_RESET_REQUESTED, the first type addressed to administrators.
 
 ## Actors (roles) and what each can do
 
@@ -1511,8 +1582,8 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32); anyone who forgot their password can ask from the Sign in page for an administrator to call back (Business Rule 33)
 
 ## Conventions
 
@@ -1545,7 +1616,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

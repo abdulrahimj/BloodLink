@@ -127,3 +127,20 @@ export function downloadReportCsv(section, range) {
   const query = section === 'requests' || section === 'donations' ? rangeQuery(range) : '';
   return apiDownload(`/api/admin/reports/summary/${section}/export${query}`);
 }
+
+/* ---------- password reset requests (Business Rule 33) ---------- */
+
+/** GET /api/admin/password-reset-requests: one page of WAITING or DONE requests, newest first. */
+export function getPasswordResetRequests({ status = 'WAITING', page = 0, size = 20 } = {}) {
+  return apiRequest(`/api/admin/password-reset-requests?${new URLSearchParams({ status, page, size }).toString()}`);
+}
+
+/** GET /api/admin/password-reset-requests/count: { waiting }, for the menu badge and the User Accounts banner. */
+export function getWaitingPasswordResetCount() {
+  return apiRequest('/api/admin/password-reset-requests/count');
+}
+
+/** POST /api/admin/password-reset-requests/{id}/close: "Mark done" without a reset, with an optional note. */
+export function closePasswordResetRequest(requestId, note) {
+  return apiRequest(`/api/admin/password-reset-requests/${requestId}/close`, { method: 'POST', body: { note } });
+}
