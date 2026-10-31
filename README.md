@@ -104,6 +104,10 @@ Only donors can register themselves. Hospital staff, blood bank staff and admini
 
 Every account an administrator creates gets a **temporary password**, shown once to the administrator. At its first sign-in the account sees only a "Set your own password" screen, and the server refuses everything else until a new password is chosen. Donors who register themselves chose their own password, so they never see this screen.
 
+### The password rule
+
+Every password that is **set or changed** must be 8 to 72 characters long and contain at least one capital letter (A–Z), one small letter (a–z), one number (0–9) and one special character (anything that is not a letter, a number or a space, e.g. `! @ # ?`). It applies to registration, Profile Settings' password change, the "Set your own password" screen, the first-administrator setting below and the hosted demo passwords ([DEPLOYMENT.md](DEPLOYMENT.md)); the temporary passwords the Admin Console generates always meet it. Each of those screens shows the five parts as a checklist that ticks as you type, and the button stays disabled until all five are met. The server checks again and its error names exactly what is missing ("Add a capital letter and a special character."). Passwords stored before the rule existed keep working; the rule is checked only when a password is chosen.
+
 ### Creating the first administrator
 
 When the backend starts and **no active administrator exists**, it creates one from four environment variables. All four must be set:
@@ -113,7 +117,7 @@ When the backend starts and **no active administrator exists**, it creates one f
 | `BLOODLINK_BOOTSTRAP_ADMIN_PHONE` | The administrator's phone, e.g. `076000000` or `+232 76 000 000`. This is their sign-in. |
 | `BLOODLINK_BOOTSTRAP_ADMIN_NAME` | Their full name. |
 | `BLOODLINK_BOOTSTRAP_ADMIN_EMAIL` | Their email address (every staff account needs one). |
-| `BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD` | A temporary password, 8 to 72 characters. They must change it at their first sign-in. |
+| `BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD` | A temporary password meeting [the password rule](#the-password-rule). They must change it at their first sign-in. |
 
 In PowerShell, in the terminal you start the backend from (the values below are placeholders):
 
@@ -121,14 +125,14 @@ In PowerShell, in the terminal you start the backend from (the values below are 
 $env:BLOODLINK_BOOTSTRAP_ADMIN_PHONE    = "076000000"
 $env:BLOODLINK_BOOTSTRAP_ADMIN_NAME     = "Your Name"
 $env:BLOODLINK_BOOTSTRAP_ADMIN_EMAIL    = "you@example.org"
-$env:BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD = "choose-a-temporary-password"
+$env:BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD = "Choose-a-temporary-password-1"
 .\mvnw.cmd spring-boot:run
 ```
 
 The log then says `Created the first administrator account for …`. Sign in with that phone and password, choose your own password, and remove the four variables (`Remove-Item Env:BLOODLINK_BOOTSTRAP_ADMIN_*`). The creation is recorded in the Audit Log.
 
 - **If any active administrator already exists, the settings are ignored.** No existing account is ever changed, reset or reactivated.
-- **Nothing is created if a setting is refused:** a phone or email that already belongs to another account, a malformed phone or email, or a password shorter than 8 characters. The log says which setting and why. The password itself is never written to the log.
+- **Nothing is created if a setting is refused:** a phone or email that already belongs to another account, a malformed phone or email, or a password that does not meet the password rule. The log says which setting and why (for a password, what it is missing). The password itself is never written to the log.
 - **If no administrator exists and the settings are not set**, the backend still starts, and logs a warning explaining how to create one.
 - Never write real values into `application.properties.example`, `.env.example` or any other file in the repository. Two servers starting at the same moment never create two administrators.
 

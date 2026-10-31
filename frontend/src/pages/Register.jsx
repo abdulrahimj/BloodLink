@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { registerDonor } from "../api/auth.js";
+import PasswordChecklist from "../components/PasswordChecklist.jsx";
+import { meetsPasswordRule, passwordProblem } from "../lib/passwordRules.js";
 
 /* BloodLink — Register (voluntary donor sign-up), fields from the ERD's User and Donor; wired to
    POST /api/auth/register with an error banner and busy button. Selects carry the backend enum values. */
@@ -44,12 +46,16 @@ export default function Register({ onSignedIn }) {
   }
 
   /**
-   * Checks only what the browser can know (passwords match, consent ticked); the server validates the rest.
+   * Checks what the browser can know (password rule, passwords match, consent ticked); the server validates the rest.
    */
   function validateLocally() {
     const errors = {};
     if (!agreed) {
       errors.terms = "Please accept the terms and conditions to continue.";
+    }
+    const passwordError = passwordProblem(form.password);
+    if (passwordError) {
+      errors.password = passwordError;
     }
     if (form.password !== form.confirmPassword) {
       errors.confirmPassword = "Passwords do not match.";
@@ -181,7 +187,9 @@ export default function Register({ onSignedIn }) {
           font-size: clamp(10px, 1.42vh, 12.5px); font-weight: 500; line-height: 1.45;
           margin-bottom: clamp(9px, 1.5vh, 14px);
         }
-        .au-submit:disabled { opacity: .68; cursor: progress; }
+        .au-submit:disabled { opacity: .68; cursor: not-allowed; }
+        .au-submit[aria-busy="true"] { cursor: progress; }
+        .au-span { grid-column: 1 / -1; margin-top: -4px; }
 
         .au-terms { display: flex; align-items: flex-start; gap: 9px; margin: clamp(11px, 1.9vh, 18px) 0; font-size: clamp(10px, 1.45vh, 12.5px); color: #3D3D3D; line-height: 1.45; cursor: pointer; }
         .au-terms input { width: 15px; height: 15px; margin-top: 1px; accent-color: var(--navy); flex: 0 0 auto; cursor: pointer; }
@@ -350,6 +358,7 @@ export default function Register({ onSignedIn }) {
                 id="rg-pass" className={inputClass("password")} type="password"
                 placeholder="Create a password" autoComplete="new-password"
                 value={form.password} onChange={(e) => update("password", e.target.value)}
+                aria-describedby="rg-pass-rules"
               />
               {fieldErrors.password && <span className="au-err">{fieldErrors.password}</span>}
             </div>
@@ -362,6 +371,8 @@ export default function Register({ onSignedIn }) {
               />
               {fieldErrors.confirmPassword && <span className="au-err">{fieldErrors.confirmPassword}</span>}
             </div>
+            {/* Across both columns, so the five lines take two rows rather than five. */}
+            <PasswordChecklist id="rg-pass-rules" password={form.password} className="au-span" />
           </div>
 
           <label className="au-terms">
@@ -376,7 +387,10 @@ export default function Register({ onSignedIn }) {
             </span>
           </label>
 
-          <button type="submit" className="au-submit" disabled={submitting}>
+          <button
+            type="submit" className="au-submit" aria-busy={submitting}
+            disabled={submitting || !meetsPasswordRule(form.password)}
+          >
             {submitting ? "Creating account…" : "Create account"}
           </button>
 

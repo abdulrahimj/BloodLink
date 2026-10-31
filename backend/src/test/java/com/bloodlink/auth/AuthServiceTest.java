@@ -89,7 +89,7 @@ class AuthServiceTest {
             Gender.FEMALE,
             bloodTypeLabel,
             "Wusum, Makeni",
-            "correct-horse-battery"
+            "Correct-horse-battery-9"
         );
     }
 
@@ -102,9 +102,9 @@ class AuthServiceTest {
         User saved = captor.getValue();
 
         assertThat(saved.getPasswordHash())
-            .isNotEqualTo("correct-horse-battery")
+            .isNotEqualTo("Correct-horse-battery-9")
             .startsWith("$2");
-        assertThat(passwordEncoder.matches("correct-horse-battery", saved.getPasswordHash())).isTrue();
+        assertThat(passwordEncoder.matches("Correct-horse-battery-9", saved.getPasswordHash())).isTrue();
     }
 
     @Test
@@ -289,7 +289,7 @@ class AuthServiceTest {
     }
 
     private static LoginRequest loginRequest() {
-        return new LoginRequest("+232 76 000 001", "correct-horse-battery");
+        return new LoginRequest("+232 76 000 001", "Correct-horse-battery-9");
     }
 
     /** Mocks the AuthenticationManager so login() proceeds as if the password were verified (Spring Security's job). */
@@ -316,7 +316,7 @@ class AuthServiceTest {
         AuthService service = newService();
         stubSuccessfulAuthentication(authenticatedUser(AccountStatus.ACTIVE));
 
-        service.login(new LoginRequest("076 900 005", "correct-horse-battery"));
+        service.login(new LoginRequest("076 900 005", "Correct-horse-battery-9"));
 
         // What reaches Spring Security — and therefore the users.phone lookup behind
         // it — is the stored form, not the spaced local form that was typed.
@@ -341,7 +341,7 @@ class AuthServiceTest {
         // 2. Come back later and sign in the way the form's placeholder shows it,
         //    spaces and country code and all — a different string entirely.
         stubSuccessfulAuthentication(authenticatedUser(AccountStatus.ACTIVE));
-        service.login(new LoginRequest("+232 76 900 005", "correct-horse-battery"));
+        service.login(new LoginRequest("+232 76 900 005", "Correct-horse-battery-9"));
 
         // 3. The number looked up matches the stored one exactly; if they differ, a donor is locked out.
         ArgumentCaptor<UsernamePasswordAuthenticationToken> attempted =
@@ -355,7 +355,7 @@ class AuthServiceTest {
     void aLoginPhoneThatIsNotAValidNumberIsRefusedWithoutTouchingTheAuthenticationManager() {
         AuthService service = newService();
 
-        assertThatThrownBy(() -> service.login(new LoginRequest("07690000a", "correct-horse-battery")))
+        assertThatThrownBy(() -> service.login(new LoginRequest("07690000a", "Correct-horse-battery-9")))
             .isInstanceOf(InvalidPhoneNumberException.class);
 
         // A 400 about the input's shape, raised before any lookup, so it reveals nothing about registered numbers.

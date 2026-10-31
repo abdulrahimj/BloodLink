@@ -43,8 +43,8 @@ import com.bloodlink.web.error.InvalidFieldException;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class AccountServiceTest {
 
-    private static final String CURRENT_PASSWORD = "correct-horse-battery";
-    private static final String NEW_PASSWORD = "a-brand-new-passphrase";
+    private static final String CURRENT_PASSWORD = "Correct-horse-battery-9";
+    private static final String NEW_PASSWORD = "A-brand-new-passphrase-9";
     private static final String PHONE = "+23276900005";
 
     @Mock private UserRepository userRepository;
@@ -258,7 +258,7 @@ class AccountServiceTest {
         String hashBefore = account.getPasswordHash();
 
         assertThatThrownBy(() -> service.updateMyDetails(account.getId(),
-                details("X", "x@example.com", Map.of("newPassword", "sneaky-new-password"))))
+                details("X", "x@example.com", Map.of("newPassword", "Sneaky-new-password-1"))))
             .isInstanceOf(InvalidFieldException.class)
             .hasMessageContaining("fullName, email");
 

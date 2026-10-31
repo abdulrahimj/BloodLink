@@ -89,7 +89,7 @@ public class BootstrapAdminService {
         }
         String passwordProblem = PasswordPolicy.problemWith(settings.password());
         if (passwordProblem != null) {
-            return refuse(BootstrapAdminSettings.PASSWORD_VARIABLE, "The password is too weak: " + passwordProblem + ".");
+            return refuse(BootstrapAdminSettings.PASSWORD_VARIABLE, "The password is too weak. " + passwordProblem);
         }
 
         if (userRepository.existsByPhone(phone)) {

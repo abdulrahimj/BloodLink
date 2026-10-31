@@ -58,7 +58,7 @@
               "mode": "raw",
               "raw": "{\n  \"fullName\": \"Aminata Kamara\",\n  \"phone\": \"{{newDonorPhone}}\",\n  \"email\": \"aminata.kamara@example.com\",\n  \"dateOfBirth\": \"1998-04-12\",\n  \"gender\": \"FEMALE\",\n  \"bloodType\": \"O+\",\n  \"address\": \"Wusum, Makeni\",\n  \"password\": \"{{donorPassword}}\"\n}"
             },
-            "description": "Creates a donor and signs them in (201). `phone` is local (`076900005`) or international (`+232 76 900 005`) and is stored as `+232` plus 8 digits (Business Rule 13); a phone already registered is 409. `email` is optional: send `null` or leave it out (Business Rule 18). `bloodType` may be `null` if not known yet. `gender` is `MALE`, `FEMALE` or `PREFER_NOT_TO_SAY`. `password` is 8–72 characters. Saves the token to `donorToken`."
+            "description": "Creates a donor and signs them in (201). `phone` is local (`076900005`) or international (`+232 76 900 005`) and is stored as `+232` plus 8 digits (Business Rule 13); a phone already registered is 409. `email` is optional: send `null` or leave it out (Business Rule 18). `bloodType` may be `null` if not known yet. `gender` is `MALE`, `FEMALE` or `PREFER_NOT_TO_SAY`. `password` follows the password rule (README): 8–72 characters with a capital letter, a small letter, a number and a special character (not a letter, number or whitespace); a weak one is 400 with `fieldErrors.password` naming what is missing, e.g. \"Add a capital letter and a special character.\" Saves the token to `donorToken`."
           },
           "event": [
             {
@@ -355,9 +355,9 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"currentPassword\": \"{{donorPassword}}\",\n  \"newPassword\": \"a-new-password-123\"\n}"
+              "raw": "{\n  \"currentPassword\": \"{{donorPassword}}\",\n  \"newPassword\": \"A-new-password-123\"\n}"
             },
-            "description": "Needs the current password: a wrong one is 401 with a field error on `currentPassword` (this 401 does not sign the user out). `newPassword` is 8–72 characters and must differ from the current one (400). Tokens issued before the change stay valid until they expire. Also how an account replaces its temporary password (Business Rule 27): send the temporary one as `currentPassword`; on success `mustChangePassword` becomes false and the same token works everywhere."
+            "description": "Needs the current password: a wrong one is 401 with a field error on `currentPassword` (this 401 does not sign the user out). `newPassword` follows the same password rule as registration (400 naming what is missing) and must differ from the current one (400). Tokens issued before the change stay valid until they expire. Also how an account replaces its temporary password (Business Rule 27): send the temporary one as `currentPassword`; on success `mustChangePassword` becomes false and the same token works everywhere."
           }
         }
       ]

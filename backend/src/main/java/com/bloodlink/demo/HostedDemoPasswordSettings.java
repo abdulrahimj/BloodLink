@@ -52,7 +52,9 @@ record HostedDemoPasswordSettings(String password, String adminPassword) {
         }
         String policyProblem = PasswordPolicy.problemWith(value);
         if (policyProblem != null) {
-            problems.add(variable + " is refused: " + policyProblem);
+            // Joined with others by "; ", so the policy's sentence becomes a clause: "…is too weak: add a number".
+            problems.add(variable + " is too weak: " + Character.toLowerCase(policyProblem.charAt(0))
+                + policyProblem.substring(1, policyProblem.length() - 1));
         } else if (PUBLISHED_PASSWORD.equals(value)) {
             problems.add(variable + " is the published demo password, which anyone can read in the repository");
         }

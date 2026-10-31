@@ -49,7 +49,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class AdminUserSearchIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
     /** Stored as the hash of accounts that never sign in, so the "no hash in the
      *  response" test has something unmistakable to look for. */
     private static final String SENTINEL_HASH = "HASH-MUST-NEVER-APPEAR-IN-A-RESPONSE";

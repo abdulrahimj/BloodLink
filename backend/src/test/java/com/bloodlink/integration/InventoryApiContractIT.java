@@ -53,7 +53,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class InventoryApiContractIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
 
     /** The fields every row carried before the cutover, which the screens read. */
     private static final List<String> ROW_FIELDS_BEFORE_CUTOVER =

@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { changeMyPassword } from "../api/account.js";
-import { MIN_PASSWORD_LENGTH, passwordChangeErrors } from "../lib/passwordChange.js";
+import PasswordChecklist from "../components/PasswordChecklist.jsx";
+import { passwordChangeErrors } from "../lib/passwordChange.js";
+import { meetsPasswordRule } from "../lib/passwordRules.js";
 
 /* BloodLink — "Set your own password" (Business Rule 27): the only screen an account created with a temporary
    password can reach, until it chooses its own. The server refuses everything else anyway. Styles under .sp-root. */
@@ -74,7 +76,6 @@ export default function SetOwnPassword({ user, onPasswordChanged, onSignOut }) {
 
         .sp-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
         .sp-label { font-size: 12.5px; font-weight: 600; color: #3D3D3D; }
-        .sp-hint { font-size: 11.5px; color: var(--ink-muted); }
         .sp-inwrap { position: relative; display: flex; align-items: center; }
         .sp-inwrap svg { position: absolute; left: 13px; width: 16px; height: 16px; color: #9AA0A6; }
         .sp-input {
@@ -97,7 +98,7 @@ export default function SetOwnPassword({ user, onPasswordChanged, onSignOut }) {
           padding: 13px; margin-top: 6px; transition: background .15s ease;
         }
         .sp-submit:hover { background: var(--red-dark); }
-        .sp-submit:disabled { opacity: .68; cursor: progress; }
+        .sp-submit:disabled { opacity: .68; cursor: not-allowed; }
         .sp-submit:focus-visible, .sp-signout:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
         .sp-foot { margin-top: 18px; text-align: center; font-size: 13px; color: var(--ink-muted); }
@@ -135,15 +136,17 @@ export default function SetOwnPassword({ user, onPasswordChanged, onSignOut }) {
         />
         <PasswordField
           id="sp-new" label="New password" autoComplete="new-password"
-          hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}
+          describedBy="sp-new-rules"
           value={newPassword} onChange={setNewPassword} error={fieldErrors.newPassword}
-        />
+        >
+          <PasswordChecklist id="sp-new-rules" password={newPassword} />
+        </PasswordField>
         <PasswordField
           id="sp-confirm" label="Confirm new password" autoComplete="new-password"
           value={confirmPassword} onChange={setConfirmPassword} error={fieldErrors.confirmPassword}
         />
 
-        <button type="submit" className="sp-submit" disabled={saving}>
+        <button type="submit" className="sp-submit" disabled={saving || !meetsPasswordRule(newPassword)}>
           {saving ? "Saving…" : "Set password and continue"}
         </button>
 
@@ -156,8 +159,8 @@ export default function SetOwnPassword({ user, onPasswordChanged, onSignOut }) {
   );
 }
 
-/** One labelled password input with its hint and field error. */
-function PasswordField({ id, label, hint, autoComplete, value, onChange, error }) {
+/** One labelled password input, with anything shown under it (the checklist) and its field error. */
+function PasswordField({ id, label, describedBy, autoComplete, value, onChange, error, children }) {
   return (
     <div className="sp-field">
       <label className="sp-label" htmlFor={id}>{label}</label>
@@ -168,10 +171,10 @@ function PasswordField({ id, label, hint, autoComplete, value, onChange, error }
         <input
           id={id} className={`sp-input${error ? " sp-input--bad" : ""}`} type="password"
           autoComplete={autoComplete} value={value} onChange={(e) => onChange(e.target.value)}
-          aria-invalid={Boolean(error)}
+          aria-invalid={Boolean(error)} aria-describedby={describedBy}
         />
       </div>
-      {hint && !error && <span className="sp-hint">{hint}</span>}
+      {children}
       {error && <span className="sp-err">{error}</span>}
     </div>
   );

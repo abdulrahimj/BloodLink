@@ -23,8 +23,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 /** The hosted demo's passwords: refused when unsafe, written to the demo accounts only when set. No database needed. */
 class HostedDemoPasswordsTest {
 
-    private static final String SHARED = "shared-demo-pass-1";
-    private static final String ADMIN = "admin-demo-pass-2";
+    private static final String SHARED = "Shared-demo-pass-1";
+    private static final String ADMIN = "Admin-demo-pass-2";
 
     // ---------- the decision ----------
 
@@ -47,9 +47,12 @@ class HostedDemoPasswordsTest {
     }
 
     @Test
-    void theRegistrationLengthRuleApplies() {
-        assertThat(new HostedDemoPasswordSettings("short", ADMIN).problems(false))
-            .singleElement().asString().startsWith("BLOODLINK_DEMO_PASSWORD is refused: it must be at least 8");
+    void thePasswordRuleApplies() {
+        assertThat(new HostedDemoPasswordSettings("short", ADMIN).problems(false)).containsExactly(
+            "BLOODLINK_DEMO_PASSWORD is too weak: use at least 8 characters, and add a capital letter, a number and a "
+                + "special character");
+        assertThat(new HostedDemoPasswordSettings(SHARED, "admin-demo-pass").problems(true))
+            .containsExactly("BLOODLINK_DEMO_ADMIN_PASSWORD is too weak: add a capital letter and a number");
     }
 
     @Test

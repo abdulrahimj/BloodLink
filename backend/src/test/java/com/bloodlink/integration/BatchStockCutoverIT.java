@@ -75,7 +75,7 @@ import tools.jackson.databind.ObjectMapper;
 @Import(BatchStockCutoverIT.MutableClockConfig.class)
 class BatchStockCutoverIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;

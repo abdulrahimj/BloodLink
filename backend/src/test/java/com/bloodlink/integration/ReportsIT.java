@@ -72,7 +72,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class ReportsIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
     private static final LocalDate TODAY = LocalDate.now();
     /** The stock section is as of today in UTC, StockPolicy's "today" (Business Rule 24). */
     private static final LocalDate STOCK_TODAY = LocalDate.now(ZoneOffset.UTC);

@@ -58,8 +58,8 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class ForcedPasswordChangeIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
-    private static final String OWN_PASSWORD = "my-own-chosen-passphrase-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
+    private static final String OWN_PASSWORD = "My-own-chosen-passphrase-2026";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
@@ -166,12 +166,16 @@ class ForcedPasswordChangeIT {
         changePassword(staff.token(), "not-the-temporary-one", OWN_PASSWORD)
             .andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.fieldErrors.currentPassword").exists());
+        // The generated temporary password meets the rule, so keeping it is refused for being unchanged.
         changePassword(staff.token(), staff.temporaryPassword(), staff.temporaryPassword())
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.fieldErrors.newPassword").exists());
+            .andExpect(jsonPath("$.fieldErrors.newPassword").value(org.hamcrest.Matchers.containsString("different")));
         changePassword(staff.token(), staff.temporaryPassword(), "short")
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.fieldErrors.newPassword").exists());
+        changePassword(staff.token(), staff.temporaryPassword(), "my-own-chosen-passphrase")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.fieldErrors.newPassword").value("Add a capital letter and a number."));
 
         assertThat(userRepository.findById(staff.id()).orElseThrow().isMustChangePassword()).isTrue();
         mockMvc.perform(get("/api/notifications").header("Authorization", bearer(staff.token())))

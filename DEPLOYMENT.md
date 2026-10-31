@@ -47,9 +47,17 @@ $bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Cr
 
 ```powershell
 # A demo password (run it twice: once for BLOODLINK_DEMO_PASSWORD, once for BLOODLINK_DEMO_ADMIN_PASSWORD).
-$bytes = New-Object byte[] 12; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-([Convert]::ToBase64String($bytes) -replace '[+/=]', 'x') | Set-Clipboard
+# 16 random characters, drawn again until there is a capital, a small letter, a number and a + or /.
+do {
+  $bytes = New-Object byte[] 12; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+  $p = [Convert]::ToBase64String($bytes)
+} until ($p -cmatch '[A-Z]' -and $p -cmatch '[a-z]' -and $p -match '[0-9]' -and $p -match '[+/]')
+$p | Set-Clipboard
 ```
+
+Every password the app accepts follows one rule (README, "The password rule"): 8 to 72 characters with a
+capital letter, a small letter, a number and a special character. The demo passwords are checked against
+it too; the block above always produces one that passes.
 
 Keep the two demo passwords in a password manager: they are what you give examiners. The JWT secret is
 never needed again; if it is lost, generate a new one (that signs everyone out, nothing more).
@@ -230,7 +238,8 @@ which anyone can read in this repository. That is fine on your own machine and u
 site. So when the demo runs with any non-local profile (`demo,prod`), the backend:
 
 - **refuses to start, before writing any demo data**, unless both `BLOODLINK_DEMO_PASSWORD` and
-  `BLOODLINK_DEMO_ADMIN_PASSWORD` are set, each 8–72 characters, neither of them `BloodLink@2026`, and
+  `BLOODLINK_DEMO_ADMIN_PASSWORD` are set, each meeting the password rule (8–72 characters, a capital
+  letter, a small letter, a number and a special character), neither of them `BloodLink@2026`, and
   different from each other;
 - then, **at every start**, straight after the database migrations and before it accepts a single
   sign-in, sets the demo administrator's password to `BLOODLINK_DEMO_ADMIN_PASSWORD` and every other demo

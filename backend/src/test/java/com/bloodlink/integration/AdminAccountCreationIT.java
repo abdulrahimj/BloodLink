@@ -51,7 +51,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class AdminAccountCreationIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
@@ -132,7 +132,7 @@ class AdminAccountCreationIT {
                 .header("Authorization", "Bearer " + newAdminToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"currentPassword\": \"" + created.temporaryPassword()
-                    + "\", \"newPassword\": \"the-new-admins-own-passphrase\"}"))
+                    + "\", \"newPassword\": \"The-new-admins-own-passphrase-7\"}"))
             .andExpect(status().isNoContent());
         mockMvc.perform(post("/api/admin/users")
                 .header("Authorization", "Bearer " + newAdminToken)

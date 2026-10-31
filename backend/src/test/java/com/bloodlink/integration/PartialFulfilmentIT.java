@@ -59,7 +59,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class PartialFulfilmentIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
     /** The group these tests trade in — kept off O+ so they never depend on, or
      *  interfere with, whatever the other integration tests are doing. */
     private static final String GROUP = "AB-";

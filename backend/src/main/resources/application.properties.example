@@ -63,7 +63,7 @@ bloodlink.expiry-notifications.cron=${BLOODLINK_EXPIRY_NOTIFICATIONS_CRON:0 0 6 
 #   BLOODLINK_BOOTSTRAP_ADMIN_PHONE     e.g. 076000000 or +232 76 000 000
 #   BLOODLINK_BOOTSTRAP_ADMIN_NAME      the administrator's full name
 #   BLOODLINK_BOOTSTRAP_ADMIN_EMAIL     required, like every staff account
-#   BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD  8 to 72 characters, temporary: it must be
+#   BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD  meets the password rule (README), temporary: it must be
 #                                       changed at the first sign-in
 # If any active administrator exists they are ignored, and no existing account is ever
 # changed. Never logged. Remove them once the administrator has signed in.

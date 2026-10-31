@@ -189,8 +189,19 @@ class BootstrapAdminServiceTest {
         verify(userRepository, never()).save(any(User.class));
         assertThat(output)
             .contains("BLOODLINK_BOOTSTRAP_ADMIN_PASSWORD was refused")
-            .contains("at least 8 characters")
+            .contains("Use at least 8 characters.")
             .doesNotContain(weak);
+    }
+
+    @Test
+    void refusesALongPasswordMissingPartsOfTheRuleNamingThem(CapturedOutput output) {
+        stubNoActiveAdmin();
+        String weak = "first-admin-temporary";
+
+        assertThat(service.createFirstAdminIfNeeded(settings(weak))).isEqualTo(Outcome.INVALID_SETTING);
+
+        verify(userRepository, never()).save(any(User.class));
+        assertThat(output).contains("The password is too weak. Add a capital letter and a number.").doesNotContain(weak);
     }
 
     @Test

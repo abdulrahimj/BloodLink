@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { changeMyPassword, getMyAccount, updateMyDetails } from "../api/account.js";
 import { initials } from "../lib/dates.js";
+import { meetsPasswordRule, passwordProblem } from "../lib/passwordRules.js";
+import PasswordChecklist from "./PasswordChecklist.jsx";
 
 /* BloodLink — Profile Settings (Business Rule 16), one screen for all four roles: editable name and email,
    read-only phone/role/facility, and password change. Styles scoped under .ps-root. */
@@ -11,10 +13,6 @@ const ROLE_LABEL = {
   BLOOD_BANK_STAFF: "Blood Bank Staff",
   ADMIN: "Administrator",
 };
-
-/** Registration's rule, repeated here only to warn before a round trip — the
- *  server enforces it either way (ChangePasswordPayload). */
-const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * The banner text for a failed request, or null when it would only repeat a message under one of this form's inputs;
@@ -212,9 +210,8 @@ function PasswordCard() {
   function localErrors() {
     const errors = {};
     if (!currentPassword) errors.currentPassword = "Enter your current password.";
-    if (newPassword.length < MIN_PASSWORD_LENGTH) {
-      errors.newPassword = `New password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-    }
+    const newPasswordError = passwordProblem(newPassword);
+    if (newPasswordError) errors.newPassword = newPasswordError;
     if (confirmPassword !== newPassword) errors.confirmPassword = "The new passwords do not match.";
     return errors;
   }
@@ -275,15 +272,13 @@ function PasswordCard() {
         />
       </Field>
 
-      <Field
-        label="New password" htmlFor="ps-new" error={fieldErrors.newPassword}
-        hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}
-      >
+      <Field label="New password" htmlFor="ps-new" error={fieldErrors.newPassword}>
         <input
           id="ps-new" className={inputClass(fieldErrors.newPassword)} type="password"
-          autoComplete="new-password"
+          autoComplete="new-password" aria-describedby="ps-new-rules"
           value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
         />
+        <PasswordChecklist id="ps-new-rules" password={newPassword} />
       </Field>
 
       <Field label="Confirm new password" htmlFor="ps-confirm" error={fieldErrors.confirmPassword}>
@@ -295,7 +290,7 @@ function PasswordCard() {
       </Field>
 
       <div className="ps-actions">
-        <button type="submit" className="ps-btn" disabled={saving}>
+        <button type="submit" className="ps-btn" disabled={saving || !meetsPasswordRule(newPassword)}>
           {saving ? "Updating…" : "Update password"}
         </button>
       </div>

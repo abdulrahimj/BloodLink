@@ -581,8 +581,9 @@ Donation 0..1–1 DonationBooking
       thing it named does not exist.
     - **The password is generated, never chosen, and readable exactly once.** `TemporaryPasswordGenerator`
       draws 12 characters from a `SecureRandom` over an alphabet with the look-alikes removed
-      (no `O`/`0`, no `I`/`l`/`1`, no punctuation) because a human reads this password aloud to
-      another human. Only the BCrypt hash is stored. The plaintext is returned in the creation
+      (no `O`/`0`, no `I`/`l`/`1`) and only ten easily named symbols (`! @ # $ % & * + = ?`) because a human
+      reads this password aloud to another human; a draw missing any part of Business Rule 30 is redrawn, so
+      every one meets it. Only the BCrypt hash is stored. The plaintext is returned in the creation
       response and then it is gone — no endpoint can return it again, and nothing stores or logs it.
       The Admin Console's confirmation screen says so plainly because it is true of the system, not
       because the interface is being cautious: **if the password is lost, the account must be
@@ -674,7 +675,7 @@ Donation 0..1–1 DonationBooking
       against the stored BCrypt hash — the same comparison login uses. A session left open on a shared
       machine must not be enough to set a new password and lock the owner out. Wrong current password:
       **401 with a field error on `currentPassword`** and nothing written. The new password follows
-      registration's rule (8–72 characters), and one identical to the current password is refused (400)
+      Business Rule 30 (checked before the current password), and one identical to the current password is refused (400)
       rather than "succeeding" without changing anything. Name and email need no current password:
       neither is a credential.
     - **That 401 must not sign the user out.** `frontend/src/api/client.js` discards the session on a
@@ -1228,7 +1229,7 @@ Donation 0..1–1 DonationBooking
       2. a setting unset or blank → nothing created; **a WARN line** names the variables, the missing ones and
          the README section. The application starts normally.
       3. phone through `PhoneNumber.normalize`, email through `EmailAddress.normalizeOptional`, name ≤ 255,
-         password through `PasswordPolicy.problemWith` (8–72 characters, the rule registration and password
+         password through `PasswordPolicy.problemWith` (Business Rule 30, the rule registration and password
          changes share) — any refusal is an ERROR line naming the variable, nothing created.
       4. a phone or email already belonging to any account (a suspended administrator included) → ERROR,
          nothing created.
@@ -1254,7 +1255,7 @@ Donation 0..1–1 DonationBooking
       (`StompAuthChannelInterceptor`). Signing out is client-side (a stateless JWT has nothing to revoke), so it
       is always possible — by the owner's decision no logout endpoint was added.
     - **Lifting it:** Business Rule 16's password change, unchanged — current (temporary) password required
-      (401 on `currentPassword` if wrong), new one 8–72 and different (400) — now also clears the flag. Read from
+      (401 on `currentPassword` if wrong), new one meeting Business Rule 30 and different (400) — now also clears the flag. Read from
       the database on every request, so **the token issued before the change works everywhere straight after**.
     - **Frontend:** `App.jsx` shows only `pages/SetOwnPassword.jsx` while `user.mustChangePassword` is true — no
       portal, so no socket either — with a Sign out button; on success it updates the stored session and opens
@@ -1359,6 +1360,25 @@ Donation 0..1–1 DonationBooking
     - **Known limits:** a visit booked after the day's run for that same day gets no reminder (the next run is the day
       after, which marks it MISSED). Changing the date of a booking means cancelling and booking again. Staff cannot
       mark a no-show by hand; the daily job does it the next morning.
+30. **Every password set or changed meets one rule: 8–72 characters with at least one capital letter (A–Z), one
+    small letter (a–z), one number (0–9) and one special character.** The project owner's decision. No migration:
+    stored hashes are never re-judged, so existing passwords keep working; the rule runs only when a password is chosen.
+    - **Special** means any character that is not a letter, a number or whitespace, in any script: `é` and `٣` are
+      not special (nor do they count as A–Z / 0–9), a space, tab or no-break space is not special, `£`, `_` or an emoji
+      is. Spelled out identically on both sides (`[^\p{L}\p{N}\p{Z}\t\n\x0B\f\r]`) so the two cannot disagree.
+    - **One implementation, `PasswordPolicy` (`com.bloodlink.common`)**: `missing(password)` (the unmet
+      `Requirement`s) and `problemWith(password)` (one sentence or null). Used by registration (`RegisterRequest.password`)
+      and the password change (`ChangePasswordPayload.newPassword`, which serves Profile Settings and the forced
+      "Set your own password" screen of Business Rule 27) through the `@StrongPassword` constraint
+      (`StrongPasswordValidator`; null or blank is left to `@NotBlank`), by the first-administrator bootstrap
+      (Business Rule 27), by `HostedDemoPasswordSettings` (the hosted demo, DEPLOYMENT.md) and by
+      `TemporaryPasswordGenerator` (Business Rule 14), whose every password meets it.
+    - **The 400 names exactly what is missing**, on the field: "Add a capital letter and a special character.",
+      "Use at least 8 characters, and add a number.", "Use no more than 72 characters." Never the password itself.
+    - **Frontend:** `lib/passwordRules.js` is the twin, word for word (same messages, tested against the same cases);
+      `components/PasswordChecklist.jsx` shows the five parts under every box where a password is chosen
+      (Register, Profile Settings' Change password, Set your own password), each ticking green as it is met, and
+      the submit button stays disabled until `meetsPasswordRule` is true. The server still decides.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1406,7 +1426,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
 
 ## Conventions
 

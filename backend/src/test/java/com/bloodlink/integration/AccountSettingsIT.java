@@ -49,8 +49,8 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class AccountSettingsIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
-    private static final String NEW_PASSWORD = "a-brand-new-passphrase-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
+    private static final String NEW_PASSWORD = "A-brand-new-passphrase-2026";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
@@ -143,14 +143,34 @@ class AccountSettingsIT {
     }
 
     @Test
-    void aTooShortNewPasswordIsRefusedByTheSameRuleAsRegistration() throws Exception {
+    void aWeakNewPasswordIsRefusedByTheSameRuleAsRegistrationNamingWhatIsMissing() throws Exception {
         User admin = seed("Isatu Bangura", Role.ADMIN);
+        String token = signIn(admin);
 
-        changePassword(signIn(admin), PASSWORD, "short")
+        changePassword(token, PASSWORD, "short")
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.fieldErrors.newPassword").exists());
+            .andExpect(jsonPath("$.fieldErrors.newPassword")
+                .value("Use at least 8 characters, and add a capital letter, a number and a special character."));
+        changePassword(token, PASSWORD, "Password 123")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.fieldErrors.newPassword").value("Add a special character."));
 
         login(admin.getPhone(), PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    void registrationRefusesAWeakPasswordNamingWhatIsMissingAndCreatesNoAccount() throws Exception {
+        String phone = uniqueLocalPhone();
+
+        mockMvc.perform(post("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new RegisterRequest(
+                    "Aminata Sesay", phone, null, LocalDate.of(1998, 3, 12), Gender.FEMALE, "O+", "Wusum, Makeni",
+                    "password123"))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.fieldErrors.password").value("Add a capital letter and a special character."));
+
+        assertThat(userRepository.findByPhone(PhoneNumber.normalize(phone))).isEmpty();
     }
 
     // ---------- editing name and email ----------

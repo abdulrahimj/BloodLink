@@ -46,7 +46,7 @@ import tools.jackson.databind.ObjectMapper;
 @Transactional
 class BootstrapAdminIT {
 
-    private static final String PASSWORD = "first-admin-temporary-2026";
+    private static final String PASSWORD = "First-admin-temporary-2026";
 
     @Autowired private BootstrapAdminService bootstrapAdminService;
     @Autowired private UserRepository userRepository;
@@ -180,7 +180,7 @@ class BootstrapAdminIT {
         admin.setFullName("Existing Administrator");
         admin.setEmail("existing.admin." + UUID.randomUUID() + "@example.com");
         admin.setPhone(PhoneNumber.normalize(phone.replaceFirst("^078", "079")));
-        admin.setPasswordHash(passwordEncoder.encode("the-existing-admins-password"));
+        admin.setPasswordHash(passwordEncoder.encode("The-existing-admins-password-1"));
         admin.setRole(Role.ADMIN);
         return userRepository.saveAndFlush(admin);
     }

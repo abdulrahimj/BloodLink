@@ -78,7 +78,7 @@ class BootstrapAdminRaceIT {
 
         // Different numbers and emails: no unique constraint can stop a second one, only the advisory lock can.
         List<Outcome> first = race(i -> new BootstrapAdminSettings(
-            "07690000" + i, "Admin " + i, "admin" + i + "@example.com", "temporary-password-" + i));
+            "07690000" + i, "Admin " + i, "admin" + i + "@example.com", "Temporary-password-" + i));
         assertExactlyOneCreated(first, 1);
 
         // A fresh "no active administrator" state, then every server with identical settings.
@@ -86,7 +86,7 @@ class BootstrapAdminRaceIT {
             userRepository.findByRoleAndStatus(Role.ADMIN, AccountStatus.ACTIVE)
                 .forEach(admin -> admin.setStatus(AccountStatus.SUSPENDED)));
         List<Outcome> second = race(i -> new BootstrapAdminSettings(
-            "076999000", "Same Admin", "same@example.com", "temporary-password-same"));
+            "076999000", "Same Admin", "same@example.com", "Temporary-password-same-1"));
         assertExactlyOneCreated(second, 2);
     }
 

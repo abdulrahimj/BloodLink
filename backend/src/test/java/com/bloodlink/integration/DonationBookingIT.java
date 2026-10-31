@@ -72,7 +72,7 @@ import tools.jackson.databind.ObjectMapper;
 @Import(BatchStockCutoverIT.MutableClockConfig.class)
 class DonationBookingIT {
 
-    private static final String PASSWORD = "correct-horse-battery-2026";
+    private static final String PASSWORD = "Correct-horse-battery-2026";
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     @Autowired private MockMvc mockMvc;
