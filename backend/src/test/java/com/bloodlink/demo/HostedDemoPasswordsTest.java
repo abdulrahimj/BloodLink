@@ -10,8 +10,9 @@ import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.util.ArrayList;
-import java.util.List;
+import java.sql.ResultSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.flywaydb.core.api.callback.Context;
 import org.flywaydb.core.api.callback.Event;
@@ -108,29 +109,71 @@ class HostedDemoPasswordsTest {
         verify(connection, never()).prepareStatement(anyString());
     }
 
-    @Test
-    void afterMigratingEachPasswordIsHashedOntoItsOwnDemoAccounts() throws Exception {
+    private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
+    private static final String SELECT_OTHERS = "select password_hash from users where email like ? and role <> 'ADMIN' "
+        + "group by password_hash order by count(*) desc limit 1";
+    private static final String SELECT_ADMINS = "select password_hash from users where email like ? and role = 'ADMIN' "
+        + "group by password_hash order by count(*) desc limit 1";
+    private static final String UPDATE = "update users set password_hash = ?, password_changed_at = ? where email like ? ";
+
+    /** Runs the callback against a mock connection whose most common hashes are these; returns the statements by SQL. */
+    private static Map<String, PreparedStatement> runWithCurrentHashes(String othersHash, String adminsHash)
+            throws Exception {
         Connection connection = mock(Connection.class);
-        List<PreparedStatement> statements = new ArrayList<>();
-        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-        when(connection.prepareStatement(sql.capture())).thenAnswer(invocation -> {
+        Map<String, PreparedStatement> statements = new LinkedHashMap<>();
+        when(connection.prepareStatement(anyString())).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
             PreparedStatement statement = mock(PreparedStatement.class);
-            statements.add(statement);
+            if (sql.startsWith("select")) {
+                ResultSet rows = mock(ResultSet.class);
+                when(rows.next()).thenReturn(true);
+                when(rows.getString(1)).thenReturn(sql.equals(SELECT_ADMINS) ? adminsHash : othersHash);
+                when(statement.executeQuery()).thenReturn(rows);
+            }
+            statements.put(sql, statement);
             return statement;
         });
         Context context = mock(Context.class);
         when(context.getConnection()).thenReturn(connection);
 
         callback(SHARED, ADMIN, "demo", "prod").handle(Event.AFTER_MIGRATE, context);
+        return statements;
+    }
 
-        assertThat(sql.getAllValues()).containsExactly(
-            "update users set password_hash = ? where email like ? and role <> 'ADMIN'",
-            "update users set password_hash = ? where email like ? and role = 'ADMIN'");
-        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-        assertThat(encoder.matches(SHARED, hashWrittenBy(statements.get(0)))).isTrue();
-        assertThat(encoder.matches(ADMIN, hashWrittenBy(statements.get(1)))).isTrue();
-        verify(statements.get(0)).setString(2, "%@blooddemo.example.com");
-        verify(statements.get(1)).setString(2, "%@blooddemo.example.com");
+    @Test
+    void onAFirstStartOrANewSecretEveryDemoAccountGetsItsPasswordAndIsStamped() throws Exception {
+        // The seed's own hash, of the published password: neither secret matches it.
+        String seedHash = ENCODER.encode("BloodLink@2026");
+
+        Map<String, PreparedStatement> statements = runWithCurrentHashes(seedHash, seedHash);
+
+        assertThat(statements.keySet()).containsExactly(
+            SELECT_OTHERS, UPDATE + "and role <> 'ADMIN'", SELECT_ADMINS, UPDATE + "and role = 'ADMIN'");
+        PreparedStatement others = statements.get(UPDATE + "and role <> 'ADMIN'");
+        PreparedStatement admins = statements.get(UPDATE + "and role = 'ADMIN'");
+        assertThat(ENCODER.matches(SHARED, hashWrittenBy(others))).isTrue();
+        assertThat(ENCODER.matches(ADMIN, hashWrittenBy(admins))).isTrue();
+        // Stamped (Business Rule 32), so a visitor signed in with the old password is signed out.
+        verify(others).setTimestamp(org.mockito.ArgumentMatchers.eq(2), org.mockito.ArgumentMatchers.any());
+        verify(others).setString(3, "%@blooddemo.example.com");
+        verify(admins).setString(3, "%@blooddemo.example.com");
+    }
+
+    @Test
+    void onARestartWithTheSameSecretOnlyAccountsAVisitorChangedAreReset() throws Exception {
+        String othersHash = ENCODER.encode(SHARED);
+        String adminsHash = ENCODER.encode(ADMIN);
+
+        Map<String, PreparedStatement> statements = runWithCurrentHashes(othersHash, adminsHash);
+
+        // Everyone already on the secret keeps their hash, time and sign-in; the rest get the same hash back.
+        String others = UPDATE + "and role <> 'ADMIN' and password_hash <> ?";
+        String admins = UPDATE + "and role = 'ADMIN' and password_hash <> ?";
+        assertThat(statements.keySet()).containsExactly(SELECT_OTHERS, others, SELECT_ADMINS, admins);
+        verify(statements.get(others)).setString(1, othersHash);
+        verify(statements.get(others)).setString(4, othersHash);
+        verify(statements.get(admins)).setString(1, adminsHash);
+        verify(statements.get(admins)).setString(4, adminsHash);
     }
 
     private static String hashWrittenBy(PreparedStatement statement) throws Exception {

@@ -250,10 +250,13 @@ What follows from that:
 - You can give examiners the staff and donor password without also giving them the administrator.
 - If a visitor changes a demo account's password in Profile Settings, the next restart undoes it. On the
   free plan that happens whenever the service wakes from sleep, or by **Restart service** on Render.
+  Only accounts whose password actually differs are changed, and only those are signed out (a password
+  change signs out earlier sessions); everyone else stays signed in across a restart.
 - To change a demo password, edit the variable in Render (which redeploys). Old passwords stop working at
-  that start.
-- The passwords are never logged: the log shows only how many accounts were updated
-  (`Demo passwords set from BLOODLINK_DEMO_PASSWORD (855 accounts) and BLOODLINK_DEMO_ADMIN_PASSWORD (1 administrator accounts)`).
+  that start, and everyone signed in to the demo is signed out.
+- The passwords are never logged: the log shows only how many accounts were changed
+  (`Demo passwords set from BLOODLINK_DEMO_PASSWORD (855 accounts changed) and BLOODLINK_DEMO_ADMIN_PASSWORD (1 administrator accounts changed)`;
+  on an ordinary restart usually `0`).
 - Everything in the demo is fictional (names built from common Sierra Leonean names, reserved
   `example.com` addresses), so the public site holds no real person's data, unless a visitor registers
   with their own details. Its dates were set when the demo data was first loaded, so stock and donations

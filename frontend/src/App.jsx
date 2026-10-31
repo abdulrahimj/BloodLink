@@ -7,7 +7,7 @@ import BloodBankPortal from './pages/BloodBankPortal.jsx';
 import HospitalPortal from './pages/HospitalPortal.jsx';
 import AdminConsole from './pages/AdminConsole.jsx';
 import SetOwnPassword from './pages/SetOwnPassword.jsx';
-import { clearSession, getUser, isSignedIn, updateSessionUser } from './auth/session.js';
+import { SESSION_ENDED_EVENT, clearSession, getUser, isSignedIn, updateSessionUser } from './auth/session.js';
 import { mustChangePassword } from './lib/passwordChange.js';
 
 /* BloodLink — app shell: hash-routed landing page, login/register, and each role's portal once signed in
@@ -29,6 +29,9 @@ export default function App() {
   // bouncing them back to the login screen.
   const [user, setUser] = useState(() => (isSignedIn() ? getUser() : null));
 
+  // Why the server ended the last session, shown on Sign in until the next sign-in (Business Rule 32).
+  const [signInNotice, setSignInNotice] = useState(null);
+
   // Keeps the view in step with the browser's back/forward buttons and with the
   // in-page "Create one" / "Sign in" links, which only change the hash.
   useEffect(() => {
@@ -37,13 +40,26 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // The session is already cleared when this fires (auth/session.js endSession); close the portal and say why.
+  useEffect(() => {
+    const onSessionEnded = (event) => {
+      setUser(null);
+      setSignInNotice(event.detail?.message ?? null);
+      window.location.hash = '#login';
+    };
+    window.addEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+  }, []);
+
   /** Shared success path for both screens — the token is already stored by then. */
   function handleSignedIn(auth) {
+    setSignInNotice(null);
     setUser(auth.user);
   }
 
   function handleSignOut() {
     clearSession();
+    setSignInNotice(null);
     setUser(null);
     window.location.hash = '#login';
   }
@@ -91,7 +107,7 @@ export default function App() {
 
   return route === 'register'
     ? <Register onSignedIn={handleSignedIn} />
-    : <Login onSignedIn={handleSignedIn} />;
+    : <Login onSignedIn={handleSignedIn} notice={signInNotice} />;
 }
 
 /**

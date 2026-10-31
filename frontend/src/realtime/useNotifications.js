@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getNotifications, getUnreadCount, markAllNotificationsRead } from '../api/notifications.js';
-import { getToken } from '../auth/session.js';
+import { endSession, getToken } from '../auth/session.js';
+import { PASSWORD_CHANGED_MESSAGE } from '../lib/sessionEnd.js';
 import { connectNotifications } from './notificationSocket.js';
 
 /**
@@ -55,12 +56,13 @@ export function useNotifications({ onNotification } = {}) {
   // The live session. Opened once per signed-in screen and closed on unmount —
   // signing out unmounts the portal, which is what disconnects the socket.
   useEffect(() => {
-    const token = getToken();
-    if (!token) return undefined;
+    if (!getToken()) return undefined;
 
     return connectNotifications({
-      token,
+      getToken,
       onStatusChange: setConnected,
+      // Refused because the password changed since this sign-in: back to Sign in (Business Rule 32).
+      onPasswordChanged: () => endSession(PASSWORD_CHANGED_MESSAGE),
       onNotification: (notification) => {
         // Prepended (newest first) and de-duplicated by id, since a reconnect can overlap a reload.
         setNotifications((current) =>

@@ -1,6 +1,7 @@
 package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -8,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,6 +19,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.simp.stomp.StompCommand;
+import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -40,6 +46,9 @@ import com.bloodlink.repository.AuditLogRepository;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.security.JwtService;
+import com.bloodlink.security.StompAuthChannelInterceptor;
+import com.bloodlink.security.StompAuthenticationException;
 
 import jakarta.persistence.EntityManager;
 // Jackson 3 under Spring Boot 4 — see the same note on BloodRequestLifecycleIT.
@@ -65,6 +74,8 @@ class AdminPasswordResetIT {
     @Autowired private BloodBankRepository bloodBankRepository;
     @Autowired private HospitalRepository hospitalRepository;
     @Autowired private EntityManager entityManager;
+    @Autowired private JwtService jwtService;
+    @Autowired private StompAuthChannelInterceptor stompAuthChannelInterceptor;
 
     @Test
     void theOldPasswordStopsWorkingAndTheTemporaryOneSignsInFlaggedToChangeIt() throws Exception {
@@ -88,6 +99,7 @@ class AdminPasswordResetIT {
         User stored = reload(staff);
         assertThat(stored.isMustChangePassword()).isTrue();
         assertThat(stored.getPasswordHash()).doesNotContain(temporary);
+        assertThat(stored.getPasswordChangedAt()).isNotNull();
     }
 
     @Test
@@ -181,20 +193,36 @@ class AdminPasswordResetIT {
     }
 
     @Test
-    void aTokenIssuedBeforeTheResetCanOnlyReachTheSetYourOwnPasswordRoutes() throws Exception {
+    void everyTokenFromBeforeTheResetStopsWorkingAtOnceButTheAdministratorsOwnDoesNot() throws Exception {
+        User admin = seed("Isatu Bangura", Role.ADMIN);
         User staff = seed("Fatmata Koroma", Role.HOSPITAL_STAFF);
-        String oldToken = signIn(staff);
+        // A few seconds old: issued-at has whole seconds, and a token from the reset's own second still counts as new.
+        String oldToken = jwtService.issueToken(staff, Instant.now().minusSeconds(5));
+        String adminToken = jwtService.issueToken(admin, Instant.now().minusSeconds(5));
+        mockMvc.perform(get("/api/notifications").header("Authorization", bearer(oldToken))).andExpect(status().isOk());
 
-        reset(signIn(seed("Isatu Bangura", Role.ADMIN)), staff.getId()).andExpect(status().isOk());
+        reset(adminToken, staff.getId()).andExpect(status().isOk());
 
-        // The flag is read from the database on every request, so the old session is held at the gate at once.
-        mockMvc.perform(get("/api/notifications").header("Authorization", bearer(oldToken)))
-            .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"));
+        // Business Rule 32: signed out everywhere, its own account and the password change included.
+        for (String path : List.of("/api/notifications", "/api/users/me")) {
+            mockMvc.perform(get(path).header("Authorization", bearer(oldToken)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("PASSWORD_CHANGED"))
+                .andExpect(jsonPath("$.message").value("Your password was changed. Please sign in again."));
+        }
         mockMvc.perform(patch("/api/users/me/password").header("Authorization", bearer(oldToken))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"currentPassword\": \"" + PASSWORD + "\", \"newPassword\": \"Taken-over-pass-1\"}"))
-            .andExpect(status().isUnauthorized());
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value("PASSWORD_CHANGED"));
+        // Nor can it open a notification socket.
+        assertThatThrownBy(() -> stompAuthChannelInterceptor.preSend(connectFrame(oldToken), null))
+            .isInstanceOf(StompAuthenticationException.class)
+            .hasMessage("Your password was changed. Please sign in again.");
+
+        // The administrator who reset it is untouched.
+        mockMvc.perform(get("/api/admin/users").header("Authorization", bearer(adminToken))).andExpect(status().isOk());
+        assertThat(reload(admin).getPasswordChangedAt()).isNull();
     }
 
     // ---------- helpers ----------
@@ -222,6 +250,14 @@ class AdminPasswordResetIT {
 
     private static String bearer(String token) {
         return "Bearer " + token;
+    }
+
+    /** A STOMP CONNECT frame carrying the token, as the browser's notification socket sends it. */
+    private static Message<byte[]> connectFrame(String token) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+        accessor.setNativeHeader("Authorization", "Bearer " + token);
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
     }
 
     private User reload(User user) {

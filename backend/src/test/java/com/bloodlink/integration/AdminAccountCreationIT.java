@@ -128,14 +128,18 @@ class AdminAccountCreationIT {
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"));
 
-        mockMvc.perform(patch("/api/users/me/password")
+        MvcResult changed = mockMvc.perform(patch("/api/users/me/password")
                 .header("Authorization", "Bearer " + newAdminToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"currentPassword\": \"" + created.temporaryPassword()
                     + "\", \"newPassword\": \"The-new-admins-own-passphrase-7\"}"))
-            .andExpect(status().isNoContent());
+            .andExpect(status().isOk())
+            .andReturn();
+        // The change answers with a fresh token; older ones stop working (Business Rule 32).
+        String ownPasswordToken = objectMapper.readValue(changed.getResponse().getContentAsString(), AuthResponse.class)
+            .token();
         mockMvc.perform(post("/api/admin/users")
-                .header("Authorization", "Bearer " + newAdminToken)
+                .header("Authorization", "Bearer " + ownPasswordToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(payload))
             .andExpect(status().isCreated());

@@ -2,6 +2,7 @@
    Every call acts on the caller's own account via the token; there is no user id to pass. */
 
 import { apiRequest } from './client.js';
+import { replaceSessionToken } from '../auth/session.js';
 
 /** GET /api/users/me — name, email, and the admin-managed facts (phone, role,
  *  facility) the screen shows read-only. */
@@ -17,12 +18,14 @@ export function updateMyDetails({ fullName, email }) {
 }
 
 /**
- * PATCH /api/users/me/password: a wrong current password is a 401 on "currentPassword", which client.js
- * does not treat as an expired session. Resolves to null on success (204).
+ * PATCH /api/users/me/password: a wrong current password is a 401 on "currentPassword", which keeps the session.
+ * Answers like sign-in; the fresh token is stored at once, since older ones stop working (Business Rule 32).
  */
-export function changeMyPassword({ currentPassword, newPassword }) {
-  return apiRequest('/api/users/me/password', {
+export async function changeMyPassword({ currentPassword, newPassword }) {
+  const auth = await apiRequest('/api/users/me/password', {
     method: 'PATCH',
     body: { currentPassword, newPassword },
   });
+  replaceSessionToken(auth?.token);
+  return auth;
 }

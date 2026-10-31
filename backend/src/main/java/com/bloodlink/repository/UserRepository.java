@@ -23,10 +23,11 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByPhone(String phone);
 
     /**
-     * Status and the must-change-password flag by primary key: what JwtAuthenticationFilter and the STOMP CONNECT check
-     * judge, so a suspension or an unchanged temporary password bites immediately (Business Rule 27).
+     * Status, must-change-password and the password-change time by primary key: what JwtAuthenticationFilter and the
+     * STOMP CONNECT check judge, so a suspension, a temporary password or a password change bites at once (27, 32).
      */
-    @Query("select new com.bloodlink.repository.AccountAccess(u.status, u.mustChangePassword) from User u where u.id = :id")
+    @Query("select new com.bloodlink.repository.AccountAccess(u.status, u.mustChangePassword, u.passwordChangedAt) "
+        + "from User u where u.id = :id")
     Optional<AccountAccess> findAccessById(@Param("id") UUID id);
 
     /** Whether any account of this role is in this status: the first-administrator bootstrap asks it of ACTIVE ADMIN. */

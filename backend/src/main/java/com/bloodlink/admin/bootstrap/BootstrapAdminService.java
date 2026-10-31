@@ -1,5 +1,6 @@
 package com.bloodlink.admin.bootstrap;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -111,7 +112,7 @@ public class BootstrapAdminService {
         admin.setEmail(email);
         admin.setRole(Role.ADMIN);
         admin.setStatus(AccountStatus.ACTIVE);
-        admin.setPasswordHash(passwordEncoder.encode(settings.password()));
+        admin.replacePassword(passwordEncoder.encode(settings.password()), Instant.now());
         // Whoever set the variable knows this password, so the administrator replaces it at first sign-in.
         admin.setMustChangePassword(true);
         User saved = userRepository.save(admin);

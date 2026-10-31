@@ -93,16 +93,23 @@ public class JwtService {
 
     /**
      * Mints a signed token for a user who has just proven their password.
-     * Called only from AuthService after authentication succeeds.
+     * Called from AuthService after authentication succeeds.
      */
     public String issueToken(User user) {
-        Instant now = Instant.now();
+        return issueToken(user, Instant.now());
+    }
+
+    /**
+     * Mints a token issued at a given moment: after a password change, that change's own time, so the fresh token is
+     * never older than it (Business Rule 32). Issued-at is stored in whole seconds.
+     */
+    public String issueToken(User user, Instant issuedAt) {
         return Jwts.builder()
             .subject(user.getId().toString())
             .claim(CLAIM_ROLE, user.getRole().name())
             .claim(CLAIM_NAME, user.getFullName())
-            .issuedAt(Date.from(now))
-            .expiration(Date.from(now.plusMillis(expiryMillis)))
+            .issuedAt(Date.from(issuedAt))
+            .expiration(Date.from(issuedAt.plusMillis(expiryMillis)))
             .signWith(signingKey)
             .compact();
     }

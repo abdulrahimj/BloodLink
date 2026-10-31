@@ -73,6 +73,13 @@ public class User {
     private boolean mustChangePassword;
 
     /**
+     * When the password was last set or changed (Business Rule 32, V29); a token issued in an earlier second is refused.
+     * Null for accounts untouched since V29, meaning no restriction.
+     */
+    @Column(name = "password_changed_at")
+    private Instant passwordChangedAt;
+
+    /**
      * The blood bank this account works at, set only for BLOOD_BANK_STAFF (V5); null for every other role.
      * Staff with no bank have access to nothing.
      */
@@ -87,6 +94,12 @@ public class User {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "hospital_id")
     private Hospital hospital;
+
+    /** Stores a new password hash and when it was set, so tokens issued before it stop working (Business Rule 32). */
+    public void replacePassword(String newPasswordHash, Instant changedAt) {
+        this.passwordHash = newPasswordHash;
+        this.passwordChangedAt = changedAt;
+    }
 
     @PrePersist
     void onCreate() {

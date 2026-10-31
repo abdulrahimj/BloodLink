@@ -11,7 +11,7 @@ import {
 } from "../lib/userAccounts.js";
 import { describeShowingRange } from "../lib/pagination.js";
 import {
-  OWN_ACCOUNT_NOTE, RESET_PASSWORD_HINT, TEMPORARY_PASSWORD_NOTE, manageAccountOptions, needsActiveAdminCount,
+  OWN_ACCOUNT_NOTE, RESET_PASSWORD_HINT, TEMPORARY_PASSWORD_NOTE, manageAccountOptions,
   resetConfirmationText, suspendConfirmationText,
 } from "../lib/manageAccount.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
@@ -1117,7 +1117,6 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
  */
 function ManageAccountDialog({ account: initialAccount, currentUserId, banks, hospitals, onClose, onChanged }) {
   const [account, setAccount] = useState(initialAccount);
-  const [activeAdminCount, setActiveAdminCount] = useState(null);
   // Which confirmation is open inside the box ("reset" or "suspend"), and which write is running.
   const [confirming, setConfirming] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -1130,17 +1129,7 @@ function ManageAccountDialog({ account: initialAccount, currentUserId, banks, ho
   const confirmCancelRef = useRef(null);
   const copyRef = useRef(null);
 
-  const options = manageAccountOptions(account, { currentUserId, activeAdminCount });
-
-  // The last-active-administrator rule needs the count of active administrators, read with the existing search.
-  useEffect(() => {
-    if (!needsActiveAdminCount(account, currentUserId)) return undefined;
-    let cancelled = false;
-    getAdminUsers({ role: "ADMIN", status: "ACTIVE", page: 0, size: 1 })
-      .then((data) => { if (!cancelled) setActiveAdminCount(data.totalElements); })
-      .catch(() => { /* The server still refuses the last administrator's suspension with its own message. */ });
-    return () => { cancelled = true; };
-  }, [account, currentUserId]);
+  const options = manageAccountOptions(account, { currentUserId });
 
   /** Closes the box, clearing the temporary password first; never while a write is running. */
   function close() {
@@ -1320,16 +1309,12 @@ function ManageAccountDialog({ account: initialAccount, currentUserId, banks, ho
                   </div>
                   <div>
                     <button
-                      type="button" className="ad-act" disabled={Boolean(busy) || Boolean(options.suspendBlockedReason)}
-                      aria-describedby={options.suspendBlockedReason ? "ad-manage-blocked" : undefined}
+                      type="button" className="ad-act" disabled={Boolean(busy)}
                       onClick={() => { setActionError(null); setConfirming("suspend"); }}
                     >
                       Suspend account
                     </button>
                   </div>
-                  {options.suspendBlockedReason && (
-                    <div className="ad-err" id="ad-manage-blocked">{options.suspendBlockedReason}</div>
-                  )}
                 </>
               )
             ) : (

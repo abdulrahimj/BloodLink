@@ -27,7 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Turns a Bearer token into an authenticated SecurityContext for one request, rebuilding the principal from claims.
- * Also checks the account on every request: suspended is left unauthenticated, must-change-password is refused (403).
+ * Checks the account every time: suspended or older than the last password change is a 401, must-change-password a 403.
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -64,7 +64,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // Fail-closed: a missing row reads the same as SUSPENDED, never as active.
                 AccountAccess access = userRepository.findAccessById(userId).orElse(null);
 
-                if (access != null && access.isActive()) {
+                if (access != null && access.isActive() && access.tokenIssuedBeforePasswordChange(claims.getIssuedAt())) {
+                    // Signed in before the password changed (Business Rule 32): unauthenticated, and the 401 says why.
+                    request.setAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE, Boolean.TRUE);
+                } else if (access != null && access.isActive()) {
                     AuthenticatedUser principal = new AuthenticatedUser(
                         userId,
                         claims.getSubject(),

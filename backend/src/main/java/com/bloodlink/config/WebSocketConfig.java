@@ -9,7 +9,9 @@ import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+import org.springframework.web.socket.config.annotation.WebSocketTransportRegistration;
 
+import com.bloodlink.security.NotificationSocketRegistry;
 import com.bloodlink.security.StompAuthChannelInterceptor;
 
 /**
@@ -24,13 +26,16 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public static final String USER_NOTIFICATION_QUEUE = "/queue/notifications";
 
     private final StompAuthChannelInterceptor stompAuthChannelInterceptor;
+    private final NotificationSocketRegistry notificationSocketRegistry;
     private final List<String> allowedOrigins;
 
     WebSocketConfig(
         StompAuthChannelInterceptor stompAuthChannelInterceptor,
+        NotificationSocketRegistry notificationSocketRegistry,
         @Value("${bloodlink.cors.allowed-origins}") List<String> allowedOrigins
     ) {
         this.stompAuthChannelInterceptor = stompAuthChannelInterceptor;
+        this.notificationSocketRegistry = notificationSocketRegistry;
         this.allowedOrigins = allowedOrigins;
     }
 
@@ -53,6 +58,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // and plain WebSocket for non-browser clients such as tests.
         registry.addEndpoint("/ws").setAllowedOrigins(origins);
         registry.addEndpoint("/ws").setAllowedOrigins(origins).withSockJS();
+    }
+
+    @Override
+    public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
+        // Tracks every open socket, so a password change can close the ones signed in before it (Business Rule 32).
+        registration.addDecoratorFactory(notificationSocketRegistry::decorate);
     }
 
     @Override

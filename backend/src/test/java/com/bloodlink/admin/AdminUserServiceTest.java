@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -43,6 +44,7 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
+import com.bloodlink.security.PasswordChangedEvent;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
 import com.bloodlink.web.error.ConflictException;
@@ -67,6 +69,7 @@ class AdminUserServiceTest {
     @Mock private AuditLogService auditLogService;
     @Mock private DonationBookingService donationBookingService;
     @Mock private NotificationService notificationService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -77,7 +80,7 @@ class AdminUserServiceTest {
     void setUp() {
         service = new AdminUserService(
             userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService,
-            notificationService);
+            notificationService, eventPublisher);
     }
 
     /** Creates an account as the test administrator — the actor the audit log records. */
@@ -881,7 +884,7 @@ class AdminUserServiceTest {
             .isInstanceOf(ConflictException.class)
             .hasMessageContaining("Profile Settings");
 
-        verifyNoInteractions(userRepository, auditLogService, notificationService);
+        verifyNoInteractions(userRepository, auditLogService, notificationService, eventPublisher);
     }
 
     @Test
@@ -900,6 +903,9 @@ class AdminUserServiceTest {
         verify(auditLogService).record(eq(ADMIN_ID), eq(AuditAction.ADMIN_PASSWORD_RESET), eq(target), details.capture());
         assertThat(details.getValue()).contains("stays suspended").doesNotContain(response.temporaryPassword());
         verify(notificationService).notifyPasswordResetByAdmin(target);
+        // Business Rule 32: the reset is stamped and announced, so the holder's older tokens and sockets stop working.
+        assertThat(target.getPasswordChangedAt()).isNotNull();
+        verify(eventPublisher).publishEvent(new PasswordChangedEvent(target.getId(), target.getPasswordChangedAt()));
     }
 
     @Test

@@ -5,6 +5,8 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
+import java.util.Date;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -165,5 +167,71 @@ class JwtAuthenticationFilterTest {
 
         assertThat(response.getStatus()).isEqualTo(200);
         assertThat(chain.getRequest()).isNotNull();
+    }
+
+    // ---------- Business Rule 32: a token from before the last password change ----------
+
+    private static final Instant CHANGED_AT = Instant.parse("2026-10-31T12:00:00.700Z");
+
+    /** Runs the filter for an active account whose password changed at CHANGED_AT (or never), with a token of that age. */
+    private MockHttpServletRequest runWithTokenIssuedAt(String issuedAt, Instant passwordChangedAt) throws Exception {
+        filter = new JwtAuthenticationFilter(jwtService, userRepository, new ObjectMapper());
+        Claims claims = mock(Claims.class);
+        when(jwtService.parseClaims(TOKEN)).thenReturn(claims);
+        when(jwtService.extractUserId(claims)).thenReturn(USER_ID);
+        lenient().when(jwtService.extractRole(claims)).thenReturn(Role.DONOR.name());
+        when(claims.getIssuedAt()).thenReturn(Date.from(Instant.parse(issuedAt)));
+        when(userRepository.findAccessById(USER_ID))
+            .thenReturn(Optional.of(new AccountAccess(AccountStatus.ACTIVE, false, passwordChangedAt)));
+
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/notifications");
+        request.addHeader("Authorization", "Bearer " + TOKEN);
+        filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+        return request;
+    }
+
+    @Test
+    void aTokenIssuedBeforeThePasswordChangedIsNoLongerASignIn() throws Exception {
+        MockHttpServletRequest request = runWithTokenIssuedAt("2026-10-31T11:59:59Z", CHANGED_AT);
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        // Marked, so the 401 the entry point sends says why.
+        assertThat(request.getAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE)).isEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void aTokenIssuedInTheSameSecondAsTheChangeStillWorks() throws Exception {
+        // Issued-at has whole seconds only: 12:00:00 is the change's own second, so it is not older.
+        MockHttpServletRequest request = runWithTokenIssuedAt("2026-10-31T12:00:00Z", CHANGED_AT);
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        assertThat(request.getAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE)).isNull();
+    }
+
+    @Test
+    void anAccountWhosePasswordNeverChangedSinceV29HasNoRestriction() throws Exception {
+        MockHttpServletRequest request = runWithTokenIssuedAt("2020-01-01T00:00:00Z", null);
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        assertThat(request.getAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE)).isNull();
+    }
+
+    @Test
+    void theEntryPointNamesThePasswordChangeOnlyWhenTheFilterMarkedIt() throws Exception {
+        RestAuthenticationEntryPoint entryPoint = new RestAuthenticationEntryPoint(new ObjectMapper());
+
+        MockHttpServletRequest marked = new MockHttpServletRequest();
+        marked.setAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE, Boolean.TRUE);
+        MockHttpServletResponse signedOut = new MockHttpServletResponse();
+        entryPoint.commence(marked, signedOut, null);
+        assertThat(signedOut.getStatus()).isEqualTo(401);
+        assertThat(signedOut.getContentAsString())
+            .contains("\"code\":\"PASSWORD_CHANGED\"")
+            .contains("Your password was changed. Please sign in again.");
+
+        MockHttpServletResponse plain = new MockHttpServletResponse();
+        entryPoint.commence(new MockHttpServletRequest(), plain, null);
+        assertThat(plain.getStatus()).isEqualTo(401);
+        assertThat(plain.getContentAsString()).doesNotContain("code").contains("Authentication is required");
     }
 }

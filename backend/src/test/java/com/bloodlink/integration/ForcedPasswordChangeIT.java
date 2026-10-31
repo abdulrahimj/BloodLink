@@ -150,9 +150,9 @@ class ForcedPasswordChangeIT {
             .isInstanceOf(StompAuthenticationException.class)
             .hasMessageContaining("set your own password");
 
-        changePassword(staff.token(), staff.temporaryPassword(), OWN_PASSWORD).andExpect(status().isNoContent());
+        String fresh = freshToken(changePassword(staff.token(), staff.temporaryPassword(), OWN_PASSWORD));
 
-        Message<byte[]> connect = connectFrame(staff.token());
+        Message<byte[]> connect = connectFrame(fresh);
         stompAuthChannelInterceptor.preSend(connect, null);
         assertThat(((StompPrincipal) StompHeaderAccessor.wrap(connect).getUser()).userId()).isEqualTo(staff.id());
     }
@@ -183,18 +183,19 @@ class ForcedPasswordChangeIT {
     }
 
     @Test
-    void afterTheChangeTheSameTokenWorksNormallyAndTheNextLoginIsUnflagged() throws Exception {
+    void afterTheChangeTheFreshTokenWorksNormallyAndTheNextLoginIsUnflagged() throws Exception {
         Flagged staff = createdBankStaff();
 
-        changePassword(staff.token(), staff.temporaryPassword(), OWN_PASSWORD).andExpect(status().isNoContent());
+        String fresh = freshToken(changePassword(staff.token(), staff.temporaryPassword(), OWN_PASSWORD)
+            .andExpect(jsonPath("$.user.mustChangePassword").value(false)));
 
         assertThat(userRepository.findById(staff.id()).orElseThrow().isMustChangePassword()).isFalse();
-        // Read from the database on every request, so the token issued before the change needs no replacing.
-        mockMvc.perform(get("/api/notifications").header("Authorization", bearer(staff.token())))
+        // The answer carries a fresh token (Business Rule 32), which works everywhere at once.
+        mockMvc.perform(get("/api/notifications").header("Authorization", bearer(fresh)))
             .andExpect(status().isOk());
-        mockMvc.perform(get("/api/inventory/" + staff.bankId()).header("Authorization", bearer(staff.token())))
+        mockMvc.perform(get("/api/inventory/" + staff.bankId()).header("Authorization", bearer(fresh)))
             .andExpect(status().isOk());
-        mockMvc.perform(get("/api/users/me").header("Authorization", bearer(staff.token())))
+        mockMvc.perform(get("/api/users/me").header("Authorization", bearer(fresh)))
             .andExpect(jsonPath("$.mustChangePassword").value(false));
 
         login(staff.phone(), staff.temporaryPassword()).andExpect(status().isUnauthorized());
@@ -268,6 +269,11 @@ class ForcedPasswordChangeIT {
     }
 
     /** A STOMP CONNECT frame carrying the token, as the browser's notification socket sends it. */
+    /** The fresh token a successful password change answers with (Business Rule 32). */
+    private String freshToken(ResultActions change) throws Exception {
+        return readBody(change.andExpect(status().isOk()).andReturn(), AuthResponse.class).token();
+    }
+
     private static Message<byte[]> connectFrame(String token) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.setNativeHeader("Authorization", "Bearer " + token);

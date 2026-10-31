@@ -28,8 +28,8 @@ visible in real time instead of tracked manually per facility.
   connections; the JVM flags are `JAVA_TOOL_OPTIONS` in the Dockerfile (cleared by `docker-compose.yml`), which also
   runs the jar extracted (`-Djarmode=tools extract`: half the startup CPU, ~70 MB less memory, measured). The public
   demo runs `demo,prod`: `HostedDemoPasswords` (a Flyway callback, `com.bloodlink.demo`) refuses to start without
-  `BLOODLINK_DEMO_PASSWORD` and `BLOODLINK_DEMO_ADMIN_PASSWORD` and re-hashes every `@blooddemo.example.com` account
-  with them at each start, so the published `BloodLink@2026` never works there; the plain local `demo` is unchanged.
+  `BLOODLINK_DEMO_PASSWORD` and `BLOODLINK_DEMO_ADMIN_PASSWORD` and re-applies them to every `@blooddemo.example.com` account
+  at each start (changing only accounts not already on them, Business Rule 32), so the published `BloodLink@2026` never works there; the plain local `demo` is unchanged.
   The frontend's backend address is `VITE_API_BASE_URL` (`lib/apiBaseUrl.js`); a Cloudflare build (`CF_PAGES`)
   fails without an https one. Pages' built-in SPA fallback is used (no `404.html`, no `_redirects`).
 
@@ -107,6 +107,7 @@ implement this system — reuse and wire them, don't rebuild from scratch.**
 | created_at | timestamp |
 | status | enum: ACTIVE, SUSPENDED — added in V8 for the Admin module's activate/suspend use case, the same kind of confirmed addition as blood_bank_id/hospital_id above. Every account starts ACTIVE. A suspension is enforced immediately, not just at the next login: `JwtAuthenticationFilter` checks it on every authenticated request (one indexed lookup by primary key), and `AuthService.login` checks it again after the password is verified. |
 | must_change_password | boolean, not null, default false — added in V25 (Business Rule 27). True while the password is one someone else set (an administrator's creation, or the first-administrator bootstrap); the account can then only read its own account and change its password. Cleared by that change. Existing accounts and self-registered donors are false. |
+| password_changed_at | timestamp, nullable — added in V29 (Business Rule 32). When the password was last set or changed; a token issued in an earlier second is refused. NULL (every account untouched since V29) means no restriction. |
 
 ### Donor
 | field | type |
@@ -684,9 +685,10 @@ Donation 0..1–1 DonationBooking
       server rejecting something the user typed, and keeps the session; session-level 401s
       (`RestAuthenticationEntryPoint`) never carry field errors, which is what makes the distinction
       reliable. Any future endpoint that answers 401 about a typed credential must name the field too.
-    - **Known limits, not handled here:** tokens issued before a password change stay valid until they
-      expire (JWTs are stateless — the 24h lifetime is the bound), and the current-password check is
-      not rate-limited, the same as login.
+    - **A successful change answers 200 with a fresh token** (`AuthResponse`, the sign-in shape, `Cache-Control:
+      no-store`), because every token issued before it stops working (Business Rule 32); the frontend stores it, so
+      the device that made the change stays signed in. (It answered 204 before Business Rule 32.)
+    - **Known limit, not handled here:** the current-password check is not rate-limited, the same as login.
 17. **An administrator may change another account's phone and facility, and every administrator action
     on an account is recorded in a permanent, append-only audit log.**
     - **Editing: `PATCH /api/admin/users/{id}/details`**, admin-only (SecurityConfig's `/api/admin/**`).
@@ -1256,8 +1258,9 @@ Donation 0..1–1 DonationBooking
       (`StompAuthChannelInterceptor`). Signing out is client-side (a stateless JWT has nothing to revoke), so it
       is always possible — by the owner's decision no logout endpoint was added.
     - **Lifting it:** Business Rule 16's password change, unchanged — current (temporary) password required
-      (401 on `currentPassword` if wrong), new one meeting Business Rule 30 and different (400) — now also clears the flag. Read from
-      the database on every request, so **the token issued before the change works everywhere straight after**.
+      (401 on `currentPassword` if wrong), new one meeting Business Rule 30 and different (400) — now also clears the flag. Since
+      Business Rule 32 the token used for the change stops working with it, and the answer carries **a fresh token that works
+      everywhere straight after**.
     - **Frontend:** `App.jsx` shows only `pages/SetOwnPassword.jsx` while `user.mustChangePassword` is true — no
       portal, so no socket either — with a Sign out button; on success it updates the stored session and opens
       the normal portal. A reload keeps the gate (the flag is in the stored user). Checks in
@@ -1402,20 +1405,60 @@ Donation 0..1–1 DonationBooking
       did not ask for this, contact your blood bank or BloodLink administrator."), a row first then a push, to an
       **active** account only (a suspended one gets nothing). They read it once they have set their own password,
       since the gate (Business Rule 27) holds back everything else. Bell dot red.
-    - **Sign-ins made before the reset:** the flag is read from the database on every request, so a token issued
-      before the reset reaches only `GET /api/users/me` and the password change at once, and cannot change the
-      password (it does not know the temporary one). **Known limit:** once the holder sets their own new password the
-      flag clears, and that older token works fully again until it expires (24 hours at most), as any token issued
-      before a password change does (Business Rule 16). Not fixed here; proposed to the owner.
+    - **Sign-ins made before the reset stop working at once** (Business Rule 32): every token the holder had is
+      refused with a 401 `PASSWORD_CHANGED`, and their open notification sockets are closed. The administrator's own
+      session is untouched.
     - **Frontend (Admin Console › All Accounts):** the Action column has one "Manage" button (the name opens it too),
       opening `ManageAccountDialog` with three sections: **Details** (Business Rule 17's phone and facility, "Save
       changes"), **Password** ("Reset password", a confirmation naming the account, then the temporary password shown
       once, large, with Copy and "Give this to the user. It will not be shown again."; cleared when the box closes)
       and **Account status** (Suspend, confirmed, or Reactivate; a red band). On your own row the box shows your phone
-      and a note pointing to Profile Settings, with no reset or suspend. Suspend is disabled with the server's
-      last-active-administrator message when it applies (`lib/manageAccount.js`, tested). Escape closes the box (or
+      and a note pointing to Profile Settings, with no reset or suspend (`lib/manageAccount.js`, tested). Suspend is
+      never disabled in advance: the last-active-administrator rule (Business Rule 17) is the server's alone and cannot
+      arise on another person's row, since the caller is itself an active administrator. Escape closes the box (or
       an open confirmation first), Tab stays inside it, and it fits a 390px phone. The table row is fetched again after
       every change.
+32. **A password change signs out every session made before it: each token issued before the account's password was
+    last set or changed is refused, and the device that changed it stays signed in.** The project owner's decision.
+    Before it a stolen or forgotten-open session survived a password change for up to 24 hours. Schema: `V29`
+    (`users.password_changed_at`, nullable, no data change).
+    - **Set** to the moment a password is set or changed, through `User.replacePassword(hash, at)`: an administrator's
+      reset (Business Rule 31), the account holder's own change (Profile Settings and the "Set your own password"
+      screen, Business Rules 16 and 27), the first-administrator bootstrap, an administrator creating an account
+      (Business Rule 14) and donor registration. **NULL means no restriction**, so accounts untouched since V29 keep
+      their tokens until they expire.
+    - **Checked on every authenticated request** by `JwtAuthenticationFilter`, in the same one-query lookup that already
+      reads status and the must-change flag (`UserRepository.findAccessById` → `AccountAccess`, nothing extra per
+      request). **Whole seconds:** a token's issued-at has no fractions, so it is refused only when its second is
+      earlier than the change's (`AccountAccess.issuedBefore`); a token from the change's own second still works. The
+      request is left unauthenticated and, on any address that needs a sign-in, `RestAuthenticationEntryPoint` answers
+      **401 with `code: "PASSWORD_CHANGED"`** and "Your password was changed. Please sign in again." (public endpoints
+      such as sign-in are never blocked by a stale token). Checked before the must-change gate, so a token from before
+      an administrator's reset gets this 401, not the gate's 403.
+    - **The person who changed their own password stays signed in:** `PATCH /api/users/me/password` answers with a fresh
+      token issued at the change's own instant (`JwtService.issueToken(user, at)`), which the frontend stores in place
+      of the old one (`api/account.js`, `auth/session.js` `replaceSessionToken`). Their other devices are signed out.
+      **After an administrator's reset, every token the holder had stops working**; the administrator is unaffected.
+    - **Notification sockets.** The STOMP CONNECT is refused with the same message for an older token
+      (`StompAuthChannelInterceptor`). **Sockets already open are closed:** `NotificationSocketRegistry` knows every open
+      socket (a decorator registered in `WebSocketConfig`) and the token issued-at each one signed in with (recorded at
+      CONNECT before the account is read, so a change committing in between still finds it). The reset and the own
+      change publish `PasswordChangedEvent`; after the transaction commits the registry closes that account's sockets
+      signed in before the change (close code 1008, the same message) and leaves newer ones open. The client's reconnect
+      then reads the current token: the changer's fresh one connects, an older one is refused, and that refusal signs
+      the tab out. In memory, like the simple broker: one server.
+    - **Frontend:** `api/client.js` turns the coded 401 into `endSession(message)` (`auth/session.js`), which clears
+      the session and fires `bloodlink:session-ended`; `App.jsx` closes the portal and opens Sign in with the message
+      in a navy notice (`Login.jsx`), cleared by the next sign-in. A refused socket does the same. Other session-level
+      401s still just clear the stored session, as before. Logic in `lib/sessionEnd.js` (tested).
+    - **Hosted demo** (`HostedDemoPasswords`, DEPLOYMENT.md): the passwords re-applied at each start change, and so
+      stamp, only accounts not already on the configured password — when the most common hash still matches, only the
+      others get it back; on a first start or after the secret changes, every demo account does. So a restart signs
+      out only visitors who changed a demo account's password. The local demo (nothing set) is unchanged.
+    - **Known limits:** a token issued earlier within the same second as a change still works (issued-at has no
+      fractions); sockets on another server would not be closed if BloodLink ever runs on more than one (their CONNECT
+      would still be refused on reconnect, and the 30-second REST poll signs the tab out); suspension and other account
+      changes do not use this mechanism (suspension is already checked on every request).
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1458,6 +1501,9 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Chapters 3, 4 and 5 — use cases and narrative for admin password reset (Business Rule 31, V28).** A new
   administrator use case "reset an account's password"; `audit_log` gains ADMIN_PASSWORD_RESET and `notifications`
   PASSWORD_RESET_BY_ADMIN.
+- **Chapters 3, 4 and 5 — ERD and narrative for session sign-out (Business Rule 32, V29).** `User` gains
+  `password_changed_at`; a password change or reset now ends every earlier session, and the security narrative's
+  "tokens stay valid until they expire" limit is gone.
 
 ## Actors (roles) and what each can do
 
@@ -1466,7 +1512,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32)
 
 ## Conventions
 

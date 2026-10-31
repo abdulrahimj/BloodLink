@@ -6,7 +6,7 @@ import { login } from "../api/auth.js";
 
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 
-export default function Login({ onSignedIn }) {
+export default function Login({ onSignedIn, notice = null }) {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
@@ -134,6 +134,7 @@ export default function Login({ onSignedIn }) {
           font-size: clamp(10.5px, 1.5vh, 13px); font-weight: 500; line-height: 1.45;
           margin-bottom: clamp(10px, 1.7vh, 16px);
         }
+        .au-alert--notice { background: rgba(28,58,94,.06); border-color: rgba(28,58,94,.28); color: var(--navy); }
         .au-submit:disabled { opacity: .68; cursor: progress; }
 
         .au-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: clamp(2px, .8vh, 8px) 0 clamp(14px, 2.4vh, 22px); }
@@ -229,6 +230,8 @@ export default function Login({ onSignedIn }) {
           <p className="au-p">Sign in to continue to your BloodLink account.</p>
 
           {error && <div className="au-alert" role="alert">{error}</div>}
+          {/* Why the last session ended (Business Rule 32); replaced by any error from this attempt. */}
+          {!error && notice && <div className="au-alert au-alert--notice" role="status">{notice}</div>}
 
           <div className="au-field">
             <label className="au-label" htmlFor="au-phone">Phone Number</label>

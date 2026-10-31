@@ -7,7 +7,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -35,6 +37,7 @@ import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.security.JwtService;
 
 // Jackson 3 under Spring Boot 4 — see the same note on BloodRequestLifecycleIT.
 import tools.jackson.databind.ObjectMapper;
@@ -58,6 +61,7 @@ class AccountSettingsIT {
     @Autowired private UserRepository userRepository;
     @Autowired private HospitalRepository hospitalRepository;
     @Autowired private BloodBankRepository bloodBankRepository;
+    @Autowired private JwtService jwtService;
 
     // ---------- every role can read its own account ----------
 
@@ -103,11 +107,75 @@ class AccountSettingsIT {
         User staff = seed("Lab Technician", Role.BLOOD_BANK_STAFF);
         String token = signIn(staff);
 
-        changePassword(token, PASSWORD, NEW_PASSWORD).andExpect(status().isNoContent());
+        changePassword(token, PASSWORD, NEW_PASSWORD).andExpect(status().isOk()).andExpect(jsonPath("$.token").isNotEmpty());
 
         // The proof that matters: the old password no longer signs in, the new one does.
         login(staff.getPhone(), PASSWORD).andExpect(status().isUnauthorized());
         login(staff.getPhone(), NEW_PASSWORD).andExpect(status().isOk());
+    }
+
+    // ---------- Business Rule 32: older sign-ins end, this device stays signed in ----------
+
+    @Test
+    void aTokenFromBeforeASelfChangeIsRefusedAndTheFreshOneWorks() throws Exception {
+        User staff = seed("Lab Technician", Role.BLOOD_BANK_STAFF);
+        // A few seconds old, as another device's sign-in would be (a token from the change's own second still counts).
+        String otherDevice = jwtService.issueToken(staff, Instant.now().minusSeconds(5));
+        String thisDevice = jwtService.issueToken(staff, Instant.now().minusSeconds(5));
+
+        MvcResult result = changePassword(thisDevice, PASSWORD, NEW_PASSWORD)
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.user.id").value(staff.getId().toString()))
+            .andExpect(jsonPath("$.user.mustChangePassword").value(false))
+            .andReturn();
+        String fresh = objectMapper.readValue(result.getResponse().getContentAsString(), AuthResponse.class).token();
+
+        for (String old : new String[] { otherDevice, thisDevice }) {
+            mockMvc.perform(get("/api/users/me").header("Authorization", bearer(old)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("PASSWORD_CHANGED"))
+                .andExpect(jsonPath("$.message").value("Your password was changed. Please sign in again."))
+                .andExpect(jsonPath("$.fieldErrors").doesNotExist());
+        }
+        mockMvc.perform(get("/api/users/me").header("Authorization", bearer(fresh))).andExpect(status().isOk());
+        mockMvc.perform(get("/api/notifications").header("Authorization", bearer(fresh))).andExpect(status().isOk());
+    }
+
+    @Test
+    void aTokenIssuedInTheSameSecondAsTheChangeWorksAndOneFromTheSecondBeforeDoesNot() throws Exception {
+        User staff = seed("Hospital Desk Clerk", Role.HOSPITAL_STAFF);
+        Instant second = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.SECONDS);
+        staff.setPasswordChangedAt(second.plusMillis(700));
+        userRepository.saveAndFlush(staff);
+
+        // Issued-at is stored in whole seconds: 12:00:00 is the change's own second (12:00:00.700), so not older.
+        mockMvc.perform(get("/api/users/me").header("Authorization", bearer(jwtService.issueToken(staff, second))))
+            .andExpect(status().isOk());
+        mockMvc.perform(get("/api/users/me")
+                .header("Authorization", bearer(jwtService.issueToken(staff, second.minusSeconds(1)))))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.code").value("PASSWORD_CHANGED"));
+    }
+
+    @Test
+    void anAccountWithNoPasswordChangeRecordedKeepsItsOlderTokens() throws Exception {
+        User staff = seed("Lab Technician", Role.BLOOD_BANK_STAFF);
+        assertThat(staff.getPasswordChangedAt()).isNull();
+
+        mockMvc.perform(get("/api/users/me")
+                .header("Authorization", bearer(jwtService.issueToken(staff, Instant.now().minus(23, ChronoUnit.HOURS)))))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void aSignInAfterTheChangeWorks() throws Exception {
+        User staff = seed("Lab Technician", Role.BLOOD_BANK_STAFF);
+        changePassword(jwtService.issueToken(staff, Instant.now().minusSeconds(5)), PASSWORD, NEW_PASSWORD)
+            .andExpect(status().isOk());
+
+        MvcResult result = login(staff.getPhone(), NEW_PASSWORD).andExpect(status().isOk()).andReturn();
+        String token = objectMapper.readValue(result.getResponse().getContentAsString(), AuthResponse.class).token();
+        mockMvc.perform(get("/api/users/me").header("Authorization", bearer(token))).andExpect(status().isOk());
     }
 
     @Test
@@ -139,7 +207,7 @@ class AccountSettingsIT {
         String token = registerDonor();
 
         changePassword(token, "not-my-password", NEW_PASSWORD).andExpect(status().isUnauthorized());
-        changePassword(token, PASSWORD, NEW_PASSWORD).andExpect(status().isNoContent());
+        changePassword(token, PASSWORD, NEW_PASSWORD).andExpect(status().isOk()).andExpect(jsonPath("$.token").isNotEmpty());
     }
 
     @Test

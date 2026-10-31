@@ -2,6 +2,7 @@ package com.bloodlink.security;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
@@ -35,13 +36,20 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         HttpServletResponse response,
         AuthenticationException authException
     ) throws IOException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", HttpStatus.UNAUTHORIZED.value());
+        body.put("error", "Unauthorized");
+        // A token older than the account's last password change gets its own code and wording (Business Rule 32).
+        if (request.getAttribute(PasswordChangedSignOut.REQUEST_ATTRIBUTE) != null) {
+            body.put("code", PasswordChangedSignOut.ERROR_CODE);
+            body.put("message", PasswordChangedSignOut.MESSAGE);
+        } else {
+            body.put("message", "Authentication is required to access this resource.");
+        }
+
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        objectMapper.writeValue(response.getOutputStream(), Map.of(
-            "timestamp", Instant.now().toString(),
-            "status", HttpStatus.UNAUTHORIZED.value(),
-            "error", "Unauthorized",
-            "message", "Authentication is required to access this resource."
-        ));
+        objectMapper.writeValue(response.getOutputStream(), body);
     }
 }

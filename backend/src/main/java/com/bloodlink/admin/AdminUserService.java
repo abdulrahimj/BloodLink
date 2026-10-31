@@ -1,5 +1,6 @@
 package com.bloodlink.admin;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -7,6 +8,7 @@ import java.util.Objects;
 import java.util.TreeSet;
 import java.util.UUID;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -35,6 +37,7 @@ import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.security.AuthenticatedUser;
+import com.bloodlink.security.PasswordChangedEvent;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
@@ -60,6 +63,7 @@ public class AdminUserService {
     private final AuditLogService auditLogService;
     private final DonationBookingService donationBookingService;
     private final NotificationService notificationService;
+    private final ApplicationEventPublisher eventPublisher;
 
     AdminUserService(
         UserRepository userRepository,
@@ -68,7 +72,8 @@ public class AdminUserService {
         PasswordEncoder passwordEncoder,
         AuditLogService auditLogService,
         DonationBookingService donationBookingService,
-        NotificationService notificationService
+        NotificationService notificationService,
+        ApplicationEventPublisher eventPublisher
     ) {
         this.userRepository = userRepository;
         this.bloodBankRepository = bloodBankRepository;
@@ -77,6 +82,7 @@ public class AdminUserService {
         this.auditLogService = auditLogService;
         this.donationBookingService = donationBookingService;
         this.notificationService = notificationService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -167,7 +173,7 @@ public class AdminUserService {
 
         // Only the BCrypt hash is stored; the plaintext leaves this method only inside the response below.
         String temporaryPassword = TemporaryPasswordGenerator.generate();
-        user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        user.replacePassword(passwordEncoder.encode(temporaryPassword), Instant.now());
         // Temporary: the administrator has seen it, so the holder must replace it at first sign-in (Business Rule 27).
         user.setMustChangePassword(true);
 
@@ -367,9 +373,12 @@ public class AdminUserService {
             .orElseThrow(() -> new NotFoundException("No user found for this id."));
 
         String temporaryPassword = TemporaryPasswordGenerator.generate();
-        user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        Instant changedAt = Instant.now();
+        // Every token the holder already has stops working, and their open sockets close after commit (Rule 32).
+        user.replacePassword(passwordEncoder.encode(temporaryPassword), changedAt);
         user.setMustChangePassword(true);
         User saved = userRepository.save(user);
+        eventPublisher.publishEvent(new PasswordChangedEvent(saved.getId(), changedAt));
 
         auditLogService.record(principal.getId(), AuditAction.ADMIN_PASSWORD_RESET, saved,
             "Password reset to a temporary one; they must choose a new password at their next sign-in."

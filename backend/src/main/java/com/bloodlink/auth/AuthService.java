@@ -1,5 +1,7 @@
 package com.bloodlink.auth;
 
+import java.time.Instant;
+
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
@@ -79,7 +81,7 @@ public class AuthService {
         user.setEmail(email);
         user.setPhone(phone);
         // BCrypt: salted and deliberately slow, so the stored value is never reversible.
-        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.replacePassword(passwordEncoder.encode(request.password()), Instant.now());
         user.setRole(Role.DONOR);
         // Reassigned from save(): the generated UUID and created_at are only present
         // on the returned instance, and the token issued below needs the id.

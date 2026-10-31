@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -22,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import com.bloodlink.account.dto.AccountResponse;
@@ -31,6 +33,8 @@ import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.security.JwtService;
+import com.bloodlink.security.PasswordChangedEvent;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.IncorrectCurrentPasswordException;
 import com.bloodlink.web.error.InvalidFieldException;
@@ -48,6 +52,8 @@ class AccountServiceTest {
     private static final String PHONE = "+23276900005";
 
     @Mock private UserRepository userRepository;
+    @Mock private JwtService jwtService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -56,7 +62,7 @@ class AccountServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AccountService(userRepository, passwordEncoder);
+        service = new AccountService(userRepository, passwordEncoder, jwtService, eventPublisher);
 
         account = new User();
         account.setId(UUID.randomUUID());
@@ -86,13 +92,23 @@ class AccountServiceTest {
 
     @Test
     void theCorrectCurrentPasswordAllowsTheChange() {
-        service.changeMyPassword(account.getId(), password(CURRENT_PASSWORD, NEW_PASSWORD));
+        when(jwtService.issueToken(any(User.class), any(Instant.class))).thenReturn("fresh-token");
+
+        var response = service.changeMyPassword(account.getId(), password(CURRENT_PASSWORD, NEW_PASSWORD));
 
         // The stored hash now verifies the new password and no longer the old one —
         // checked with the same encoder login uses, not by comparing strings.
         assertThat(passwordEncoder.matches(NEW_PASSWORD, account.getPasswordHash())).isTrue();
         assertThat(passwordEncoder.matches(CURRENT_PASSWORD, account.getPasswordHash())).isFalse();
         verify(userRepository).save(account);
+
+        // Business Rule 32: stamped, announced, and a fresh token issued at exactly the change's time.
+        Instant changedAt = account.getPasswordChangedAt();
+        assertThat(changedAt).isNotNull();
+        verify(eventPublisher).publishEvent(new PasswordChangedEvent(account.getId(), changedAt));
+        verify(jwtService).issueToken(account, changedAt);
+        assertThat(response.token()).isEqualTo("fresh-token");
+        assertThat(response.user().mustChangePassword()).isFalse();
     }
 
     @Test
@@ -109,6 +125,9 @@ class AccountServiceTest {
         assertThat(passwordEncoder.matches(CURRENT_PASSWORD, account.getPasswordHash())).isTrue();
         assertThat(passwordEncoder.matches(NEW_PASSWORD, account.getPasswordHash())).isFalse();
         verify(userRepository, never()).save(any(User.class));
+        // No sign-out either: a wrong current password ends nobody's session (Business Rule 32).
+        assertThat(account.getPasswordChangedAt()).isNull();
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
     }
 
     @Test

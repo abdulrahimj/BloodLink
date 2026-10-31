@@ -232,6 +232,7 @@ function PasswordCard() {
     setError(null);
     setFieldErrors({});
     try {
+      // Stores the fresh token it answers with, so this device stays signed in (Business Rule 32).
       await changeMyPassword({ currentPassword, newPassword });
       // Cleared on success: three passwords sitting in form state, or in the
       // browser's view of the page, serve nobody once the change is made.
@@ -260,7 +261,8 @@ function PasswordCard() {
       {error && <div className="ps-alert" role="alert">{error}</div>}
       {changed && (
         <div className="ps-ok" role="status">
-          Your password was changed. Use the new one the next time you sign in.
+          Your password was changed. You stay signed in here; anywhere else you were signed in, you will need
+          to sign in again with the new one.
         </div>
       )}
 

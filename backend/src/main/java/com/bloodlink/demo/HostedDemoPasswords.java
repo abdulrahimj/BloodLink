@@ -2,7 +2,10 @@ package com.bloodlink.demo;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 
 import org.flywaydb.core.api.callback.Callback;
@@ -77,14 +80,14 @@ class HostedDemoPasswords implements Callback {
         }
     }
 
-    /** On every start (undoing any visitor's change): one hash per password, one update each, since 850 hashes would
+    /** On every start (undoing any visitor's change): at most one hash and one check per password, since 850 hashes would
      *  take minutes on 0.1 CPU. Not the PasswordEncoder bean, which depends (via security) on Flyway itself. */
     private void applyPasswords(Connection connection) {
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         try {
-            int others = update(connection, encoder.encode(settings.password()), "role <> 'ADMIN'");
-            int admins = update(connection, encoder.encode(settings.adminPassword()), "role = 'ADMIN'");
-            log.info("Demo passwords set from {} ({} accounts) and {} ({} administrator accounts).",
+            int others = apply(connection, encoder, settings.password(), "role <> 'ADMIN'");
+            int admins = apply(connection, encoder, settings.adminPassword(), "role = 'ADMIN'");
+            log.info("Demo passwords set from {} ({} accounts changed) and {} ({} administrator accounts changed).",
                 HostedDemoPasswordSettings.PASSWORD_VARIABLE, others,
                 HostedDemoPasswordSettings.ADMIN_PASSWORD_VARIABLE, admins);
         } catch (SQLException ex) {
@@ -93,11 +96,38 @@ class HostedDemoPasswords implements Callback {
         }
     }
 
-    private static int update(Connection connection, String hash, String roleCondition) throws SQLException {
-        String sql = "update users set password_hash = ? where email like ? and " + roleCondition;
+    /** Changes, and so signs out (Business Rule 32), only accounts not already on this password: when the most common
+     *  hash still matches, just the others get it; otherwise (first start, or the secret changed) every account does. */
+    private static int apply(Connection connection, BCryptPasswordEncoder encoder, String password, String roleCondition)
+            throws SQLException {
+        String current = mostCommonHash(connection, roleCondition);
+        if (current != null && encoder.matches(password, current)) {
+            return update(connection, current, roleCondition + " and password_hash <> ?", current);
+        }
+        return update(connection, encoder.encode(password), roleCondition, null);
+    }
+
+    private static String mostCommonHash(Connection connection, String roleCondition) throws SQLException {
+        String sql = "select password_hash from users where email like ? and " + roleCondition
+            + " group by password_hash order by count(*) desc limit 1";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, DEMO_EMAIL_PATTERN);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? rows.getString(1) : null;
+            }
+        }
+    }
+
+    private static int update(Connection connection, String hash, String condition, String exceptHash)
+            throws SQLException {
+        String sql = "update users set password_hash = ?, password_changed_at = ? where email like ? and " + condition;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, hash);
-            statement.setString(2, DEMO_EMAIL_PATTERN);
+            statement.setTimestamp(2, Timestamp.from(Instant.now()));
+            statement.setString(3, DEMO_EMAIL_PATTERN);
+            if (exceptHash != null) {
+                statement.setString(4, exceptHash);
+            }
             return statement.executeUpdate();
         }
     }

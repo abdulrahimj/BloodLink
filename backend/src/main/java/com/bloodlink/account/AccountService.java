@@ -1,10 +1,12 @@
 package com.bloodlink.account;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.UUID;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,10 +14,13 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bloodlink.account.dto.AccountResponse;
 import com.bloodlink.account.dto.ChangePasswordPayload;
 import com.bloodlink.account.dto.UpdateAccountPayload;
+import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.common.EmailAddress;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.security.JwtService;
+import com.bloodlink.security.PasswordChangedEvent;
 import com.bloodlink.web.error.ConflictException;
 import com.bloodlink.web.error.IncorrectCurrentPasswordException;
 import com.bloodlink.web.error.InvalidFieldException;
@@ -44,10 +49,19 @@ public class AccountService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
+    private final ApplicationEventPublisher eventPublisher;
 
-    AccountService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    AccountService(
+        UserRepository userRepository,
+        PasswordEncoder passwordEncoder,
+        JwtService jwtService,
+        ApplicationEventPublisher eventPublisher
+    ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
+        this.eventPublisher = eventPublisher;
     }
 
     /** The caller's own account, for the Profile Settings screen. */
@@ -78,11 +92,11 @@ public class AccountService {
     }
 
     /**
-     * Changes the password after verifying the current one (401 if wrong, nothing written); an unchanged one is refused.
-     * Only the BCrypt hash is stored; clears must-change-password (Business Rule 27), so the same token then works fully.
+     * Changes the password after verifying the current one (401 if wrong, nothing written); clears must-change (Rule 27).
+     * Every older token stops working (Business Rule 32), so the answer carries a fresh one for this device.
      */
     @Transactional
-    public void changeMyPassword(UUID userId, ChangePasswordPayload payload) {
+    public AuthResponse changeMyPassword(UUID userId, ChangePasswordPayload payload) {
         rejectUnrecognised(payload.unrecognised(), "currentPassword", "newPassword");
 
         User user = load(userId);
@@ -94,9 +108,14 @@ public class AccountService {
             throw new InvalidFieldException("newPassword", "Choose a new password that is different from your current one.");
         }
 
-        user.setPasswordHash(passwordEncoder.encode(payload.newPassword()));
+        Instant changedAt = Instant.now();
+        user.replacePassword(passwordEncoder.encode(payload.newPassword()), changedAt);
         user.setMustChangePassword(false);
-        userRepository.save(user);
+        User saved = userRepository.save(user);
+        eventPublisher.publishEvent(new PasswordChangedEvent(saved.getId(), changedAt));
+
+        // Issued at the change's own time, so it is never judged older than it.
+        return AuthResponse.of(jwtService.issueToken(saved, changedAt), jwtService.getExpirySeconds(), saved);
     }
 
     /**

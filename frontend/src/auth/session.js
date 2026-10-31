@@ -51,6 +51,26 @@ export function updateSessionUser(changes) {
   return updated;
 }
 
+/**
+ * Swaps in the fresh token a password change answers with (Business Rule 32), in whichever store holds the session,
+ * so this device stays signed in. No-op when signed out.
+ */
+export function replaceSessionToken(token) {
+  const store = localStorage.getItem(TOKEN_KEY) !== null ? localStorage
+    : sessionStorage.getItem(TOKEN_KEY) !== null ? sessionStorage
+    : null;
+  if (store && token) store.setItem(TOKEN_KEY, token);
+}
+
+/** Fired on window when the server ends the session itself; detail.message says why, for the Sign in screen. */
+export const SESSION_ENDED_EVENT = 'bloodlink:session-ended';
+
+/** Signs out because the server refused the token, and tells the app shell why (Business Rule 32). */
+export function endSession(message) {
+  clearSession();
+  window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: { message } }));
+}
+
 /** True when a token is present. Not proof of validity — the server decides that. */
 export function isSignedIn() {
   return getToken() !== null;

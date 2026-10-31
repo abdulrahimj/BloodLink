@@ -19,7 +19,7 @@ import io.jsonwebtoken.JwtException;
 
 /**
  * Identifies a WebSocket client from the JWT on its STOMP CONNECT frame (browsers cannot set a handshake header).
- * A missing, invalid or suspended token, or one that must change its password, fails the CONNECT; open sockets stay.
+ * Missing, invalid, suspended, older than the last password change, or must-change-password: the CONNECT fails.
  */
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
@@ -29,10 +29,14 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final NotificationSocketRegistry socketRegistry;
 
-    StompAuthChannelInterceptor(JwtService jwtService, UserRepository userRepository) {
+    StompAuthChannelInterceptor(
+        JwtService jwtService, UserRepository userRepository, NotificationSocketRegistry socketRegistry
+    ) {
         this.jwtService = jwtService;
         this.userRepository = userRepository;
+        this.socketRegistry = socketRegistry;
     }
 
     @Override
@@ -48,14 +52,20 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             throw new StompAuthenticationException("A bearer token is required to open a BloodLink socket.");
         }
 
+        String sessionId = accessor.getSessionId();
         try {
             Claims claims = jwtService.parseClaims(token);
             UUID userId = jwtService.extractUserId(claims);
             Role role = Role.valueOf(jwtService.extractRole(claims));
+            socketRegistry.signedIn(sessionId, userId, claims.getIssuedAt());
 
             AccountAccess access = userRepository.findAccessById(userId).orElse(null);
             if (access == null || !access.isActive()) {
                 throw new StompAuthenticationException("This account has been suspended. Sign in again.");
+            }
+            // A token from before the last password change opens nothing (Business Rule 32).
+            if (access.tokenIssuedBeforePasswordChange(claims.getIssuedAt())) {
+                throw new StompAuthenticationException(PasswordChangedSignOut.MESSAGE);
             }
             // No notifications until the temporary password is replaced (Business Rule 27).
             if (access.mustChangePassword()) {
@@ -64,8 +74,12 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
             // What every later /user/queue/... delivery is routed by.
             accessor.setUser(new StompPrincipal(userId, role));
+        } catch (StompAuthenticationException ex) {
+            socketRegistry.signInRefused(sessionId);
+            throw ex;
         } catch (JwtException | IllegalArgumentException ex) {
             // Bad signature, expired, or a role name this build no longer knows.
+            socketRegistry.signInRefused(sessionId);
             throw new StompAuthenticationException("This session's token was rejected. Sign in again.");
         }
 

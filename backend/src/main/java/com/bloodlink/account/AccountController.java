@@ -1,5 +1,6 @@
 package com.bloodlink.account;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.bloodlink.account.dto.AccountResponse;
 import com.bloodlink.account.dto.ChangePasswordPayload;
 import com.bloodlink.account.dto.UpdateAccountPayload;
+import com.bloodlink.auth.dto.AuthResponse;
 import com.bloodlink.security.AuthenticatedUser;
 
 import jakarta.validation.Valid;
@@ -45,15 +47,15 @@ public class AccountController {
     }
 
     /**
-     * Changes the caller's password given their current one; 204 on success, never echoing the password.
-     * A wrong current password is a 401 keyed to the currentPassword field (see IncorrectCurrentPasswordException).
+     * Changes the caller's password given their current one (wrong: a 401 on currentPassword). Answers like sign-in, with
+     * a fresh token, because every older one stops working (Business Rule 32); never echoes the password.
      */
     @PatchMapping("/password")
-    public ResponseEntity<Void> changePassword(
+    public ResponseEntity<AuthResponse> changePassword(
         @Valid @RequestBody ChangePasswordPayload payload,
         @AuthenticationPrincipal AuthenticatedUser principal
     ) {
-        accountService.changeMyPassword(principal.getId(), payload);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+            .body(accountService.changeMyPassword(principal.getId(), payload));
     }
 }

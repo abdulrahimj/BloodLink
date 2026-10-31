@@ -1,8 +1,9 @@
 /* BloodLink — API client: where the API lives, how the JWT is attached,
    and how a failed response becomes an error a form can show. */
 
-import { clearSession, getToken } from '../auth/session.js';
+import { clearSession, endSession, getToken } from '../auth/session.js';
 import { apiBaseUrlFrom } from '../lib/apiBaseUrl.js';
+import { PASSWORD_CHANGED_MESSAGE, sessionEndFor } from '../lib/sessionEnd.js';
 
 /** Exported so the WebSocket client can open its socket against the same origin
  *  the REST calls use — two base URLs would eventually disagree. */
@@ -79,12 +80,15 @@ export async function apiDownload(path) {
 }
 
 /**
- * Shared failure handling: a 401 discards the session unless it names a typed field,
+ * Shared failure handling: a 401 discards the session unless it names a typed field (lib/sessionEnd.js),
  * and any non-2xx becomes an ApiError with the server's message and field errors.
  */
 function throwIfFailed(response, payload, sentToken) {
-  const rejectsTypedField = payload?.fieldErrors && Object.keys(payload.fieldErrors).length > 0;
-  if (response.status === 401 && sentToken && !rejectsTypedField) {
+  const ending = sessionEndFor(response.status, payload, sentToken);
+  if (ending === 'password-changed') {
+    // Signed in before the password changed (Business Rule 32): back to Sign in, saying why.
+    endSession(PASSWORD_CHANGED_MESSAGE);
+  } else if (ending === 'expired') {
     clearSession();
   }
 
