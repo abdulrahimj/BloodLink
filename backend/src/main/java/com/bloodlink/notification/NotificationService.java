@@ -472,6 +472,18 @@ public class NotificationService {
             NotificationType.DONATION_BOOKING_REMINDER, booking.getBloodBank(), null, now);
     }
 
+    /** The message an account holder gets when an administrator resets their password (Business Rule 31). */
+    static final String PASSWORD_RESET_MESSAGE = "Your password was reset by an administrator. If you did not ask for "
+        + "this, contact your blood bank or BloodLink administrator.";
+
+    /** PASSWORD_RESET_BY_ADMIN to the account holder, in the reset's transaction; nothing for a suspended account. */
+    @Transactional
+    public void notifyPasswordResetByAdmin(User account) {
+        if (account.getStatus() == AccountStatus.ACTIVE) {
+            dispatch(List.of(account), PASSWORD_RESET_MESSAGE, NotificationType.PASSWORD_RESET_BY_ADMIN);
+        }
+    }
+
     /** "Aminata Kamara booked a donation for 31 Oct 2026, morning." */
     static String bookedMessage(DonationBooking booking) {
         return "%s booked a donation for %s, %s.".formatted(

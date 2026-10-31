@@ -58,8 +58,9 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | DONATION_BOOKED | the booked bank's **active** BLOOD_BANK_STAFF | a donor books a donation visit (Business Rule 29) |
 | DONATION_BOOKING_CANCELLED | the booked bank's **active** BLOOD_BANK_STAFF | the donor cancels, a donation at a different bank cancels it automatically, or an administrator suspends the donor (Business Rule 29) |
 | DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job: the day before the visit, or on the day if that one was never sent; once per booking (Business Rule 29) |
+| PASSWORD_RESET_BY_ADMIN | the account holder, if **active** | an administrator resets their password (Business Rule 31) |
 
-Eleven types in all (V27).
+Twelve types in all (V28).
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -300,7 +301,7 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29), PASSWORD_RESET_BY_ADMIN (added in V28, Business Rule 31) |
 | is_read | boolean |
 | created_at | timestamp |
 | accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
@@ -317,8 +318,8 @@ message template ("<bank> needs <group> donors. …"); later appeals are stamped
 |---|---|
 | id | UUID, PK |
 | actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28) |
-| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions and for DONOR_BLOOD_GROUP_UPDATED (the donor's account) only |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31) |
+| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET only |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
@@ -1379,6 +1380,42 @@ Donation 0..1–1 DonationBooking
       `components/PasswordChecklist.jsx` shows the five parts under every box where a password is chosen
       (Register, Profile Settings' Change password, Set your own password), each ticking green as it is met, and
       the submit button stays disabled until `meetsPasswordRule` is true. The server still decides.
+31. **An administrator can reset another account's password to a temporary one, which that account must replace at
+    its next sign-in.** The project owner's decisions, final. Before it there was no way back into an account whose
+    password was forgotten. Schema: `V28` (the audit action and the notification type only; no column). A public
+    "Forgot password?" request is a separate, later step and does not exist yet.
+    - **`POST /api/admin/users/{id}/password-reset`**, ADMIN only (SecurityConfig's `/api/admin/**`: any other role
+      403, no token 401), `AdminUserService.resetPassword`. It generates a password with Business Rule 14's
+      `TemporaryPasswordGenerator` (always meeting Business Rule 30), stores only its BCrypt hash, so the old password
+      stops working at once, and sets `must_change_password` (Business Rule 27), so the next sign-in opens only the
+      "Set your own password" screen. **200 with `{ account, temporaryPassword }`** (`PasswordResetResponse`), sent with
+      `Cache-Control: no-store`; it is the only time the password is readable. It never appears in a log, an audit
+      entry, a notification or an exception message. The account row is locked first (`UserRepository.lockById`), so
+      two administrators resetting at once take turns and the password shown last is the one that works.
+    - **Who:** never your own account (409, "…Change it in Profile Settings…", nothing read or written); another
+      administrator's, yes. A **suspended** account may be reset and **stays suspended**: the reset never changes status.
+      An unknown id is a 404.
+    - **Audited** as `ADMIN_PASSWORD_RESET` in the same transaction (actor the administrator, subject the account,
+      `AuditAction.isAccountAction`), details "Password reset to a temporary one; they must choose a new password at
+      their next sign-in." plus " The account stays suspended." when it is. The Audit Log labels it "Password reset" (amber).
+    - **The holder is notified** with `PASSWORD_RESET_BY_ADMIN` ("Your password was reset by an administrator. If you
+      did not ask for this, contact your blood bank or BloodLink administrator."), a row first then a push, to an
+      **active** account only (a suspended one gets nothing). They read it once they have set their own password,
+      since the gate (Business Rule 27) holds back everything else. Bell dot red.
+    - **Sign-ins made before the reset:** the flag is read from the database on every request, so a token issued
+      before the reset reaches only `GET /api/users/me` and the password change at once, and cannot change the
+      password (it does not know the temporary one). **Known limit:** once the holder sets their own new password the
+      flag clears, and that older token works fully again until it expires (24 hours at most), as any token issued
+      before a password change does (Business Rule 16). Not fixed here; proposed to the owner.
+    - **Frontend (Admin Console › All Accounts):** the Action column has one "Manage" button (the name opens it too),
+      opening `ManageAccountDialog` with three sections: **Details** (Business Rule 17's phone and facility, "Save
+      changes"), **Password** ("Reset password", a confirmation naming the account, then the temporary password shown
+      once, large, with Copy and "Give this to the user. It will not be shown again."; cleared when the box closes)
+      and **Account status** (Suspend, confirmed, or Reactivate; a red band). On your own row the box shows your phone
+      and a note pointing to Profile Settings, with no reset or suspend. Suspend is disabled with the server's
+      last-active-administrator message when it applies (`lib/manageAccount.js`, tested). Escape closes the box (or
+      an open confirmation first), Tab stays inside it, and it fits a 390px phone. The table row is fetched again after
+      every change.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1418,6 +1455,9 @@ listed so nothing is forgotten when the chapters are next revised.
   per-batch stock (expired units were counted as stock), the expired / usable / expiring-soon
   definitions, first-expiry-first-out issuing (a sequence figure), and the "discard stock" use case
   (Stage 3). Business Rule 7's merging is gone.
+- **Chapters 3, 4 and 5 — use cases and narrative for admin password reset (Business Rule 31, V28).** A new
+  administrator use case "reset an account's password"; `audit_log` gains ADMIN_PASSWORD_RESET and `notifications`
+  PASSWORD_RESET_BY_ADMIN.
 
 ## Actors (roles) and what each can do
 
@@ -1425,8 +1465,8 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, activate/suspend), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator) must set its own password at first sign-in before anything else (Business Rule 27)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27)
 
 ## Conventions
 
@@ -1459,7 +1499,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

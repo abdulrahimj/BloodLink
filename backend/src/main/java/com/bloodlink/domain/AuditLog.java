@@ -48,8 +48,8 @@ public class AuditLog {
     @Column(name = "action", nullable = false, length = 32, updatable = false)
     private AuditAction action;
 
-    /** The account the action was done to — set for the four ACCOUNT_ actions and DONOR_BLOOD_GROUP_UPDATED,
-     *  null for a facility creation (V14). */
+    /** The account the action was done to — set for the four ACCOUNT_ actions, DONOR_BLOOD_GROUP_UPDATED and
+     *  ADMIN_PASSWORD_RESET, null for a facility creation (V14). */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_user_id", updatable = false)
     private User target;

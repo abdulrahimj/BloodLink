@@ -40,6 +40,7 @@ import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
@@ -65,6 +66,7 @@ class AdminUserServiceTest {
     @Mock private HospitalRepository hospitalRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private DonationBookingService donationBookingService;
+    @Mock private NotificationService notificationService;
 
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -74,7 +76,8 @@ class AdminUserServiceTest {
     @BeforeEach
     void setUp() {
         service = new AdminUserService(
-            userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService);
+            userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService,
+            notificationService);
     }
 
     /** Creates an account as the test administrator — the actor the audit log records. */
@@ -868,5 +871,43 @@ class AdminUserServiceTest {
         service.updateStatus(staff.getId(), AccountStatus.SUSPENDED, admin());
 
         verifyNoInteractions(donationBookingService);
+    }
+
+    // ---------- resetting a password (Business Rule 31) ----------
+
+    @Test
+    void anAdministratorCannotResetTheirOwnPasswordAndNothingIsRead() {
+        assertThatThrownBy(() -> service.resetPassword(ADMIN_ID, admin()))
+            .isInstanceOf(ConflictException.class)
+            .hasMessageContaining("Profile Settings");
+
+        verifyNoInteractions(userRepository, auditLogService, notificationService);
+    }
+
+    @Test
+    void aResetSuspendedAccountStaysSuspendedMustChangeItsPasswordAndTheEntryNeverHoldsIt() {
+        User target = bankStaff();
+        target.setStatus(AccountStatus.SUSPENDED);
+        when(userRepository.lockById(target.getId())).thenReturn(Optional.of(target));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var response = service.resetPassword(target.getId(), admin());
+
+        assertThat(target.getStatus()).isEqualTo(AccountStatus.SUSPENDED);
+        assertThat(target.isMustChangePassword()).isTrue();
+        assertThat(passwordEncoder.matches(response.temporaryPassword(), target.getPasswordHash())).isTrue();
+        ArgumentCaptor<String> details = ArgumentCaptor.forClass(String.class);
+        verify(auditLogService).record(eq(ADMIN_ID), eq(AuditAction.ADMIN_PASSWORD_RESET), eq(target), details.capture());
+        assertThat(details.getValue()).contains("stays suspended").doesNotContain(response.temporaryPassword());
+        verify(notificationService).notifyPasswordResetByAdmin(target);
+    }
+
+    @Test
+    void resettingAnUnknownAccountIsA404() {
+        UUID unknown = UUID.randomUUID();
+        when(userRepository.lockById(unknown)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resetPassword(unknown, admin())).isInstanceOf(NotFoundException.class);
+        verifyNoInteractions(auditLogService, notificationService);
     }
 }

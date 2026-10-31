@@ -19,6 +19,7 @@ import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.admin.dto.EditAccountPayload;
+import com.bloodlink.admin.dto.PasswordResetResponse;
 import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.booking.DonationBookingService;
 import com.bloodlink.common.LikePattern;
@@ -29,6 +30,7 @@ import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
@@ -38,7 +40,7 @@ import com.bloodlink.web.error.InvalidFieldException;
 import com.bloodlink.web.error.NotFoundException;
 
 /**
- * Admin Console account management: search/filter/page accounts, create staff and admins, edit, suspend.
+ * Admin Console account management: search/filter/page accounts, create staff and admins, edit, reset a password, suspend.
  * Every change is audit-logged in the same transaction (Business Rule 17); suspension is enforced at login and per request.
  */
 @Service
@@ -57,6 +59,7 @@ public class AdminUserService {
     private final PasswordEncoder passwordEncoder;
     private final AuditLogService auditLogService;
     private final DonationBookingService donationBookingService;
+    private final NotificationService notificationService;
 
     AdminUserService(
         UserRepository userRepository,
@@ -64,7 +67,8 @@ public class AdminUserService {
         HospitalRepository hospitalRepository,
         PasswordEncoder passwordEncoder,
         AuditLogService auditLogService,
-        DonationBookingService donationBookingService
+        DonationBookingService donationBookingService,
+        NotificationService notificationService
     ) {
         this.userRepository = userRepository;
         this.bloodBankRepository = bloodBankRepository;
@@ -72,6 +76,7 @@ public class AdminUserService {
         this.passwordEncoder = passwordEncoder;
         this.auditLogService = auditLogService;
         this.donationBookingService = donationBookingService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -345,6 +350,33 @@ public class AdminUserService {
             }
         }
         return AdminUserResponse.from(saved);
+    }
+
+    /**
+     * Gives another account a new temporary password (Business Rule 31): hash stored, must-change set, status untouched,
+     * audited and the holder notified in one transaction. The plaintext leaves only in the response, never a log.
+     */
+    @Transactional
+    public PasswordResetResponse resetPassword(UUID targetUserId, AuthenticatedUser principal) {
+        if (principal.getId().equals(targetUserId)) {
+            throw new ConflictException(
+                "You cannot reset your own password here. Change it in Profile Settings, using your current password."
+            );
+        }
+        User user = userRepository.lockById(targetUserId)
+            .orElseThrow(() -> new NotFoundException("No user found for this id."));
+
+        String temporaryPassword = TemporaryPasswordGenerator.generate();
+        user.setPasswordHash(passwordEncoder.encode(temporaryPassword));
+        user.setMustChangePassword(true);
+        User saved = userRepository.save(user);
+
+        auditLogService.record(principal.getId(), AuditAction.ADMIN_PASSWORD_RESET, saved,
+            "Password reset to a temporary one; they must choose a new password at their next sign-in."
+                + (saved.getStatus() == AccountStatus.SUSPENDED ? " The account stays suspended." : ""));
+        notificationService.notifyPasswordResetByAdmin(saved);
+
+        return new PasswordResetResponse(AdminUserResponse.from(saved), temporaryPassword);
     }
 
     /**

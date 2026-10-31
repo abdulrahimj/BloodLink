@@ -41,6 +41,14 @@ export function updateUserStatus(userId, status) {
 }
 
 /**
+ * POST /api/admin/users/{id}/password-reset (Business Rule 31): resolves to { account, temporaryPassword }, shown once.
+ * Your own account is a 409; the account's status is left as it was.
+ */
+export function resetUserPassword(userId) {
+  return apiRequest(`/api/admin/users/${userId}/password-reset`, { method: 'POST' });
+}
+
+/**
  * PATCH /api/admin/users/{id}/details: the full desired phone and facility (Business Rule 17); not role, not your own.
  * Resolves to the updated account; real changes are audit-logged.
  */

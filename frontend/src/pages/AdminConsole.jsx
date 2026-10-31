@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  getAdminUsers, getUserCounts, createStaffAccount, updateUserStatus, editAccountDetails, getAuditLog,
+  getAdminUsers, getUserCounts, createStaffAccount, updateUserStatus, editAccountDetails, resetUserPassword, getAuditLog,
   getDonationTrends, getRequestOutcomes, createBloodBank, createHospital,
 } from "../api/admin.js";
 import {
@@ -10,6 +10,10 @@ import {
   describeUserAccountsEmptyState, stateAfterAccountCreated, roleCount,
 } from "../lib/userAccounts.js";
 import { describeShowingRange } from "../lib/pagination.js";
+import {
+  OWN_ACCOUNT_NOTE, RESET_PASSWORD_HINT, TEMPORARY_PASSWORD_NOTE, manageAccountOptions, needsActiveAdminCount,
+  resetConfirmationText, suspendConfirmationText,
+} from "../lib/manageAccount.js";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getHospitals } from "../api/hospitals.js";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -21,7 +25,7 @@ import {
   clampPageToAvailable, isAuditLogEmpty, describeAuditLogPage,
 } from "../lib/auditLogPaging.js";
 
-/* BloodLink — Admin Console: Dashboard (stats and charts), User Accounts (search, create, edit, suspend),
+/* BloodLink — Admin Console: Dashboard (stats and charts), User Accounts (search, create, and a Manage box per account),
    Audit Log, Blood Banks/Hospitals, Reports and Settings, switched from the sidebar. */
 
 /* Shared SVG stroke presets (declared before any component uses them) */
@@ -61,7 +65,7 @@ const SELF_LOADING_VIEWS = [VIEW.SETTINGS, VIEW.AUDIT, VIEW.REPORTS];
 /** The header's title and subtitle for each view. */
 const HEADINGS = {
   [VIEW.DASHBOARD]: { title: "System Administration", sub: "BloodLink · Makeni City deployment" },
-  [VIEW.USERS]: { title: "User Accounts", sub: "Create, edit, suspend and reactivate accounts across all four roles" },
+  [VIEW.USERS]: { title: "User Accounts", sub: "Create accounts, and manage each one: details, password reset, suspend and reactivate" },
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
@@ -70,7 +74,7 @@ const HEADINGS = {
 };
 
 /** How each audit action reads and its badge tone: suspend red, reactivate green, creations (facilities too) navy,
- * edits amber (a donor blood group change too, Business Rule 28), and a write-off red (blood lost). */
+ * edits amber (a donor blood group change and a password reset too, Business Rules 28, 31), and a write-off red (blood lost). */
 const AUDIT_ACTION = {
   ACCOUNT_CREATED: { label: "Created", tone: "ad-au-created" },
   ACCOUNT_EDITED: { label: "Edited", tone: "ad-au-edited" },
@@ -80,6 +84,7 @@ const AUDIT_ACTION = {
   HOSPITAL_CREATED: { label: "Created", tone: "ad-au-created" },
   STOCK_WRITTEN_OFF: { label: "Written off", tone: "ad-au-written-off" },
   DONOR_BLOOD_GROUP_UPDATED: { label: "Blood group", tone: "ad-au-edited" },
+  ADMIN_PASSWORD_RESET: { label: "Password reset", tone: "ad-au-edited" },
 };
 
 /** The line under an audit entry's subject: the account's role, the kind of facility, or a stock batch. */
@@ -405,6 +410,13 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
            without granting or removing access, so it takes neither the red of
            Suspend nor the green of Activate. */
         .ad-acts { display: flex; align-items: center; gap: 6px; }
+        /* The name opens the Manage box too: a button that reads as the name, underlined on hover. */
+        .ad-user-link {
+          background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; color: inherit;
+          text-align: left; font-size: inherit;
+        }
+        .ad-user-link:hover { text-decoration: underline; color: var(--navy); }
+        .ad-user-link:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; border-radius: 3px; }
         .ad-act--edit { border-color: rgba(28,58,94,.35); color: var(--navy); }
         .ad-act--edit:hover { background: rgba(28,58,94,.07); border-color: var(--navy); }
 
@@ -595,6 +607,43 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
           background: #FBF1E3; color: #8A5A10; border-radius: 7px;
           font-size: clamp(10px, 1.4vh, 12.5px); font-weight: 600; line-height: 1.45;
           padding: clamp(8px, 1.15vh, 11px) 11px;
+        }
+        /* ===== MANAGE BOX — Business Rules 17, 31 ===== */
+        .ad-manage { width: min(540px, 100%); max-height: min(92vh, 860px); }
+        .ad-manage-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+        .ad-manage-sub { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 5px; }
+        .ad-manage-x {
+          flex: 0 0 auto; width: 32px; height: 32px; border-radius: 7px; cursor: pointer;
+          background: #FFF; border: 1.5px solid var(--line); color: #3A3A3A; font-size: 20px; line-height: 1;
+        }
+        .ad-manage-x:hover { background: #F6F7F8; border-color: #C9CDD3; }
+        .ad-manage-x:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        .ad-manage-section {
+          border-top: 1px solid var(--line); padding-top: clamp(9px, 1.3vh, 14px);
+          display: flex; flex-direction: column; gap: clamp(6px, .9vh, 10px);
+        }
+        .ad-manage-h { margin: 0; font-size: clamp(11px, 1.6vh, 13.5px); font-weight: 800; color: var(--navy); }
+        .ad-manage-hint { font-size: clamp(9.5px, 1.35vh, 12px); }
+        .ad-manage-note {
+          background: #EEF2F7; color: var(--navy); border-radius: 7px; font-weight: 600; line-height: 1.45;
+          font-size: clamp(10px, 1.4vh, 12.5px); padding: clamp(8px, 1.15vh, 11px) 11px;
+        }
+        /* The risky section: red heading on a pale red band, set apart from the two above. */
+        .ad-manage-danger {
+          border-top: 2px solid rgba(200,16,46,.35); background: #FDF3F5;
+          margin: 0 calc(-1 * clamp(16px, 1.6vw, 26px)); padding: clamp(10px, 1.4vh, 14px) clamp(16px, 1.6vw, 26px);
+        }
+        .ad-manage-danger .ad-manage-h { color: var(--red); }
+        .ad-manage-confirm {
+          border: 1.5px solid var(--line); border-radius: 8px; background: #FFF;
+          padding: clamp(9px, 1.3vh, 13px) 12px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .ad-manage-confirm .ad-dialog-actions { flex-wrap: wrap; }
+        .ad-cred-value--big { font-size: clamp(18px, 2.8vh, 24px); }
+        @media (max-width: 520px) {
+          .ad-scrim { padding: 8px; }
+          .ad-manage { max-height: 96vh; }
+          .ad-manage .ad-dialog-actions button { flex: 1 1 auto; }
         }
         .ad-summary { font-size: clamp(11px, 1.55vh, 13.5px); line-height: 1.6; color: #3A3A3A; }
         .ad-summary b { color: var(--ink); }
@@ -836,66 +885,20 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [newCredentials, setNewCredentials] = useState(null);
 
-  // Which row's status is mid-write and the last write failure, shown against that row.
-  const [updatingUserId, setUpdatingUserId] = useState(null);
-  const [actionError, setActionError] = useState(null);
+  // The account open in the Manage box (Business Rules 17, 31), or null when it is closed.
+  const [managing, setManaging] = useState(null);
 
-  // The user awaiting a confirmed Suspend, or null when the dialog is closed.
-  const [confirmingSuspend, setConfirmingSuspend] = useState(null);
-  const cancelSuspendRef = useRef(null);
+  // Focus goes back to the row's Manage button when the box closes.
+  const returnFocusRef = useRef(null);
 
-  // The account whose phone / facility is being edited, or null (Business Rule 17).
-  const [editing, setEditing] = useState(null);
-
-  // Guards the async status write against this view having been left (the
-  // administrator clicking Dashboard mid-request) before the response arrives.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  /** Escape closes the confirmation and focus moves to Cancel, as in the Dashboard's Reject dialog. */
-  useEffect(() => {
-    if (!confirmingSuspend) return;
-
-    cancelSuspendRef.current?.focus();
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") setConfirmingSuspend(null);
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [confirmingSuspend]);
-
-  /**
-   * Writes one status change, then refetches the page, since the account may no longer belong under the filter.
-   */
-  async function applyStatus(targetUserId, status) {
-    setUpdatingUserId(targetUserId);
-    setActionError(null);
-    try {
-      await updateUserStatus(targetUserId, status);
-      if (!mountedRef.current) return;
-      reloadPage();
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setActionError({ userId: targetUserId, message: err.message });
-    } finally {
-      if (mountedRef.current) setUpdatingUserId(null);
-    }
+  function openManage(account, event) {
+    returnFocusRef.current = event?.currentTarget ?? null;
+    setManaging(account);
   }
 
-  function handleConfirmSuspend() {
-    const targetUserId = confirmingSuspend.id;
-    setConfirmingSuspend(null);
-    applyStatus(targetUserId, "SUSPENDED");
-  }
-
-  /** After a phone or facility edit, fetches the page again — the same approach as
-   *  applyStatus, since a phone search may no longer match the edited account. */
-  function handleEdited() {
-    setEditing(null);
-    reloadPage();
+  function closeManage() {
+    setManaging(null);
+    returnFocusRef.current?.focus();
   }
 
   /**
@@ -1013,9 +1016,6 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
               )}
               {!loadError && rows.map((u) => {
                 const facility = u.bloodBankName ?? u.hospitalName;
-                const busy = updatingUserId === u.id;
-                // The backend refuses self-suspension (409) too, but a button that explains itself is better.
-                const isSelf = u.id === user.id;
 
                 return (
                   <tr key={u.id}>
@@ -1024,7 +1024,12 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
                         <div className="ad-user-av" style={{ background: roleColor(u.role) }}>
                           {initials(u.fullName)}
                         </div>
-                        <span className="ad-user-name">{u.fullName}</span>
+                        <button
+                          type="button" className="ad-user-name ad-user-link"
+                          aria-label={`Manage ${u.fullName}`} onClick={(event) => openManage(u, event)}
+                        >
+                          {u.fullName}
+                        </button>
                       </div>
                     </td>
                     <td><span className={`ad-pill ${rolePill(u.role)}`}>{ROLE_LABEL[u.role] ?? u.role}</span></td>
@@ -1032,42 +1037,13 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
                     <td><span className={`ad-badge ad-b-${u.status.toLowerCase()}`}>{statusLabel(u.status)}</span></td>
                     <td className="ad-muted">{formatRelativeTime(u.createdAt)}</td>
                     <td>
-                      <div className="ad-acts">
-                        {/* Disabled on your own row, as the server refuses it:
-                            nobody changes their own phone (Business Rule 16). */}
-                        <button
-                          type="button"
-                          className="ad-act ad-act--edit"
-                          disabled={busy || isSelf}
-                          title={isSelf ? "Another administrator has to change your phone or facility." : undefined}
-                          onClick={() => setEditing(u)}
-                        >
-                          Edit
-                        </button>
-                        {u.status === "ACTIVE" ? (
-                          <button
-                            type="button"
-                            className="ad-act"
-                            disabled={busy || isSelf}
-                            title={isSelf ? "You cannot suspend your own account." : undefined}
-                            onClick={() => setConfirmingSuspend(u)}
-                          >
-                            {busy ? "…" : "Suspend"}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="ad-act ad-act--go"
-                            disabled={busy}
-                            onClick={() => applyStatus(u.id, "ACTIVE")}
-                          >
-                            {busy ? "…" : "Activate"}
-                          </button>
-                        )}
-                      </div>
-                      {actionError?.userId === u.id && (
-                        <div className="ad-act-error">{actionError.message}</div>
-                      )}
+                      {/* One button for everything about the account: details, password and status. */}
+                      <button
+                        type="button" className="ad-act ad-act--edit"
+                        aria-label={`Manage ${u.fullName}`} onClick={(event) => openManage(u, event)}
+                      >
+                        Manage
+                      </button>
                     </td>
                   </tr>
                 );
@@ -1105,15 +1081,6 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
         </div>
       </div>
 
-      {confirmingSuspend && (
-        <SuspendConfirmation
-          targetUser={confirmingSuspend}
-          cancelRef={cancelSuspendRef}
-          onCancel={() => setConfirmingSuspend(null)}
-          onConfirm={handleConfirmSuspend}
-        />
-      )}
-
       {creatingAccount && (
         <CreateAccountDialog
           banks={banks}
@@ -1123,13 +1090,14 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
         />
       )}
 
-      {editing && (
-        <EditAccountDialog
-          account={editing}
+      {managing && (
+        <ManageAccountDialog
+          account={managing}
+          currentUserId={user.id}
           banks={banks}
           hospitals={hospitals}
-          onCancel={() => setEditing(null)}
-          onSaved={handleEdited}
+          onClose={closeManage}
+          onChanged={reloadPage}
         />
       )}
 
@@ -1144,10 +1112,270 @@ function UserAccountsView({ user, counts, onAccountsChanged, banks, hospitals })
 }
 
 /**
- * Edit another account's phone and facility (Business Rule 17), pre-filled; Save enables only on a change.
- * The facility picker matches the existing role, which itself is not editable here.
+ * The "Manage" box for one account: Details (phone and facility, Business Rule 17), Password (reset, Business Rule 31)
+ * and Account status (suspend / reactivate). Rules from lib/manageAccount.js; the server enforces each one again.
  */
-function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
+function ManageAccountDialog({ account: initialAccount, currentUserId, banks, hospitals, onClose, onChanged }) {
+  const [account, setAccount] = useState(initialAccount);
+  const [activeAdminCount, setActiveAdminCount] = useState(null);
+  // Which confirmation is open inside the box ("reset" or "suspend"), and which write is running.
+  const [confirming, setConfirming] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  // The temporary password, held only while the box is open: closing unmounts this and clears it too.
+  const [temporaryPassword, setTemporaryPassword] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const dialogRef = useRef(null);
+  const confirmCancelRef = useRef(null);
+  const copyRef = useRef(null);
+
+  const options = manageAccountOptions(account, { currentUserId, activeAdminCount });
+
+  // The last-active-administrator rule needs the count of active administrators, read with the existing search.
+  useEffect(() => {
+    if (!needsActiveAdminCount(account, currentUserId)) return undefined;
+    let cancelled = false;
+    getAdminUsers({ role: "ADMIN", status: "ACTIVE", page: 0, size: 1 })
+      .then((data) => { if (!cancelled) setActiveAdminCount(data.totalElements); })
+      .catch(() => { /* The server still refuses the last administrator's suspension with its own message. */ });
+    return () => { cancelled = true; };
+  }, [account, currentUserId]);
+
+  /** Closes the box, clearing the temporary password first; never while a write is running. */
+  function close() {
+    if (busy) return;
+    setTemporaryPassword(null);
+    onClose();
+  }
+
+  // Focus starts inside the box; Escape cancels an open confirmation first, then closes; Tab stays inside.
+  useEffect(() => {
+    focusables(dialogRef.current)[0]?.focus();
+  }, []);
+  useEffect(() => {
+    if (confirming) confirmCancelRef.current?.focus();
+  }, [confirming]);
+  useEffect(() => {
+    if (temporaryPassword) copyRef.current?.focus();
+  }, [temporaryPassword]);
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (confirming && !busy) setConfirming(null); else close();
+      } else if (event.key === "Tab") {
+        trapTab(event, dialogRef.current);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  });
+
+  /** After any change: the box shows the account as it now is, and the table fetches its page again. */
+  function applied(updated) {
+    setAccount(updated);
+    onChanged(updated);
+  }
+
+  async function handleReset() {
+    setBusy("reset");
+    setActionError(null);
+    try {
+      const result = await resetUserPassword(account.id);
+      setConfirming(null);
+      setTemporaryPassword(result.temporaryPassword);
+      applied(result.account);
+    } catch (err) {
+      setConfirming(null);
+      setActionError({ section: "password", message: err.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleStatus(status) {
+    setBusy("status");
+    setActionError(null);
+    try {
+      applied(await updateUserStatus(account.id, status));
+      setConfirming(null);
+    } catch (err) {
+      setConfirming(null);
+      setActionError({ section: "status", message: err.message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyPassword() {
+    try {
+      await navigator.clipboard.writeText(temporaryPassword);
+      setCopied(true);
+      setCopyFailed(false);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setCopyFailed(true);
+    }
+  }
+
+  const facility = account.hospitalName ?? account.bloodBankName;
+
+  return (
+    <div
+      className="ad-scrim"
+      // A click outside closes only when no password is on screen, so it cannot be lost by a stray click.
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !temporaryPassword) close(); }}
+    >
+      <div
+        ref={dialogRef}
+        className="ad-dialog ad-dialog--form ad-manage"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ad-manage-title"
+      >
+        <div className="ad-manage-head">
+          <div>
+            <div className="ad-dialog-title" id="ad-manage-title">Manage {account.fullName}</div>
+            <div className="ad-manage-sub">
+              <span className={`ad-pill ${rolePill(account.role)}`}>{ROLE_LABEL[account.role] ?? account.role}</span>
+              <span className={`ad-badge ad-b-${account.status.toLowerCase()}`}>{statusLabel(account.status)}</span>
+            </div>
+          </div>
+          <button type="button" className="ad-manage-x" aria-label={`Close Manage ${account.fullName}`} onClick={close}>
+            ×
+          </button>
+        </div>
+
+        <section className="ad-manage-section" aria-labelledby="ad-manage-details">
+          <h3 className="ad-manage-h" id="ad-manage-details">Details</h3>
+          {options.canEditDetails ? (
+            <AccountDetailsForm account={account} banks={banks} hospitals={hospitals} onSaved={applied} />
+          ) : (
+            <div className="ad-summary">
+              Signs in with <b>{account.phone}</b>
+              {facility && <><br />Works at <b>{facility}</b></>}
+            </div>
+          )}
+        </section>
+
+        {options.isSelf && <div className="ad-manage-note">{OWN_ACCOUNT_NOTE}</div>}
+
+        {options.canResetPassword && (
+          <section className="ad-manage-section" aria-labelledby="ad-manage-password">
+            <h3 className="ad-manage-h" id="ad-manage-password">Password</h3>
+            {temporaryPassword ? (
+              <div className="ad-cred">
+                <div className="ad-cred-label">Temporary password</div>
+                <div className="ad-cred-row">
+                  <span className="ad-cred-value ad-cred-value--big">{temporaryPassword}</span>
+                  <button
+                    type="button" ref={copyRef} className={`ad-copy${copied ? " ad-copy--done" : ""}`}
+                    aria-label="Copy the temporary password" onClick={copyPassword}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                {copyFailed && (
+                  <span className="ad-err">Could not copy automatically — select the password above and copy it.</span>
+                )}
+                <div className="ad-warn">{TEMPORARY_PASSWORD_NOTE}</div>
+              </div>
+            ) : confirming === "reset" ? (
+              <InlineConfirmation
+                text={resetConfirmationText(account)} confirmLabel="Reset password" busy={busy === "reset"}
+                cancelRef={confirmCancelRef} onCancel={() => setConfirming(null)} onConfirm={handleReset}
+              />
+            ) : (
+              <>
+                <div className="ad-hint ad-manage-hint">{RESET_PASSWORD_HINT}</div>
+                <div>
+                  <button
+                    type="button" className="ad-act ad-act--edit" disabled={Boolean(busy)}
+                    onClick={() => { setActionError(null); setConfirming("reset"); }}
+                  >
+                    Reset password
+                  </button>
+                </div>
+              </>
+            )}
+            {actionError?.section === "password" && <div className="ad-form-alert" role="alert">{actionError.message}</div>}
+          </section>
+        )}
+
+        {options.showStatus && (
+          <section className="ad-manage-section ad-manage-danger" aria-labelledby="ad-manage-status">
+            <h3 className="ad-manage-h" id="ad-manage-status">Account status</h3>
+            {options.statusAction === "SUSPENDED" ? (
+              confirming === "suspend" ? (
+                <InlineConfirmation
+                  text={suspendConfirmationText(account)} confirmLabel="Suspend account" busy={busy === "status"}
+                  cancelRef={confirmCancelRef} onCancel={() => setConfirming(null)}
+                  onConfirm={() => handleStatus("SUSPENDED")}
+                />
+              ) : (
+                <>
+                  <div className="ad-hint ad-manage-hint">
+                    Suspending signs them out at once and stops them signing in. Any administrator can reactivate it.
+                  </div>
+                  <div>
+                    <button
+                      type="button" className="ad-act" disabled={Boolean(busy) || Boolean(options.suspendBlockedReason)}
+                      aria-describedby={options.suspendBlockedReason ? "ad-manage-blocked" : undefined}
+                      onClick={() => { setActionError(null); setConfirming("suspend"); }}
+                    >
+                      Suspend account
+                    </button>
+                  </div>
+                  {options.suspendBlockedReason && (
+                    <div className="ad-err" id="ad-manage-blocked">{options.suspendBlockedReason}</div>
+                  )}
+                </>
+              )
+            ) : (
+              <>
+                <div className="ad-hint ad-manage-hint">This account is suspended and cannot sign in.</div>
+                <div>
+                  <button
+                    type="button" className="ad-act ad-act--go" disabled={Boolean(busy)}
+                    onClick={() => handleStatus("ACTIVE")}
+                  >
+                    {busy === "status" ? "Reactivating…" : "Reactivate account"}
+                  </button>
+                </div>
+              </>
+            )}
+            {actionError?.section === "status" && <div className="ad-form-alert" role="alert">{actionError.message}</div>}
+          </section>
+        )}
+
+        <div className="ad-dialog-actions">
+          <button type="button" className="ad-dialog-cancel" onClick={close} disabled={Boolean(busy)}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A confirmation step shown inside the Manage box, in place of the button that opened it. */
+function InlineConfirmation({ text, confirmLabel, busy, cancelRef, onCancel, onConfirm }) {
+  return (
+    <div className="ad-manage-confirm" role="group" aria-label="Confirm">
+      <div className="ad-dialog-body">{text}</div>
+      <div className="ad-dialog-actions">
+        <button type="button" className="ad-dialog-cancel" ref={cancelRef} onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button type="button" className="ad-dialog-confirm" onClick={onConfirm} disabled={busy}>
+          {busy ? "Working…" : confirmLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The Manage box's Details section: phone and facility, pre-filled; Save enables only on a change. */
+function AccountDetailsForm({ account, banks, hospitals, onSaved }) {
   const needsHospital = account.role === "HOSPITAL_STAFF";
   const needsBank = account.role === "BLOOD_BANK_STAFF";
 
@@ -1155,18 +1383,9 @@ function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
   const [hospitalId, setHospitalId] = useState(account.hospitalId ?? "");
   const [bloodBankId, setBloodBankId] = useState(account.bloodBankId ?? "");
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
-  const phoneRef = useRef(null);
-
-  /** Escape closes, and focus starts on the phone — the same keyboard handling
-   *  as this screen's other dialogs. */
-  useEffect(() => {
-    phoneRef.current?.focus();
-    const onKeyDown = (event) => { if (event.key === "Escape" && !saving) onCancel(); };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onCancel, saving]);
 
   const changed =
     phone.trim() !== account.phone
@@ -1182,6 +1401,7 @@ function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
     if (saving || !changed) return;
 
     setSaving(true);
+    setSaved(false);
     setError(null);
     setFieldErrors({});
     try {
@@ -1191,97 +1411,96 @@ function EditAccountDialog({ account, banks, hospitals, onCancel, onSaved }) {
         hospitalId: needsHospital ? hospitalId || null : null,
         bloodBankId: needsBank ? bloodBankId || null : null,
       });
+      setPhone(updated.phone);
+      setSaved(true);
       onSaved(updated);
     } catch (err) {
-      // A phone already in use (409), a malformed phone or a missing facility (400,
-      // keyed to the field). The backend's messages are written for display.
+      // A phone already in use (409), a malformed phone or a missing facility (400, keyed to the field).
       setError(err.message);
       setFieldErrors(err.fieldErrors ?? {});
+    } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div
-      className="ad-scrim"
-      onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onCancel(); }}
-    >
-      <form
-        className="ad-dialog ad-dialog--form"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ad-edit-title"
-        onSubmit={handleSubmit}
-        noValidate
-      >
-        <div className="ad-dialog-title" id="ad-edit-title">Edit {account.fullName}</div>
-        <div className="ad-dialog-body">
-          Changes to the sign-in phone number take effect at their next sign-in. Every change is
-          recorded in the Audit Log under your name.
+    <form className="ad-form" onSubmit={handleSubmit} noValidate>
+      <div className="ad-hint">
+        A new sign-in phone number works from their next sign-in. Every change is recorded in the Audit Log under your name.
+      </div>
+      {error && <div className="ad-form-alert" role="alert">{error}</div>}
+      {saved && !changed && <div className="ad-fac-done" role="status">Changes saved.</div>}
+
+      <div className="ad-field">
+        <label className="ad-label" htmlFor="ad-edit-phone">Phone number</label>
+        <input
+          id="ad-edit-phone" className={inputClass("ad-input", "phone")} type="tel"
+          autoComplete="off" placeholder="076 900 005 or +232 76 900 005"
+          value={phone} onChange={(e) => setPhone(e.target.value)}
+        />
+        {fieldErrors.phone && <span className="ad-err">{fieldErrors.phone}</span>}
+        <span className="ad-hint">This is what they sign in with. Role cannot be changed here.</span>
+      </div>
+
+      {needsHospital && (
+        <div className="ad-field">
+          <label className="ad-label" htmlFor="ad-edit-hospital">Hospital</label>
+          <select
+            id="ad-edit-hospital" className={inputClass("ad-select", "hospitalId")}
+            value={hospitalId} onChange={(e) => setHospitalId(e.target.value)}
+          >
+            <option value="">Select a hospital…</option>
+            {hospitals.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+          </select>
+          {fieldErrors.hospitalId && <span className="ad-err">{fieldErrors.hospitalId}</span>}
         </div>
+      )}
 
-        {error && <div className="ad-form-alert" role="alert">{error}</div>}
-
-        <div className="ad-form">
-          <div className="ad-field">
-            <span className="ad-label">Role</span>
-            <div>
-              <span className={`ad-pill ${rolePill(account.role)}`}>{ROLE_LABEL[account.role] ?? account.role}</span>
-            </div>
-            <span className="ad-hint">Role cannot be changed here.</span>
-          </div>
-
-          <div className="ad-field">
-            <label className="ad-label" htmlFor="ad-edit-phone">Phone number</label>
-            <input
-              id="ad-edit-phone" ref={phoneRef} className={inputClass("ad-input", "phone")} type="tel"
-              autoComplete="off" placeholder="076 900 005 or +232 76 900 005"
-              value={phone} onChange={(e) => setPhone(e.target.value)}
-            />
-            {fieldErrors.phone && <span className="ad-err">{fieldErrors.phone}</span>}
-            <span className="ad-hint">This is what they sign in with.</span>
-          </div>
-
-          {needsHospital && (
-            <div className="ad-field">
-              <label className="ad-label" htmlFor="ad-edit-hospital">Hospital</label>
-              <select
-                id="ad-edit-hospital" className={inputClass("ad-select", "hospitalId")}
-                value={hospitalId} onChange={(e) => setHospitalId(e.target.value)}
-              >
-                <option value="">Select a hospital…</option>
-                {hospitals.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-              </select>
-              {fieldErrors.hospitalId && <span className="ad-err">{fieldErrors.hospitalId}</span>}
-            </div>
-          )}
-
-          {needsBank && (
-            <div className="ad-field">
-              <label className="ad-label" htmlFor="ad-edit-bank">Blood bank</label>
-              <select
-                id="ad-edit-bank" className={inputClass("ad-select", "bloodBankId")}
-                value={bloodBankId} onChange={(e) => setBloodBankId(e.target.value)}
-              >
-                <option value="">Select a blood bank…</option>
-                {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-              {fieldErrors.bloodBankId && <span className="ad-err">{fieldErrors.bloodBankId}</span>}
-            </div>
-          )}
+      {needsBank && (
+        <div className="ad-field">
+          <label className="ad-label" htmlFor="ad-edit-bank">Blood bank</label>
+          <select
+            id="ad-edit-bank" className={inputClass("ad-select", "bloodBankId")}
+            value={bloodBankId} onChange={(e) => setBloodBankId(e.target.value)}
+          >
+            <option value="">Select a blood bank…</option>
+            {banks.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          {fieldErrors.bloodBankId && <span className="ad-err">{fieldErrors.bloodBankId}</span>}
         </div>
+      )}
 
-        <div className="ad-dialog-actions">
-          <button type="button" className="ad-dialog-cancel" onClick={onCancel} disabled={saving}>
-            Cancel
-          </button>
-          <button type="submit" className="ad-dialog-confirm ad-dialog-confirm--go" disabled={saving || !changed}>
-            {saving ? "Saving…" : "Save changes"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <div>
+        <button type="submit" className="ad-act ad-act--edit" disabled={saving || !changed}>
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </form>
   );
+}
+
+/** The enabled, visible controls inside a box, in tab order. */
+function focusables(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+  ));
+}
+
+/** Keeps Tab and Shift+Tab inside the box, wrapping from the last control to the first and back. */
+function trapTab(event, root) {
+  const items = focusables(root);
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const inside = root.contains(document.activeElement);
+  if (event.shiftKey && (document.activeElement === first || !inside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !inside)) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 /**
@@ -1815,41 +2034,6 @@ function NewAccountCredentials({ result, onDone }) {
         <div className="ad-dialog-actions">
           <button type="button" className="ad-dialog-confirm ad-dialog-confirm--go" ref={doneRef} onClick={onDone}>
             I have saved the password
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * A light confirmation before suspending: access is denied immediately but any administrator can reverse it,
- * so it says only who is affected and what happens.
- */
-function SuspendConfirmation({ targetUser, cancelRef, onCancel, onConfirm }) {
-  return (
-    <div
-      className="ad-scrim"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
-    >
-      <div
-        className="ad-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ad-suspend-title"
-        aria-describedby="ad-suspend-body"
-      >
-        <div className="ad-dialog-title" id="ad-suspend-title">Suspend {targetUser.fullName}?</div>
-        <div className="ad-dialog-body" id="ad-suspend-body">
-          They will be signed out immediately and unable to sign back in until an
-          administrator reactivates the account.
-        </div>
-        <div className="ad-dialog-actions">
-          <button type="button" className="ad-dialog-cancel" ref={cancelRef} onClick={onCancel}>
-            Cancel
-          </button>
-          <button type="button" className="ad-dialog-confirm" onClick={onConfirm}>
-            Suspend account
           </button>
         </div>
       </div>

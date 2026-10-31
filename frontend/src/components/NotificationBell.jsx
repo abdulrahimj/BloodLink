@@ -23,7 +23,7 @@ function relativeTime(instantIso) {
 
 /**
  * Dot colour by notification type: red shortage or expired stock, amber awaiting a decision or coming up soon,
- * navy settled, green an appeal or a booked visit (Business Rule 29).
+ * navy settled, green an appeal or a booked visit (Business Rule 29), red a password reset by an administrator (31).
  */
 const TYPE_TONE = {
   LOW_STOCK_ALERT: 'var(--red)',
@@ -36,6 +36,7 @@ const TYPE_TONE = {
   DONATION_BOOKED: 'var(--green)',
   DONATION_BOOKING_CANCELLED: 'var(--navy)',
   DONATION_BOOKING_REMINDER: 'var(--amber)',
+  PASSWORD_RESET_BY_ADMIN: 'var(--red)',
 };
 
 /**

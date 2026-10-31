@@ -20,5 +20,7 @@ public enum NotificationType {
     /** A booking was cancelled, by the donor or automatically on a donation elsewhere (Business Rule 29, V27). */
     DONATION_BOOKING_CANCELLED,
     /** The day-before reminder to the donor, once per booking (Business Rule 29, V27). */
-    DONATION_BOOKING_REMINDER
+    DONATION_BOOKING_REMINDER,
+    /** Tells an account holder an administrator reset their password (Business Rule 31, V28). Active accounts only. */
+    PASSWORD_RESET_BY_ADMIN
 }

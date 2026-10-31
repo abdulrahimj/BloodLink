@@ -62,6 +62,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> lockByRoleAndStatus(@Param("role") Role role, @Param("status") AccountStatus status);
 
     /**
+     * One account, row-locked until the transaction ends: two administrators resetting the same password at once
+     * take turns, so the temporary password shown last is the one that works (Business Rule 31).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> lockById(@Param("id") UUID id);
+
+    /**
      * Every account with one role and status; only the fallback when no bank can cover a new request,
      * so the alert goes to all active bank staff. Not for user-facing listings.
      */

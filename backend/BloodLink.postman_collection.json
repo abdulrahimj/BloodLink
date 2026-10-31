@@ -1547,6 +1547,32 @@
               }
             },
             {
+              "name": "Reset User Password",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/api/admin/users/{{otherUserId}}/password-reset",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "admin",
+                    "users",
+                    "{{otherUserId}}",
+                    "password-reset"
+                  ]
+                },
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{adminToken}}"
+                  }
+                ],
+                "description": "Business Rule 31: gives another account a new temporary password (meeting the password rule) and answers 200 with `{ account, temporaryPassword }`, sent with `Cache-Control: no-store`. This is the only time the password is readable; only its hash is stored, so the old password stops working at once. The account must choose its own password at its next sign-in (`mustChangePassword`). No body. Your own account is a 409 (use Profile Settings); another administrator may be reset; a suspended account stays suspended. Audited as `ADMIN_PASSWORD_RESET`, and an active holder gets a `PASSWORD_RESET_BY_ADMIN` notification; neither contains the password. Non-admin tokens 403, no token 401, unknown id 404."
+              }
+            },
+            {
               "name": "Suspend User",
               "request": {
                 "method": "PATCH",

@@ -2,6 +2,7 @@ package com.bloodlink.admin;
 
 import java.util.UUID;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -19,6 +20,7 @@ import com.bloodlink.admin.dto.AdminUserResponse;
 import com.bloodlink.admin.dto.CreateStaffAccountPayload;
 import com.bloodlink.admin.dto.CreatedAccountResponse;
 import com.bloodlink.admin.dto.EditAccountPayload;
+import com.bloodlink.admin.dto.PasswordResetResponse;
 import com.bloodlink.admin.dto.UpdateUserStatusPayload;
 import com.bloodlink.security.AuthenticatedUser;
 
@@ -100,6 +102,20 @@ public class AdminUserController {
         @AuthenticationPrincipal AuthenticatedUser principal
     ) {
         return adminUserService.editAccount(userId, payload, principal);
+    }
+
+    /**
+     * Resets another account's password to a new temporary one (Business Rule 31); 200 with it, shown only once.
+     * no-store so no browser or proxy keeps the password; the caller's own account is refused (409).
+     */
+    @PostMapping("/{userId}/password-reset")
+    public ResponseEntity<PasswordResetResponse> resetPassword(
+        @PathVariable UUID userId,
+        @AuthenticationPrincipal AuthenticatedUser principal
+    ) {
+        return ResponseEntity.ok()
+            .cacheControl(CacheControl.noStore())
+            .body(adminUserService.resetPassword(userId, principal));
     }
 
     /**
