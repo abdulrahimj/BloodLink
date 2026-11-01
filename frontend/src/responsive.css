@@ -393,6 +393,22 @@
     overflow-wrap: anywhere;
   }
 
+  /* A row's badge and buttons drop to their own line under the text (Business Rules 20 and 35). */
+  .hp-root.hp-root .hp-item,
+  .bb-root.bb-root .bb-item {
+    flex-wrap: wrap;
+  }
+
+  .hp-root.hp-root .hp-item-body,
+  .bb-root.bb-root .bb-item-body {
+    flex: 1 1 calc(100% - 50px);
+  }
+
+  .hp-root.hp-root .hp-item-cancel {
+    margin-left: auto;
+    min-height: 36px;
+  }
+
   .dn-root.dn-root .dn-elig,
   .dn-root.dn-root .dn-cert,
   .bd-root.bd-root .bd-controls,

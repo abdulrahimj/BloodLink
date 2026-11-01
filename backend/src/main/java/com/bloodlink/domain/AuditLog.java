@@ -25,7 +25,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * One audit log entry (Business Rule 17, V12): append-only via no setters, @Immutable, no update path, V12 triggers.
- * Exactly one subject per entry (account, facility or batch), matching the action and enforced by a CHECK.
+ * Exactly one subject per entry (account, facility, batch or request), matching the action and enforced by a CHECK.
  */
 @Entity
 @Table(name = "audit_log")
@@ -39,8 +39,8 @@ public class AuditLog {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    /** Who acted: an administrator, or bank staff for STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED.
-     *  Null only for SIGN_IN_LOCKED (V31): the system did that, and nobody was signed in. */
+    /** Who acted: an administrator, bank staff for STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED, or
+     *  hospital staff for REQUEST_CANCELLED. Null only for SIGN_IN_LOCKED (V31): the system did that, and nobody was signed in. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "actor_user_id", updatable = false)
     private User actor;
@@ -69,6 +69,11 @@ public class AuditLog {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_batch_id", updatable = false)
     private BloodInventoryBatch targetBatch;
+
+    /** The request cancelled — set only for REQUEST_CANCELLED (Business Rule 35, V32). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "target_blood_request_id", updatable = false)
+    private BloodRequest targetBloodRequest;
 
     /** What changed, in words, as of the moment it changed. Never a password. */
     @Column(name = "details", nullable = false, updatable = false, columnDefinition = "text")
@@ -121,6 +126,17 @@ public class AuditLog {
         entry.actor = actor;
         entry.action = AuditAction.STOCK_WRITTEN_OFF;
         entry.targetBatch = batch;
+        entry.details = details;
+        entry.createdAt = createdAt;
+        return entry;
+    }
+
+    /** A REQUEST_CANCELLED entry (Business Rule 35), stamped with the same instant as the cancellation. */
+    public static AuditLog recordRequestCancelled(User actor, BloodRequest request, String details, Instant createdAt) {
+        AuditLog entry = new AuditLog();
+        entry.actor = actor;
+        entry.action = AuditAction.REQUEST_CANCELLED;
+        entry.targetBloodRequest = request;
         entry.details = details;
         entry.createdAt = createdAt;
         return entry;

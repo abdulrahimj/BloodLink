@@ -77,6 +77,7 @@ const REQUEST_STATUS_LABEL = {
   PARTIALLY_FULFILLED: "Partly filled",
   FULFILLED: "Fulfilled",
   REJECTED: "Rejected",
+  CANCELLED: "Cancelled",
 };
 
 const URGENCY_LABEL = { ROUTINE: "Routine", URGENT: "Urgent", EMERGENCY: "Emergency" };

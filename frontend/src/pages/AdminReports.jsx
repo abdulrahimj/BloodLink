@@ -138,6 +138,7 @@ export default function AdminReports() {
         .ar-bar-fill.is-red { background: var(--red); }
         .ar-bar-fill.is-amber { background: var(--amber); }
         .ar-bar-fill.is-green { background: var(--green); }
+        .ar-bar-fill.is-grey { background: #5F6570; }
         .ar-bar-value { font-weight: 700; min-width: 2.5em; text-align: right; display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
 
         /* status badges, toned like the inventory pages */
@@ -378,7 +379,7 @@ function StockBody({ data }) {
 }
 
 function RequestsBody({ data }) {
-  const statusTone = { PENDING: "amber", PARTIALLY_FULFILLED: "", FULFILLED: "green", REJECTED: "red" };
+  const statusTone = { PENDING: "amber", PARTIALLY_FULFILLED: "", FULFILLED: "green", REJECTED: "red", CANCELLED: "grey" };
   const urgencyTone = { ROUTINE: "", URGENT: "amber", EMERGENCY: "red" };
   return (
     <>

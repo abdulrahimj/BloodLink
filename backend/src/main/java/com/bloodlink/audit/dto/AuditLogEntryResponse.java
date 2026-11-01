@@ -5,12 +5,13 @@ import java.util.UUID;
 
 import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodInventoryBatch;
+import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.Role;
 
 /**
  * One row of the Audit Log page, with actor and subject ids and names (current names; details as written then).
- * targetType says if it is an account, a facility, a batch or an unregistered number; a batch shows group, expiry and bank.
+ * targetType says if it is an account, a facility, a batch, a request or an unregistered number; a batch shows group, expiry and bank.
  */
 public record AuditLogEntryResponse(
     UUID id,
@@ -26,7 +27,7 @@ public record AuditLogEntryResponse(
 ) {
 
     /** What kind of thing an entry's subject is. */
-    public enum TargetType { USER, BLOOD_BANK, HOSPITAL, BATCH, PHONE_NUMBER }
+    public enum TargetType { USER, BLOOD_BANK, HOSPITAL, BATCH, REQUEST, PHONE_NUMBER }
 
     /** Shown as the actor of an entry the system made itself (SIGN_IN_LOCKED, Business Rule 34). */
     private static final String SYSTEM_ACTOR = "System";
@@ -50,6 +51,10 @@ public record AuditLogEntryResponse(
             type = TargetType.BATCH;
             targetId = entry.getTargetBatch().getId();
             targetName = describeBatch(entry.getTargetBatch());
+        } else if (entry.getTargetBloodRequest() != null) {
+            type = TargetType.REQUEST;
+            targetId = entry.getTargetBloodRequest().getId();
+            targetName = describeRequest(entry.getTargetBloodRequest());
         } else if (entry.getTarget() == null) {
             // A locked number with no account (Business Rule 34): the number itself is in the details.
             type = TargetType.PHONE_NUMBER;
@@ -74,6 +79,12 @@ public record AuditLogEntryResponse(
             entry.getDetails(),
             entry.getCreatedAt()
         );
+    }
+
+    /** A request's stand-in for a name: its short reference, group and its hospital's current name. */
+    private static String describeRequest(BloodRequest request) {
+        return "Request #%s, %s — %s".formatted(
+            request.getReference(), request.getBloodType().getLabel(), request.getHospital().getName());
     }
 
     /** A batch's stand-in for a name: its fixed group and expiry date, plus its bank's current name. */

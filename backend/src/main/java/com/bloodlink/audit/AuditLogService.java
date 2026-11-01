@@ -14,6 +14,7 @@ import com.bloodlink.audit.dto.AuditLogPageResponse;
 import com.bloodlink.domain.AuditLog;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
+import com.bloodlink.domain.BloodRequest;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
 import com.bloodlink.domain.enums.AuditAction;
@@ -69,6 +70,12 @@ public class AuditLogService {
     public void recordStockWrittenOff(UUID actorId, BloodInventoryBatch batch, String details, Instant at) {
         User actor = userRepository.getReferenceById(actorId);
         auditLogRepository.save(AuditLog.recordStockWrittenOff(actor, batch, details, at));
+    }
+
+    /** Records a cancelled request as REQUEST_CANCELLED (Business Rule 35), committing with the cancellation. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordRequestCancelled(User actor, BloodRequest request, String details, Instant at) {
+        auditLogRepository.save(AuditLog.recordRequestCancelled(actor, request, details, at));
     }
 
     /**

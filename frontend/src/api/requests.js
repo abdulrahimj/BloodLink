@@ -23,6 +23,17 @@ export function getRequests(bloodBankId) {
 }
 
 /**
+ * POST /api/requests/{id}/cancel: the raising hospital withdraws its own open request (Business Rule 35);
+ * returns the request as it now stands. A 409 carries a message ready to show.
+ */
+export function cancelBloodRequest(requestId, { reason, note }) {
+  return apiRequest(`/api/requests/${requestId}/cancel`, {
+    method: 'POST',
+    body: { reason, note },
+  });
+}
+
+/**
  * PATCH /api/requests/{id}: CONTRIBUTE (units capped at what is outstanding; more than held is a 409) or REJECT.
  * bloodBankId only for an ADMIN's REJECT; 409s carry messages ready to show.
  */

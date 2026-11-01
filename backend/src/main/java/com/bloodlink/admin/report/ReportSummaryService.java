@@ -125,8 +125,8 @@ public class ReportSummaryService {
     }
 
     /**
-     * Section 2: requests raised within the range; fulfilment rate = fulfilled / (fulfilled + rejected),
-     * null (shown as "No data") when nothing has been decided.
+     * Section 2: requests raised within the range; fulfilment rate = fulfilled / (fulfilled + rejected), null (shown as
+     * "No data") when nothing has been decided. Cancelled counts as raised, not decided: the banks never answered it.
      */
     @Transactional(readOnly = true)
     public RequestReport requests(ReportRange range) {

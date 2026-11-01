@@ -190,7 +190,7 @@ class ReportsIT {
         assertThat(report.total()).isEqualTo(5);
         assertThat(report.byStatus()).containsExactly(
             new CountRow("PENDING", 1), new CountRow("PARTIALLY_FULFILLED", 1),
-            new CountRow("FULFILLED", 2), new CountRow("REJECTED", 1));
+            new CountRow("FULFILLED", 2), new CountRow("REJECTED", 1), new CountRow("CANCELLED", 0));
         assertThat(report.decided()).isEqualTo(3);
         assertThat(report.fulfilmentRate()).isCloseTo(2.0 / 3.0, within(1e-9));
         assertThat(report.filledByMoreThanOneBank()).isEqualTo(1);

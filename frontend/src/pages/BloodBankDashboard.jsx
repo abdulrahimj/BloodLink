@@ -5,6 +5,7 @@ import { actOnRequest, getRequests } from "../api/requests.js";
 import { getUpcomingBookings } from "../api/bookings.js";
 import { describeBookingWhen, refreshesBookings, upcomingBloodGroupLabel } from "../lib/donationBooking.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import { cancelledReasonLine, cancelledSummary, refreshesBankRequests } from "../lib/requestCancellation.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -84,10 +85,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
       // REQUEST_PROGRESS (Business Rule 20): another bank contributed, so outstanding units and this row's cap changed.
-      if (notification.type === "NEW_REQUEST" || notification.type === "LOW_STOCK_ALERT"
-          || notification.type === "REQUEST_PROGRESS") {
-        refresh();
-      }
+      // REQUEST_CANCELLED (Business Rule 35): the request leaves this list, or closes as this bank's history.
+      if (refreshesBankRequests(notification.type)) refresh();
       if (refreshesBookings(notification.type)) loadVisits();
     },
   });
@@ -312,6 +311,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
         .bb-b-partially-fulfilled { background: var(--green); }
         .bb-b-fulfilled { background: var(--navy); }
         .bb-b-rejected { background: var(--red); }
+        .bb-b-cancelled { background: #5F6570; }
 
         /* request list */
         /* overflow-y: auto rather than the mockup's hidden — the fixture was a
@@ -362,6 +362,8 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
            same "units have arrived" tone as the Partially fulfilled badge. */
         .bb-item-progress { font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600; color: var(--green); margin-top: 2px; }
         .bb-item-ours { color: var(--ink-muted); font-weight: 500; }
+        /* A cancelled request this bank gave to (Business Rule 35): grey, like its badge. */
+        .bb-item-cancelled { font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600; color: #5F6570; margin-top: 2px; line-height: 1.35; }
 
         /* Wiring states — additive, same tokens, for real async data. */
         .bb-loading, .bb-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
@@ -571,6 +573,10 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
                   <div className="bb-panel-link">View All</div>
                 </div>
                 <div className="bb-list">
+                  {/* A refused action on a request that has since left this list has no row left to show it on. */}
+                  {actionError && !requests.some((r) => r.id === actionError.requestId) && (
+                    <div className="bb-item-error" role="alert">{actionError.message}</div>
+                  )}
                   {requests.length === 0 && (
                     <div className="bb-empty">No requests yet.</div>
                   )}
@@ -633,12 +639,19 @@ function IncomingRequest({ request: r, bloodBankId, stock, busy, error, onContri
           {r.unitsRequested} Unit{r.unitsRequested > 1 ? "s" : ""} of {r.bloodType} · {titleCase(r.urgencyLevel)}
         </div>
         <div className="bb-item-sub">
-          {r.hospitalName} · {formatRelativeTime(r.createdAt)}
+          #{r.reference} · {r.hospitalName} · {formatRelativeTime(r.createdAt)}
           {r.patientReference ? ` · ${r.patientReference}` : ""}
         </div>
         {/* Progress, shown as soon as anything has been given — and only then, so
             an untouched request is not cluttered with "0 of 4". */}
-        {r.unitsContributed > 0 && (
+        {r.status === "CANCELLED" ? (
+          <div className="bb-item-cancelled">
+            {cancelledSummary(r)}
+            {ourUnits > 0 && ` · ${ourUnits} from us`}
+            <br />
+            {cancelledReasonLine(r)}
+          </div>
+        ) : r.unitsContributed > 0 && (
           <div className="bb-item-progress">
             {r.unitsContributed} of {r.unitsRequested} units received
             {outstanding > 0 ? ` · ${outstanding} still needed` : " · complete"}

@@ -11,5 +11,7 @@ public record RequestOutcomeResponse(
     long partiallyFulfilled,
     long fulfilled,
     long rejected,
+    /** Withdrawn by the hospital that raised it (Business Rule 35). */
+    long cancelled,
     long total
 ) {}

@@ -129,7 +129,7 @@ class AdminReportServiceTest {
 
         RequestOutcomeResponse outcomes = service.requestOutcomes();
 
-        assertThat(outcomes).isEqualTo(new RequestOutcomeResponse(0, 0, 0, 0, 0));
+        assertThat(outcomes).isEqualTo(new RequestOutcomeResponse(0, 0, 0, 0, 0, 0));
     }
 
     @Test

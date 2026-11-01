@@ -36,8 +36,8 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     }
 
     /**
-     * A bank's incoming requests: every one still short of units (Business Rule 20) plus every one it contributed to,
-     * newest first, minus any it declined (Business Rule 11).
+     * A bank's incoming requests: every open one (Business Rule 20) plus every one it contributed to, newest first,
+     * minus any it declined (Business Rule 11). So a cancelled request stays only as a contributor's history (Rule 35).
      */
     @Query("""
         select r from BloodRequest r
@@ -74,8 +74,8 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     long countOpenForBank(@Param("bloodBankId") UUID bloodBankId);
 
     /**
-     * Loads one request under a row write lock for contribute and decline: the whole concurrency guarantee of
-     * Business Rule 20, so two simultaneous contributions cannot both read the same total and over-cover it.
+     * Loads one request under a row write lock for contribute, decline and cancel: the whole concurrency guarantee of
+     * Business Rules 20 and 35, so simultaneous actions take turns and each sees what the one before it did.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from BloodRequest r where r.id = :id")

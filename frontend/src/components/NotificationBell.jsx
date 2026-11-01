@@ -29,6 +29,7 @@ const TYPE_TONE = {
   LOW_STOCK_ALERT: 'var(--red)',
   NEW_REQUEST: 'var(--amber)',
   REQUEST_STATUS_CHANGE: 'var(--navy)',
+  REQUEST_CANCELLED: 'var(--navy)',
   DONATION_APPEAL: 'var(--green)',
   DONATION_APPEAL_ACCEPTED: 'var(--navy)',
   BATCH_EXPIRY_REMINDER: 'var(--amber)',

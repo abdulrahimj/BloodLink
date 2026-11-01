@@ -28,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodInventoryBatch;
@@ -37,6 +38,7 @@ import com.bloodlink.domain.BloodRequestDecline;
 import com.bloodlink.domain.ContributionAllocation;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
@@ -50,6 +52,7 @@ import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.ContributionAllocationRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
+import com.bloodlink.request.dto.CancelRequestPayload;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
@@ -83,6 +86,7 @@ class RequestServiceTest {
     @Mock private BloodBankRepository bloodBankRepository;
     @Mock private UserRepository userRepository;
     @Mock private NotificationService notificationService;
+    @Mock private AuditLogService auditLogService;
 
     private RequestService service;
 
@@ -98,7 +102,9 @@ class RequestServiceTest {
             bloodBankRepository,
             userRepository,
             new ActingBankResolver(userRepository, bloodBankRepository),
-            notificationService
+            notificationService,
+            auditLogService,
+            CLOCK
         );
     }
 
@@ -161,10 +167,42 @@ class RequestServiceTest {
             .thenReturn(List.of(batches));
     }
 
-    /** save() returns its argument, as the real repository does for an update. */
+    /** save() returns its argument, with an id as the real repository gives a new row. */
     private void echoSavedRequest() {
         when(bloodRequestRepository.save(any(BloodRequest.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
+            .thenAnswer(invocation -> {
+                BloodRequest saved = invocation.getArgument(0);
+                if (saved.getId() == null) {
+                    saved.setId(REQUEST_ID);
+                }
+                return saved;
+            });
+    }
+
+    // ---------- cancelling (Business Rule 35) ----------
+
+    /** The filter stops a suspended account first; this is the service's own second check, before any lock. */
+    @Test
+    void suspendedHospitalStaffCannotCancelEvenIfTheyGetPastTheFilter() {
+        User suspended = staff(null, hospital());
+        suspended.setStatus(AccountStatus.SUSPENDED);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> service.cancel(
+            REQUEST_ID, new CancelRequestPayload("NO_LONGER_NEEDED", null), principal(Role.HOSPITAL_STAFF)
+        )).isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(bloodRequestRepository, auditLogService);
+    }
+
+    /** Refused here as well as by SecurityConfig. */
+    @Test
+    void anAdministratorCannotCancelOnAHospitalsBehalf() {
+        assertThatThrownBy(() -> service.cancel(
+            REQUEST_ID, new CancelRequestPayload("NO_LONGER_NEEDED", null), principal(Role.ADMIN)
+        )).isInstanceOf(AccessDeniedException.class);
+
+        verifyNoInteractions(bloodRequestRepository, auditLogService);
     }
 
     // ---------- submitting ----------

@@ -301,6 +301,8 @@ public class NotificationService {
                 + "Please submit a new request if the blood is still needed.").formatted(subject);
             // PENDING (created, or a decline that was not the last): nothing to tell the hospital.
             case PENDING -> null;
+            // Cancelling is the hospital's own act, and act() never reaches here with this status.
+            case CANCELLED -> null;
         };
 
         if (message == null) {
@@ -374,6 +376,32 @@ public class NotificationService {
             .toList();
 
         dispatch(recipients, message, NotificationType.REQUEST_PROGRESS);
+    }
+
+    // ======================================== REQUEST_CANCELLED ========================================
+
+    /**
+     * Tells every bank that could see or had contributed to a request that it was cancelled (Business Rule 35): every bank
+     * but those that declined, as a contributor cannot decline. The note stays out, as it may name a patient.
+     */
+    @Transactional
+    public void notifyRequestCancelled(BloodRequest request) {
+        Set<UUID> declined = new HashSet<>(declineRepository.findBloodBankIdsByRequestId(request.getId()));
+
+        List<User> recipients = bloodBankRepository.findAll().stream()
+            .map(BloodBank::getId)
+            .filter(bankId -> !declined.contains(bankId))
+            .flatMap(bankId -> activeBankStaff(bankId).stream())
+            .toList();
+
+        dispatch(recipients, requestCancelledMessage(request), NotificationType.REQUEST_CANCELLED);
+    }
+
+    /** "Request #3F2A9C1B (O+, 5 units) was cancelled by Holy Spirit Hospital: No longer needed." */
+    static String requestCancelledMessage(BloodRequest request) {
+        return "Request #%s (%s, %s) was cancelled by %s: %s.".formatted(
+            request.getReference(), request.getBloodType().getLabel(), units(request.getUnitsRequested()),
+            request.getHospital().getName(), request.getCancellationReason().getLabel());
     }
 
     // =============================== BATCH_EXPIRY_REMINDER and BATCH_EXPIRED ===============================

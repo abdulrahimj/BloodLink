@@ -2,7 +2,7 @@ package com.bloodlink.domain.enums;
 
 /**
  * A request's lifecycle (Business Rule 20): PENDING -> PARTIALLY_FULFILLED -> FULFILLED, or PENDING -> REJECTED.
- * Derived from the contributions, never set by hand; APPROVED was removed in V15.
+ * Derived from the contributions, except CANCELLED, the hospital's own decision (Business Rule 35).
  */
 public enum RequestStatus {
 
@@ -17,7 +17,11 @@ public enum RequestStatus {
 
     /** Every blood bank declined it while it was still untouched (Business Rule 11).
      *  Terminal. */
-    REJECTED;
+    REJECTED,
+
+    /** Withdrawn by the hospital that raised it while still open (Business Rule 35, V32). Units already
+     *  supplied stay supplied. Terminal. */
+    CANCELLED;
 
     /** True while units are still outstanding — the two states a bank may act on. */
     public boolean isOpen() {

@@ -24,5 +24,7 @@ public enum NotificationType {
     /** Tells an account holder an administrator reset their password (Business Rule 31, V28). Active accounts only. */
     PASSWORD_RESET_BY_ADMIN,
     /** Tells every active administrator someone asked for a password reset from Sign in (Business Rule 33, V30). */
-    PASSWORD_RESET_REQUESTED
+    PASSWORD_RESET_REQUESTED,
+    /** A hospital cancelled a request, sent to the active staff of every bank still watching it (Business Rule 35, V32). */
+    REQUEST_CANCELLED
 }

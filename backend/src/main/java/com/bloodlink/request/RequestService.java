@@ -1,5 +1,7 @@
 package com.bloodlink.request;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -9,6 +11,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bloodlink.audit.AuditLogService;
 import com.bloodlink.bloodbank.ActingBankResolver;
 import com.bloodlink.domain.BloodBank;
 import com.bloodlink.domain.BloodRequest;
@@ -16,7 +19,9 @@ import com.bloodlink.domain.BloodRequestContribution;
 import com.bloodlink.domain.BloodRequestDecline;
 import com.bloodlink.domain.Hospital;
 import com.bloodlink.domain.User;
+import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.BloodType;
+import com.bloodlink.domain.enums.RequestCancellationReason;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
@@ -26,6 +31,7 @@ import com.bloodlink.repository.BloodRequestDeclineRepository;
 import com.bloodlink.repository.BloodRequestRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
+import com.bloodlink.request.dto.CancelRequestPayload;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
@@ -42,6 +48,9 @@ import com.bloodlink.web.error.NotFoundException;
 @Service
 public class RequestService {
 
+    /** The size of blood_requests.cancellation_note (V32). */
+    private static final int CANCELLATION_NOTE_MAX_LENGTH = 200;
+
     private final BloodRequestRepository bloodRequestRepository;
     private final BatchStockService batchStockService;
     private final BloodRequestDeclineRepository declineRepository;
@@ -50,6 +59,8 @@ public class RequestService {
     private final UserRepository userRepository;
     private final ActingBankResolver actingBankResolver;
     private final NotificationService notificationService;
+    private final AuditLogService auditLogService;
+    private final Clock clock;
 
     RequestService(
         BloodRequestRepository bloodRequestRepository,
@@ -59,7 +70,9 @@ public class RequestService {
         BloodBankRepository bloodBankRepository,
         UserRepository userRepository,
         ActingBankResolver actingBankResolver,
-        NotificationService notificationService
+        NotificationService notificationService,
+        AuditLogService auditLogService,
+        Clock clock
     ) {
         this.bloodRequestRepository = bloodRequestRepository;
         this.batchStockService = batchStockService;
@@ -71,6 +84,8 @@ public class RequestService {
         this.userRepository = userRepository;
         this.actingBankResolver = actingBankResolver;
         this.notificationService = notificationService;
+        this.auditLogService = auditLogService;
+        this.clock = clock;
     }
 
     /**
@@ -135,13 +150,14 @@ public class RequestService {
             case DONOR -> List.of();
         };
 
-        return withContributions(requests);
+        return withContributions(requests, principal.getRole() == Role.BLOOD_BANK_STAFF);
     }
 
     /**
      * Attaches each request's contributions, in one grouped query for the whole page rather than one per row.
+     * Bank staff get the bank shape, without a cancellation's note or the staff member's name (Business Rule 35).
      */
-    private List<BloodRequestResponse> withContributions(List<BloodRequest> requests) {
+    private List<BloodRequestResponse> withContributions(List<BloodRequest> requests, boolean bankView) {
         if (requests.isEmpty()) {
             return List.of();
         }
@@ -150,7 +166,12 @@ public class RequestService {
             .collect(Collectors.groupingBy(contribution -> contribution.getBloodRequest().getId()));
 
         return requests.stream()
-            .map(request -> BloodRequestResponse.from(request, byRequest.getOrDefault(request.getId(), List.of())))
+            .map(request -> {
+                List<BloodRequestContribution> contributions = byRequest.getOrDefault(request.getId(), List.of());
+                return bankView
+                    ? BloodRequestResponse.forBank(request, contributions)
+                    : BloodRequestResponse.from(request, contributions);
+            })
             .toList();
     }
 
@@ -184,6 +205,77 @@ public class RequestService {
     }
 
     /**
+     * The raising hospital withdraws its own open request (Business Rule 35). The row is locked first, so exactly one of
+     * a cancel and a contribution wins. Supplied units and stock are untouched; only the remaining part is cancelled.
+     */
+    @Transactional
+    public BloodRequestResponse cancel(UUID requestId, CancelRequestPayload payload, AuthenticatedUser principal) {
+        // Refused here as well as in SecurityConfig, so an ADMIN can never cancel on a hospital's behalf.
+        User user = principal.getRole() == Role.HOSPITAL_STAFF ? requireUser(principal) : null;
+        if (user == null || user.getStatus() != AccountStatus.ACTIVE || user.getHospital() == null) {
+            throw new AccessDeniedException("Only active staff of the hospital that made a request can cancel it.");
+        }
+        Hospital hospital = user.getHospital();
+
+        RequestCancellationReason reason = requireCancellationReason(payload.reason());
+        String note = blankToNull(payload.note());
+        checkCancellationNote(reason, note);
+
+        // Another hospital's request is a 404 like a missing one: hospitals see only their own (Business Rule 9).
+        BloodRequest request = bloodRequestRepository.findByIdForUpdate(requestId)
+            .filter(found -> found.getHospital().getId().equals(hospital.getId()))
+            .orElseThrow(() -> new NotFoundException("No blood request found for this id."));
+
+        // Judged after the lock is granted, so a request filled a moment ago is seen as filled.
+        if (!request.getStatus().isOpen()) {
+            throw new ConflictException(switch (request.getStatus()) {
+                case FULFILLED -> "This request was just fully supplied, so it can no longer be cancelled.";
+                case REJECTED -> "Every blood bank declined this request, so it is already closed.";
+                default -> "This request has already been cancelled.";
+            });
+        }
+
+        Instant now = clock.instant();
+        int supplied = contributionRepository.sumUnitsForRequest(request.getId());
+        request.cancel(reason, note, user, now);
+        BloodRequest saved = bloodRequestRepository.save(request);
+
+        notificationService.notifyRequestCancelled(saved);
+        auditLogService.recordRequestCancelled(user, saved, cancellationDetails(saved, supplied), now);
+
+        return BloodRequestResponse.from(saved, contributionRepository.findForRequests(List.of(saved.getId())));
+    }
+
+    /** The audit entry's words. Leaves out the free-text note and the ward reference, which may name a patient. */
+    private static String cancellationDetails(BloodRequest request, int supplied) {
+        String stock = supplied == 0
+            ? "No units had been supplied."
+            : "%d of %d units had been supplied and stay supplied.".formatted(supplied, request.getUnitsRequested());
+        return "Cancelled request #%s (%s, %d %s) for %s. Reason: %s. %s".formatted(
+            request.getReference(), request.getBloodType().getLabel(), request.getUnitsRequested(),
+            request.getUnitsRequested() == 1 ? "unit" : "units", request.getHospital().getName(),
+            request.getCancellationReason().getLabel(), stock
+        );
+    }
+
+    private static RequestCancellationReason requireCancellationReason(String reason) {
+        return RequestCancellationReason.fromName(reason == null ? null : reason.trim())
+            .orElseThrow(() -> new InvalidFieldException(
+                "reason", "Reason must be one of " + RequestCancellationReason.allNames() + "."));
+    }
+
+    /** The note's two rules, a 400 on the field: required for OTHER, and no longer than the column. */
+    private static void checkCancellationNote(RequestCancellationReason reason, String note) {
+        if (reason.requiresNote() && note == null) {
+            throw new InvalidFieldException("note", "Add a note explaining why this request is being cancelled.");
+        }
+        if (note != null && note.length() > CANCELLATION_NOTE_MAX_LENGTH) {
+            throw new InvalidFieldException(
+                "note", "A note must be at most " + CANCELLATION_NOTE_MAX_LENGTH + " characters.");
+        }
+    }
+
+    /**
      * One bank issues units to a request (Business Rule 20): request must be open and not declined by this bank;
      * units capped at what is outstanding; usable batches locked and taken FEFO; everything written in one transaction.
      */
@@ -191,6 +283,9 @@ public class RequestService {
         if (requestedUnits == null || requestedUnits <= 0) {
             // Catches the units field being absent (it is nullable because REJECT doesn't use it).
             throw new InvalidFieldException("units", "Enter how many units this blood bank is contributing.");
+        }
+        if (request.getStatus() == RequestStatus.CANCELLED) {
+            throw new ConflictException("This request was just cancelled, so it cannot take more units.");
         }
         if (!request.getStatus().isOpen()) {
             throw new ConflictException(
@@ -257,6 +352,9 @@ public class RequestService {
      * A contributor may not decline, and a request with units never closes by decline (Business Rule 20).
      */
     private void reject(BloodRequest request, BloodBank actingBank) {
+        if (request.getStatus() == RequestStatus.CANCELLED) {
+            throw new ConflictException("This request was just cancelled, so there is nothing to decline.");
+        }
         if (!request.getStatus().isOpen()) {
             throw new ConflictException(
                 "A request can only be declined while it is still open — this one is %s."

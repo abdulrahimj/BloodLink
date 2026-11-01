@@ -3,6 +3,8 @@ import { getBloodBanks } from "../api/bloodBanks.js";
 import { getInventory } from "../api/inventory.js";
 import { getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
+import { canCancelRequest, cancelledReasonLine, cancelledSummary } from "../lib/requestCancellation.js";
+import CancelRequestDialog from "../components/CancelRequestDialog.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -71,6 +73,10 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   const [formError, setFormError] = useState(null);
   const [formNotice, setFormNotice] = useState(null);
   const [today] = useState(() => new Date());
+
+  // The request in the Cancel box (Business Rule 35), and a refusal shown against its row afterwards.
+  const [cancelling, setCancelling] = useState(null);
+  const [cancelRefusal, setCancelRefusal] = useState(null);
 
   /**
    * Loads the request list and per-bank availability once; submitting doesn't change stock,
@@ -180,6 +186,20 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /** The server accepted: the row shows the request as returned, with its supplied count and reason. */
+  function handleCancelled(updated) {
+    setCancelling(null);
+    setCancelRefusal(null);
+    setRequests((current) => current.map((r) => (r.id === updated.id ? updated : r)));
+  }
+
+  /** A 409: the request closed a moment ago, so the row says why and the list is read again. */
+  function handleCancelRefused(message) {
+    setCancelRefusal({ requestId: cancelling.id, message });
+    setCancelling(null);
+    refresh();
   }
 
   return (
@@ -420,6 +440,26 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
         .hp-b-partially-fulfilled { background: var(--green); }
         .hp-b-fulfilled { background: var(--navy); }
         .hp-b-rejected  { background: var(--red); }
+        .hp-b-cancelled { background: #5F6570; }
+
+        /* Outlined, not filled: it withdraws a request, so it must not compete with the badge beside it. */
+        .hp-item-cancel {
+          flex: 0 0 auto; background: transparent; color: var(--red);
+          border: 1.5px solid var(--line); border-radius: 6px; cursor: pointer;
+          font-family: inherit; font-weight: 700; font-size: clamp(9px, 1.28vh, 11.5px);
+          padding: clamp(4px, .75vh, 7px) clamp(7px, .7vw, 11px);
+        }
+        .hp-item-cancel:hover { background: #FBE9EC; border-color: var(--red); }
+        .hp-item-cancel:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+        /* Grey, like the badge: the same line shape as the green progress line, for a closed request. */
+        .hp-item-cancelled {
+          font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600;
+          color: #5F6570; margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere;
+        }
+        .hp-item-error {
+          font-size: clamp(8.5px, 1.2vh, 11px); font-weight: 600;
+          color: var(--red); margin-top: 2px; line-height: 1.35;
+        }
 
         /* "2 of 4 units received · 2 still to come · from …". Wraps rather than
            truncating like .hp-item-sub above: every part of it is load-bearing,
@@ -622,12 +662,21 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
                           <div className="hp-item-sub">
                             {/* No bank is named until one contributes (Business Rules 6
                                 and 20) — saying so is more useful than an empty gap. */}
-                            {r.lastContributedByBloodBankName ?? "Awaiting a blood bank"} · {formatRelativeTime(r.createdAt)}
+                            #{r.reference} · {r.lastContributedByBloodBankName ?? (r.status === "CANCELLED" ? "No units supplied" : "Awaiting a blood bank")} · {formatRelativeTime(r.createdAt)}
                             {r.patientReference ? ` · ${r.patientReference}` : ""}
                           </div>
                           {/* Where the blood came from and how much is still coming (Business Rule 20),
-                              naming each contributing bank. */}
-                          {r.unitsContributed > 0 && (
+                              naming each contributing bank. A cancelled request keeps its supplied count (Rule 35). */}
+                          {r.status === "CANCELLED" ? (
+                            <div className="hp-item-cancelled">
+                              {cancelledSummary(r)}
+                              {r.contributions.length > 0 && ` · ${r.contributions
+                                .map((c) => `${c.unitsContributed} from ${c.bloodBankName}`)
+                                .join(", ")}`}
+                              <br />
+                              {cancelledReasonLine(r)} · by {r.cancelledByName} · {formatRelativeTime(r.cancelledAt)}
+                            </div>
+                          ) : r.unitsContributed > 0 && (
                             <div className="hp-item-progress">
                               {r.unitsContributed} of {r.unitsRequested} units received
                               {r.unitsOutstanding > 0 ? ` · ${r.unitsOutstanding} still to come` : ""}
@@ -636,10 +685,18 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
                                 .join(", ")}`}
                             </div>
                           )}
+                          {cancelRefusal?.requestId === r.id && (
+                            <div className="hp-item-error" role="alert">{cancelRefusal.message}</div>
+                          )}
                         </div>
                         <div className={`hp-badge hp-b-${r.status.toLowerCase().replace(/_/g, "-")}`}>
                           {titleCase(r.status).replace(/_/g, " ")}
                         </div>
+                        {canCancelRequest(r) && (
+                          <button type="button" className="hp-item-cancel" onClick={() => setCancelling(r)}>
+                            Cancel request
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -649,6 +706,15 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
           </>
         )}
       </main>
+
+      {cancelling && (
+        <CancelRequestDialog
+          request={cancelling}
+          onClose={() => setCancelling(null)}
+          onCancelled={handleCancelled}
+          onRefused={handleCancelRefused}
+        />
+      )}
     </div>
   );
 }

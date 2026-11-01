@@ -54,6 +54,7 @@ import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.RequestService;
 import com.bloodlink.request.dto.BloodRequestResponse;
+import com.bloodlink.request.dto.CancelRequestPayload;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
@@ -225,6 +226,98 @@ class PartialFulfilmentRaceIT {
             .findFirst()
             .orElseThrow()
             .unitsAvailable();
+    }
+
+    // ---------- a cancellation racing a contribution (Business Rule 35) ----------
+
+    /**
+     * A hospital cancels as a bank contributes the whole amount: exactly one wins and the loser is told why.
+     * Eight rounds on fresh requests, so it holds whichever side wins.
+     */
+    @Test
+    void aCancellationAndAContributionAtTheSameMomentHaveExactlyOneWinner() throws Exception {
+        for (int round = 0; round < 8; round++) {
+            Fixture fixture = new Fixture(4, 5, 5);
+
+            CyclicBarrier startTogether = new CyclicBarrier(2);
+            ExecutorService threads = Executors.newFixedThreadPool(2);
+            Outcome contributed;
+            Outcome cancelled;
+            try {
+                Future<Outcome> contribution = threads.submit(
+                    contributionTask(fixture, fixture.bankAStaff, 4, startTogether));
+                Future<Outcome> cancellation = threads.submit(() -> {
+                    startTogether.await(30, TimeUnit.SECONDS);
+                    return cancel(fixture);
+                });
+                contributed = contribution.get(30, TimeUnit.SECONDS);
+                cancelled = cancellation.get(30, TimeUnit.SECONDS);
+            } finally {
+                threads.shutdownNow();
+            }
+
+            assertThat(List.of(contributed, cancelled)).as("round " + round).filteredOn(Outcome::succeeded).hasSize(1);
+            var request = bloodRequestRepository.findById(fixture.requestId).orElseThrow();
+            if (contributed.succeeded()) {
+                assertThat(cancelled.failure()).isEqualTo("This request was just fully supplied, so it can no longer be cancelled.");
+                assertThat(request.getStatus()).isEqualTo(RequestStatus.FULFILLED);
+                assertThat(contributionRepository.sumUnitsForRequest(fixture.requestId)).isEqualTo(4);
+                assertThat(unitsTakenFromEachBank(fixture)).containsExactly(4, 0);
+            } else {
+                assertThat(contributed.failure()).isEqualTo("This request was just cancelled, so it cannot take more units.");
+                assertThat(request.getStatus()).isEqualTo(RequestStatus.CANCELLED);
+                assertThat(contributionRepository.sumUnitsForRequest(fixture.requestId)).isZero();
+                assertThat(unitsTakenFromEachBank(fixture)).containsExactly(0, 0);
+            }
+            assertLedgersBalance();
+        }
+    }
+
+    /**
+     * A cancellation arriving while a contribution holds the request lock waits for it, then reads the request
+     * as it now stands and is refused, rather than cancelling a request that has just been filled.
+     */
+    @Test
+    void aCancellationWaitsForAContributionHoldingTheRequestLock() throws Exception {
+        Fixture fixture = new Fixture(4, 5, 5);
+        AuthenticatedUser bankStaff = principalFor(fixture.bankAStaff, Role.BLOOD_BANK_STAFF);
+
+        CountDownLatch locked = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(1);
+        try {
+            Future<?> holder = threads.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                requestService.act(fixture.requestId, new RequestActionPayload(RequestAction.CONTRIBUTE, null, 4), bankStaff);
+                locked.countDown();
+                try {
+                    Thread.sleep(1_500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            long started = System.nanoTime();
+            Outcome outcome = cancel(fixture);
+            long waitedMillis = (System.nanoTime() - started) / 1_000_000;
+            holder.get(30, TimeUnit.SECONDS);
+
+            assertThat(waitedMillis).as("waited for the lock rather than reading past it").isGreaterThanOrEqualTo(1_000);
+            assertThat(outcome.succeeded()).isFalse();
+            assertThat(outcome.failure()).isEqualTo("This request was just fully supplied, so it can no longer be cancelled.");
+        } finally {
+            threads.shutdownNow();
+        }
+        assertTotalContributedIsExactly(fixture, 4);
+    }
+
+    private Outcome cancel(Fixture fixture) {
+        try {
+            requestService.cancel(fixture.requestId, new CancelRequestPayload("NO_LONGER_NEEDED", null),
+                principalFor(fixture.hospitalStaff, Role.HOSPITAL_STAFF));
+            return new Outcome(true, null);
+        } catch (RuntimeException refused) {
+            return new Outcome(false, String.valueOf(refused.getMessage()));
+        }
     }
 
     // ---------- batch-level stock: the FEFO lock under contention (Business Rule 24) ----------
@@ -485,6 +578,7 @@ class PartialFulfilmentRaceIT {
         private final BloodBank bankB;
         private final User bankAStaff;
         private final User bankBStaff;
+        private final User hospitalStaff;
         private final UUID requestId;
         /** What each bank holds once this fixture is built — the baseline the stock
          *  assertions measure against, since this class leaves its rows behind. */
@@ -499,7 +593,7 @@ class PartialFulfilmentRaceIT {
 
             bankAStaff = staff("Bank A Technician", Role.BLOOD_BANK_STAFF, bankA, null);
             bankBStaff = staff("Bank B Technician", Role.BLOOD_BANK_STAFF, bankB, null);
-            User hospitalStaff = staff("Ward Clerk", Role.HOSPITAL_STAFF, null, hospital);
+            hospitalStaff = staff("Ward Clerk", Role.HOSPITAL_STAFF, null, hospital);
 
             addStock(bankA.getId(), bankAStaff, bankAStock);
             addStock(bankB.getId(), bankBStaff, bankBStock);

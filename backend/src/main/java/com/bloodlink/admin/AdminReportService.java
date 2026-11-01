@@ -73,7 +73,7 @@ public class AdminReportService {
 
     /**
      * How every request citywide has been resolved, with every status zero-filled
-     * so the donut always has all four slices and accounts for 100%.
+     * so the donut always has all five slices and accounts for 100%.
      */
     @Transactional(readOnly = true)
     public RequestOutcomeResponse requestOutcomes() {
@@ -88,9 +88,10 @@ public class AdminReportService {
         long partiallyFulfilled = counts.getOrDefault(RequestStatus.PARTIALLY_FULFILLED, 0L);
         long fulfilled = counts.getOrDefault(RequestStatus.FULFILLED, 0L);
         long rejected = counts.getOrDefault(RequestStatus.REJECTED, 0L);
+        long cancelled = counts.getOrDefault(RequestStatus.CANCELLED, 0L);
 
-        return new RequestOutcomeResponse(pending, partiallyFulfilled, fulfilled, rejected,
-            pending + partiallyFulfilled + fulfilled + rejected);
+        return new RequestOutcomeResponse(pending, partiallyFulfilled, fulfilled, rejected, cancelled,
+            pending + partiallyFulfilled + fulfilled + rejected + cancelled);
     }
 
     /**

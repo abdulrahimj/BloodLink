@@ -22,13 +22,14 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
     AuditLog save(AuditLog entry);
 
     /**
-     * One page of entries, newest first, with actor and all four possible subjects LEFT fetch-joined (all to-one,
+     * One page of entries, newest first, with actor and all five possible subjects LEFT fetch-joined (all to-one,
      * so paging stays correct). Ordered by createdAt then id so pages are stable; count query given explicitly.
      */
     @Query(
         value = "select a from AuditLog a left join fetch a.actor left join fetch a.target"
             + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
             + " left join fetch a.targetBatch tb left join fetch tb.bloodBank"
+            + " left join fetch a.targetBloodRequest tr left join fetch tr.hospital"
             + " order by a.createdAt desc, a.id desc",
         countQuery = "select count(a) from AuditLog a"
     )

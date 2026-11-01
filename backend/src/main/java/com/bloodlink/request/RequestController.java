@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bloodlink.request.dto.BloodRequestResponse;
+import com.bloodlink.request.dto.CancelRequestPayload;
 import com.bloodlink.request.dto.CreateRequestPayload;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
@@ -72,5 +73,18 @@ public class RequestController {
         @AuthenticationPrincipal AuthenticatedUser principal
     ) {
         return requestService.act(requestId, payload, principal);
+    }
+
+    /**
+     * The raising hospital withdraws its own open request (Business Rule 35);
+     * 200 with the request as it now stands.
+     */
+    @PostMapping("/{requestId}/cancel")
+    public BloodRequestResponse cancel(
+        @PathVariable UUID requestId,
+        @Valid @RequestBody CancelRequestPayload payload,
+        @AuthenticationPrincipal AuthenticatedUser principal
+    ) {
+        return requestService.cancel(requestId, payload, principal);
     }
 }

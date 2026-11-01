@@ -51,6 +51,7 @@ test("statuses and urgencies are worded as the rest of the app words them", () =
   assert.deepEqual(describeStockStatus("LOW"), { label: "Low", tone: "low" });
   assert.deepEqual(describeStockStatus("SUFFICIENT"), { label: "Sufficient", tone: "sufficient" });
   assert.equal(requestStatusLabel("PARTIALLY_FULFILLED"), "Partly filled");
+  assert.equal(requestStatusLabel("CANCELLED"), "Cancelled");
   assert.equal(urgencyLabel("EMERGENCY"), "Emergency");
 });
 

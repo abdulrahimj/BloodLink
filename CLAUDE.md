@@ -60,8 +60,9 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | DONATION_BOOKING_REMINDER | the **active** donor who booked | the daily job: the day before the visit, or on the day if that one was never sent; once per booking (Business Rule 29) |
 | PASSWORD_RESET_BY_ADMIN | the account holder, if **active** | an administrator resets their password (Business Rule 31) |
 | PASSWORD_RESET_REQUESTED | every **active** ADMIN except the one asking | someone asks for help from the Sign in page's "Forgot password?" (Business Rule 33) |
+| REQUEST_CANCELLED | BLOOD_BANK_STAFF at every bank that had not declined the request | a hospital cancels its request (Business Rule 35) |
 
-Thirteen types in all (V30).
+Fourteen types in all (V32).
 
 STOMP over SockJS at `/ws`. The handshake carries no credentials (the browser cannot set a header on
 it), so the JWT travels on the STOMP CONNECT frame and a session without a valid one is refused.
@@ -227,10 +228,14 @@ audit entry in one transaction; read by the batch history endpoint.
 | blood_type | enum |
 | units_requested | int |
 | urgency_level | enum: ROUTINE, URGENT, EMERGENCY |
-| status | enum: PENDING, PARTIALLY_FULFILLED, FULFILLED, REJECTED — APPROVED removed in V15 (Business Rule 20); derived from the contributions, never set by hand |
+| status | enum: PENDING, PARTIALLY_FULFILLED, FULFILLED, REJECTED, CANCELLED — APPROVED removed in V15 (Business Rule 20); derived from the contributions, never set by hand, except CANCELLED (V32), the hospital's own decision (Business Rule 35) |
 | last_contributed_by_blood_bank_id | UUID, FK -> BloodBank, nullable — renamed from `fulfilled_by_blood_bank_id` in V15. Means "the bank that contributed most recently", a display convenience; BloodRequestContribution is the source of truth for who gave what. See Business Rule 20. |
 | patient_reference | varchar, nullable — optional ward/patient note from hospital staff |
 | created_at | timestamp |
+| cancellation_reason | enum: NO_LONGER_NEEDED, PATIENT_TRANSFERRED, OBTAINED_ELSEWHERE, ENTERED_BY_MISTAKE, OTHER — nullable, added in V32 (Business Rule 35); set exactly when CANCELLED (DB CHECK) |
+| cancellation_note | varchar(200), nullable — added in V32; never blank, required for OTHER (DB CHECKs) |
+| cancelled_by | UUID, FK -> User, nullable — added in V32; the hospital staff member; set exactly when CANCELLED |
+| cancelled_at | timestamp, nullable — added in V32; set exactly when CANCELLED |
 
 ### BloodRequestDecline
 | field | type |
@@ -303,7 +308,7 @@ reach to clear it. See Business Rule 12.
 | id | UUID, PK |
 | recipient_user_id | UUID, FK -> User |
 | message | text |
-| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29), PASSWORD_RESET_BY_ADMIN (added in V28, Business Rule 31), PASSWORD_RESET_REQUESTED (added in V30, Business Rule 33) |
+| type | enum: LOW_STOCK_ALERT, DONATION_APPEAL, DONATION_APPEAL_ACCEPTED (added in V21), NEW_REQUEST, REQUEST_STATUS_CHANGE, REQUEST_PROGRESS (added in V15), BATCH_EXPIRY_REMINDER and BATCH_EXPIRED (added in V23, Business Rule 26), DONATION_BOOKED, DONATION_BOOKING_CANCELLED and DONATION_BOOKING_REMINDER (added in V27, Business Rule 29), PASSWORD_RESET_BY_ADMIN (added in V28, Business Rule 31), PASSWORD_RESET_REQUESTED (added in V30, Business Rule 33), REQUEST_CANCELLED (added in V32, Business Rule 35) |
 | is_read | boolean |
 | created_at | timestamp |
 | accepted | boolean, default false — added in V20; true once the donor has accepted this DONATION_APPEAL (Business Rule 25) |
@@ -320,11 +325,12 @@ message template ("<bank> needs <group> donors. …"); later appeals are stamped
 |---|---|
 | id | UUID, PK |
 | actor_user_id | UUID, FK -> User, nullable since V31 — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test). NULL exactly for SIGN_IN_LOCKED, which the system does (`audit_log_actor_absent_only_for_sign_in_lock`, Business Rule 34) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31), PASSWORD_REQUEST_CLOSED (added in V30, Business Rule 33), SIGN_IN_LOCKED (added in V31, Business Rule 34) |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31), PASSWORD_REQUEST_CLOSED (added in V30, Business Rule 33), SIGN_IN_LOCKED (added in V31, Business Rule 34), REQUEST_CANCELLED (added in V32, Business Rule 35) |
 | target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED; on SIGN_IN_LOCKED, the account holding the number, or NULL for an unregistered one |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
+| target_blood_request_id | UUID, FK -> BloodRequest, nullable — added in V32; set for REQUEST_CANCELLED only |
 | details | text — what changed, in words, as of that moment; never a password |
 | created_at | timestamp |
 
@@ -335,7 +341,7 @@ with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the
 foreign key is ON DELETE NO ACTION, so a user or facility that appears in the log can never be deleted.
 **Exactly one target per row, matching its action** — V14's `audit_log_target_matches_action` CHECK
 replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody;
-V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else. SIGN_IN_LOCKED (V31) is the one exception: an unregistered number has no row to point at, so its only subject is the number in `details`.
+V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else. SIGN_IN_LOCKED (V31) is the one exception: an unregistered number has no row to point at, so its only subject is the number in `details`. V32 extended it the same way as V18: a REQUEST_CANCELLED entry points at its request and at nothing else.
 
 ### PasswordResetRequest
 | field | type |
@@ -364,7 +370,8 @@ BloodRequest 1–N BloodRequestContribution · BloodBank 1–N BloodRequestContr
 BloodBank 1–N AppealCooldown · User 1–N AuditLog (as actor) · User 1–N AuditLog (as target) ·
 BloodBank 1–N AuditLog (as target) · Hospital 1–N AuditLog (as target) ·
 BloodBank 1–N Notification (as appeal source) · Donor 1–N DonationBooking · BloodBank 1–N DonationBooking ·
-Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as requester) · User 1–N PasswordResetRequest (as handler)
+Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as requester) · User 1–N PasswordResetRequest (as handler) ·
+User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target)
 
 ---
 
@@ -394,7 +401,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
    that time, not silently follow later edits to the donor's profile. The reverse now holds by design:
    the profile follows the test (Business Rule 28), never the donation the profile.
 5. **BloodRequest status lifecycle** — **superseded by Business Rule 20.** It now reads
-   PENDING → PARTIALLY_FULFILLED → FULFILLED (or straight to FULFILLED), or PENDING → REJECTED;
+   PENDING → PARTIALLY_FULFILLED → FULFILLED (or straight to FULFILLED), or PENDING → REJECTED,
+   or from PENDING or PARTIALLY_FULFILLED → CANCELLED by the hospital (Business Rule 35);
    APPROVED no longer exists. What survives unchanged is the half that always mattered: units
    leaving a bank must leave its stock in the same transaction as the record of them leaving. Since
    Business Rule 24 that means: deducted from that bank's usable batches first expiry first out
@@ -473,6 +481,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       request early.
     - The hospital is notified **only** on the closing decline. A decline that leaves the request live
       is not news the hospital can act on, and `notifyRequestStatusChange` sends nothing for PENDING.
+    - A hospital can also close its own request while it is open (CANCELLED, Business Rule 35); a decline
+      after that is a 409 ("This request was just cancelled…").
     - **Business Rule 20 adds two things here and changes nothing else.** A bank that has contributed
       units may not then decline the same request (409) — the two are opposite answers to one
       question, and a decline counts towards closing a request that bank just helped fill. And a
@@ -844,7 +854,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       FULFILLED, or straight to FULFILLED when one contribution covers the whole amount; or
       PENDING → REJECTED exactly as Business Rule 11 already describes. **Status is derived from
       the arithmetic after every contribution, never set by hand**, which is why there is no
-      "mark fulfilled" action anywhere.
+      "mark fulfilled" action anywhere. The one status a person sets is CANCELLED, by the hospital
+      that raised the request, while it is open (Business Rule 35).
     - **APPROVED is gone.** It meant "a bank has claimed this and will fill it later", and the claim
       was the very thing that stopped a second bank helping. `V15` converts any existing APPROVED
       request back to PENDING with its claiming bank cleared (nothing had been issued against it),
@@ -1022,7 +1033,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       expiring card "Not counted: N units already expired, awaiting write-off" (or "No expired units
       awaiting write-off") — it used to claim the expiring figure included them.
     - **Requests:** counted by `created_at` within the range. Fulfilment rate = FULFILLED ÷ (FULFILLED +
-      REJECTED); PENDING and PARTIALLY_FULFILLED are still open and excluded. With nothing decided the
+      REJECTED); PENDING and PARTIALLY_FULFILLED are still open and excluded, and CANCELLED is listed
+      and counted as raised but excluded too (Business Rule 35: the banks never answered it). With nothing decided the
       rate is null and the page and CSV say **"No data"** — never 0% or NaN. "Filled by more than one
       bank" counts requests whose contribution rows (Business Rule 20's source of truth) name two or
       more distinct banks, whatever their status now.
@@ -1607,6 +1619,62 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       permanent, as all audit entries are; `POST /api/auth/register`'s 409 still tells anyone a number is registered, and only
       created accounts count towards its limit, so it is not slowed down; `/api/users/me/password` is not limited.
 
+35. **The hospital that raised a blood request can cancel it while it is still open.** The project owner's decisions, final.
+    Before it a hospital that no longer needed the blood had no way to withdraw a request, so banks kept working on it. There
+    is no "reserved" state and appeals are not linked to requests, so nothing else has to be released: units either left
+    stock in a contribution or never moved. Schema: `V32`. `RequestService.cancel`.
+    - **`POST /api/requests/{id}/cancel` `{ reason, note }`** → 200 with the request. **Who:** active HOSPITAL_STAFF of the
+      hospital that made it. Bank staff, donors and ADMIN are a 403 (SecurityConfig, matched before the general
+      `/api/requests/**` rule, and again in the service), no token a 401, a suspended account a 401 at the filter (and a 403
+      in the service). **Another hospital's request is a 404 like a missing one**, as hospitals see only their own (Business
+      Rule 9).
+    - **When:** PENDING or PARTIALLY_FULFILLED only. Otherwise a 409: "This request was just fully supplied, so it can no
+      longer be cancelled.", "Every blood bank declined this request, so it is already closed." or "This request has already
+      been cancelled."
+    - **Reason required**, matched exactly: NO_LONGER_NEEDED, PATIENT_TRANSFERRED, OBTAINED_ELSEWHERE, ENTERED_BY_MISTAKE, OTHER
+      (`RequestCancellationReason`; anything else a 400 on `reason`). **Note** optional, at most 200 characters, blank stored as
+      none, required for OTHER (a 400 on `note`). V32's CHECKs hold the same rules, and that reason, who and when are present
+      exactly on a CANCELLED request.
+    - **Units already supplied stay supplied; stock is not returned.** Only the remaining part is cancelled: no contribution,
+      allocation or batch is touched, `unitsContributed` keeps its figure and `unitsOutstanding` reads 0. Blood at the hospital
+      is not back on a bank's shelf, and this system has no concept of a return (V15).
+    - **Notification REQUEST_CANCELLED** ("Request #3F2A9C1B (O+, 5 units) was cancelled by Holy Spirit Hospital: No longer
+      needed."), a row first then a push, in the cancellation's transaction, to the **active** BLOOD_BANK_STAFF of every bank that
+      has not declined the request (`NotificationService.notifyRequestCancelled`): every such bank could see it, and a
+      contributor can never have declined, so that set includes every contributor. A bank that declined is left out: the
+      request had already left its queue. The wider set is deliberate: NEW_REQUEST goes only to banks that could fill it, but
+      every bank sees every open request. The hospital's own staff are not notified, and **the note never appears in a
+      notification or an audit entry**, since it may name a patient.
+    - **The reference.** `BloodRequest.getReference()`, the UUID's first eight characters in capitals, sent as
+      `BloodRequestResponse.reference` and shown as `#3F2A9C1B` on both portals' rows, so the notice can be matched to a row.
+      It is a display label, not an identifier: the API takes the full id.
+    - **Audited as REQUEST_CANCELLED**, in the same transaction, stamped with the same injected-`Clock` instant as `cancelled_at`:
+      actor the hospital staff member, subject the request (`target_blood_request_id`, V32), details such as "Cancelled request
+      #3F2A9C1B (O+, 5 units) for X. Reason: No longer needed. 3 of 5 units had been supplied and stay supplied." The ward
+      reference is left out for the same reason as the note. `AuditLogEntryResponse.targetType` is REQUEST, and the Audit Log
+      labels it "Request cancelled" (grey) with subject kind "Blood request".
+    - **Race safety:** `findByIdForUpdate` is the same row lock contribute and decline take, and the status is judged after it
+      is granted, so exactly one of a cancellation and a contribution wins. The loser gets a 409: "This request was just
+      cancelled, so it cannot take more units." or "This request was just fully supplied, so it can no longer be cancelled."
+      A contribution that only part-fills it goes first and the cancellation then succeeds with those units supplied, which
+      is correct. `PartialFulfilmentRaceIT` proves it with real threads.
+    - **What each side sees.** The hospital: reason, note, who and when. **Bank staff get the reason and time only**
+      (`BloodRequestResponse.forBank`; note and name are null): data minimisation. A cancelled request leaves a bank's list
+      unless it contributed, when it stays as its own history with the supplied count (`findActionableForBank`, unchanged). An ADMIN sees all of it in the API.
+    - **Reports:** CANCELLED is a row in Business Rule 23's "By status" and CSV and in the Dashboard's Request Outcomes donut
+      (grey), counts in "raised", and is not "decided", so the fulfilment rate is unchanged.
+    - **Frontend.** Hospital Portal: open rows carry "Cancel request", opening `components/CancelRequestDialog.jsx` (reason
+      dropdown, note with a 200 counter, required for Other, then "Cancel request #X? Blood banks will stop working on it. This
+      cannot be undone."; a partly supplied request also says what stays supplied). The confirm button stays disabled until the
+      box is valid. Escape or the scrim closes it, and Tab stays inside. A 409 closes the box, shows the server's sentence on the
+      row and re-reads the list. A cancelled row has a grey "Cancelled" badge, "Cancelled - 3 of 5 units supplied", and the
+      reason, note, who and when. Blood Bank Dashboard: REQUEST_CANCELLED re-reads the list. A refused Contribute or Decline on a
+      request that then leaves the list shows above the list, as its row is gone. On a phone the badge and button drop under the
+      text. Bell dot navy, like the booking cancellation. Checks and wording in `lib/requestCancellation.js` (tested).
+    - **Known limits:** a cancellation cannot be undone (raise a new request); a bank whose staff are all suspended is told
+      nothing; other staff of the hospital are not notified and see it at their next reload; a batch already on its way is
+      not recalled, as the system tracks no transport: a contribution is the moment units are counted as supplied.
+
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
 The code and this file are the source of truth; these are the places the written chapters have
@@ -1659,14 +1727,18 @@ listed so nothing is forgotten when the chapters are next revised.
   and registration are limited in server memory; `audit_log` gains SIGN_IN_LOCKED, the first action with no acting user, so
   `actor_user_id` becomes optional on the ERD; a new non-functional point on bounded memory and on finding a client's address
   behind a proxy.
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for cancelling a request (Business Rule 35, V32).** `BloodRequest` gains
+  CANCELLED and four cancellation columns (User 1–N as canceller); `audit_log` gains `target_blood_request_id` and REQUEST_CANCELLED,
+  the first action by hospital staff; a fourteenth notification type; the lifecycle figure gains a transition from each open
+  status; a new hospital use case "cancel a blood request".
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility (the blood group as a blood bank recorded it, Business Rule 28), accept donation appeals while eligible (Business Rule 25), book one donation visit at a time while eligible and cancel it (Business Rule 29)
-- **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
+- **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), cancel their hospital's open requests with a reason (Business Rule 35), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs, donor blood group changes and sign-in locks (Business Rules 17, 28, 34), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs, donor blood group changes, sign-in locks and request cancellations (Business Rules 17, 28, 34, 35), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32); anyone who forgot their password can ask from the Sign in page for an administrator to call back (Business Rule 33); repeated failed sign-ins lock a number for 15 minutes, and sign-in, "Forgot password?" and registration are limited per internet address (Business Rule 34)
 
 ## Conventions
@@ -1700,7 +1772,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`, `RateLimitIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`, `RateLimitIT`, `RequestCancellationIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

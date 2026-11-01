@@ -135,17 +135,19 @@ class ReportSummaryServiceTest {
         ReportRange range = new ReportRange(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 6, 30));
         when(requestRepository.countByStatusCreatedBetween(range.startInstant(), range.endInstantExclusive())).thenReturn(List.of(
             statusCount(RequestStatus.FULFILLED, 3), statusCount(RequestStatus.REJECTED, 1),
-            statusCount(RequestStatus.PENDING, 4), statusCount(RequestStatus.PARTIALLY_FULFILLED, 2)));
+            statusCount(RequestStatus.PENDING, 4), statusCount(RequestStatus.PARTIALLY_FULFILLED, 2),
+            statusCount(RequestStatus.CANCELLED, 5)));
         when(requestRepository.countByUrgencyCreatedBetween(any(), any())).thenReturn(List.of());
         when(requestRepository.countByBloodTypeCreatedBetween(any(), any())).thenReturn(List.of());
 
         RequestReport report = service.requests(range);
 
-        assertThat(report.total()).isEqualTo(10);
+        // Cancelled requests are raised, but neither fulfilled nor rejected (Business Rule 35).
+        assertThat(report.total()).isEqualTo(15);
         assertThat(report.decided()).isEqualTo(4);
         assertThat(report.fulfilmentRate()).isEqualTo(0.75);
         assertThat(report.byStatus()).extracting(CountRow::label)
-            .containsExactly("PENDING", "PARTIALLY_FULFILLED", "FULFILLED", "REJECTED");
+            .containsExactly("PENDING", "PARTIALLY_FULFILLED", "FULFILLED", "REJECTED", "CANCELLED");
         assertThat(report.byUrgency()).containsExactly(
             new CountRow("ROUTINE", 0), new CountRow("URGENT", 0), new CountRow("EMERGENCY", 0));
     }

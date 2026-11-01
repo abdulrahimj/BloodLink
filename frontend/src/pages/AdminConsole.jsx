@@ -77,7 +77,7 @@ const HEADINGS = {
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
-  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions, stock write-offs and donor blood group changes by bank staff, and sign-in locks, newest first — permanent and read-only" },
+  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions, stock write-offs and donor blood group changes by bank staff, request cancellations by hospitals, and sign-in locks, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
@@ -95,6 +95,7 @@ const AUDIT_ACTION = {
   ADMIN_PASSWORD_RESET: { label: "Password reset", tone: "ad-au-edited" },
   PASSWORD_REQUEST_CLOSED: { label: "Request closed", tone: "ad-au-edited" },
   SIGN_IN_LOCKED: { label: "Sign-in locked", tone: "ad-au-suspended" },
+  REQUEST_CANCELLED: { label: "Request cancelled", tone: "ad-au-cancelled" },
 };
 
 /** The line under an audit entry's subject: the account's role, the kind of facility, a stock batch or a phone number. */
@@ -102,6 +103,7 @@ function auditSubjectKind(entry) {
   if (entry.targetType === "BLOOD_BANK") return "Blood bank";
   if (entry.targetType === "HOSPITAL") return "Hospital";
   if (entry.targetType === "BATCH") return "Stock batch";
+  if (entry.targetType === "REQUEST") return "Blood request";
   if (entry.targetType === "PHONE_NUMBER") return "Phone number";
   return ROLE_LABEL[entry.targetRole] ?? entry.targetRole;
 }
@@ -488,6 +490,7 @@ export default function AdminConsole({ user, onSignOut, onUserUpdated }) {
         .ad-au-suspended   { background: var(--red); }
         .ad-au-reactivated { background: var(--green); }
         .ad-au-written-off { background: var(--red); }
+        .ad-au-cancelled   { background: #5F6570; }
 
         /* paging footer, below the table */
         .ad-log-pager {
@@ -2416,7 +2419,7 @@ function rolePill(role) {
 }
 
 /**
- * The donut's four slices from the server's counts, each rounded independently,
+ * The donut's five slices from the server's counts, each rounded independently,
  * so the total may be a point or two off 100.
  */
 function outcomeSlices(outcomes) {
@@ -2428,6 +2431,7 @@ function outcomeSlices(outcomes) {
     { label: "Partly filled", pct: pct(outcomes.partiallyFulfilled), color: "#1C3A5E" },
     { label: "Pending", pct: pct(outcomes.pending), color: "#D98A1F" },
     { label: "Rejected", pct: pct(outcomes.rejected), color: "#C8102E" },
+    { label: "Cancelled", pct: pct(outcomes.cancelled), color: "#5F6570" },
   ];
 }
 

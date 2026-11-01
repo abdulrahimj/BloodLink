@@ -1,9 +1,11 @@
 package com.bloodlink.domain;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.UUID;
 
 import com.bloodlink.domain.enums.BloodType;
+import com.bloodlink.domain.enums.RequestCancellationReason;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.UrgencyLevel;
 
@@ -19,6 +21,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -70,6 +73,39 @@ public class BloodRequest {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    // The four cancellation columns (Business Rule 35, V32): set together by cancel(), so no setters.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_reason", length = 32)
+    @Setter(AccessLevel.NONE)
+    private RequestCancellationReason cancellationReason;
+
+    @Column(name = "cancellation_note", length = 200)
+    @Setter(AccessLevel.NONE)
+    private String cancellationNote;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "cancelled_by")
+    @Setter(AccessLevel.NONE)
+    private User cancelledBy;
+
+    @Column(name = "cancelled_at")
+    @Setter(AccessLevel.NONE)
+    private Instant cancelledAt;
+
+    /** The short id people see and say: "#3F2A9C1B", the first eight characters of the UUID in capitals. */
+    public String getReference() {
+        return id.toString().substring(0, 8).toUpperCase(Locale.ROOT);
+    }
+
+    /** Closes the request as the hospital's own decision (Business Rule 35); RequestService checks it may be cancelled. */
+    public void cancel(RequestCancellationReason reason, String note, User by, Instant at) {
+        status = RequestStatus.CANCELLED;
+        cancellationReason = reason;
+        cancellationNote = note;
+        cancelledBy = by;
+        cancelledAt = at;
+    }
 
     @PrePersist
     void onCreate() {
