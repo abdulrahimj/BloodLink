@@ -10,6 +10,7 @@ import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
 import com.bloodlink.domain.AuditLog;
+import com.bloodlink.domain.enums.AuditAction;
 
 /**
  * Writes and reads the audit log only (Business Rule 17): a bare Repository, not JpaRepository,
@@ -25,7 +26,7 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
      * so paging stays correct). Ordered by createdAt then id so pages are stable; count query given explicitly.
      */
     @Query(
-        value = "select a from AuditLog a join fetch a.actor left join fetch a.target"
+        value = "select a from AuditLog a left join fetch a.actor left join fetch a.target"
             + " left join fetch a.targetBloodBank left join fetch a.targetHospital"
             + " left join fetch a.targetBatch tb left join fetch tb.bloodBank"
             + " order by a.createdAt desc, a.id desc",
@@ -35,7 +36,7 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
 
     /** Entries about one account, oldest first — used by tests to check exactly
      *  what an action recorded. */
-    @Query("select a from AuditLog a join fetch a.actor join fetch a.target where a.target.id = :targetId order by a.createdAt asc")
+    @Query("select a from AuditLog a left join fetch a.actor join fetch a.target where a.target.id = :targetId order by a.createdAt asc")
     List<AuditLog> findByTargetIdOldestFirst(@Param("targetId") UUID targetId);
 
     /** Creation entries for one blood bank — used by tests (Business Rule 19). */
@@ -50,6 +51,11 @@ public interface AuditLogRepository extends Repository<AuditLog, UUID> {
     @Query("select a from AuditLog a join fetch a.actor join fetch a.targetBatch"
         + " where a.targetBatch.id = :batchId order by a.createdAt asc, a.id asc")
     List<AuditLog> findByTargetBatchIdOldestFirst(@Param("batchId") UUID batchId);
+
+    /** Every entry of one action, oldest first — used by tests (Business Rule 34). */
+    @Query("select a from AuditLog a left join fetch a.actor left join fetch a.target"
+        + " where a.action = :action order by a.createdAt asc, a.id asc")
+    List<AuditLog> findByActionOldestFirst(@Param("action") AuditAction action);
 
     long count();
 }

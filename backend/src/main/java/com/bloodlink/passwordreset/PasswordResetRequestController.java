@@ -18,7 +18,10 @@ import com.bloodlink.common.PhoneNumber;
 import com.bloodlink.passwordreset.dto.PasswordResetRequestAccepted;
 import com.bloodlink.passwordreset.dto.PasswordResetRequestPayload;
 import com.bloodlink.passwordreset.dto.SupportContactResponse;
+import com.bloodlink.ratelimit.AuthRateLimits;
+import com.bloodlink.ratelimit.ClientAddressResolver;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
 /**
@@ -32,26 +35,37 @@ public class PasswordResetRequestController {
     private static final Logger log = LoggerFactory.getLogger(PasswordResetRequestController.class);
 
     private final PasswordResetRequestService requestService;
+    private final AuthRateLimits rateLimits;
+    private final ClientAddressResolver clientAddress;
     private final long minResponseMillis;
     private final String supportPhone;
 
     PasswordResetRequestController(
         PasswordResetRequestService requestService,
+        AuthRateLimits rateLimits,
+        ClientAddressResolver clientAddress,
         @Value("${bloodlink.password-reset-requests.min-response-ms:500}") long minResponseMillis,
         @Value("${bloodlink.support-phone:${BLOODLINK_SUPPORT_PHONE:}}") String supportPhone
     ) {
         this.requestService = requestService;
+        this.rateLimits = rateLimits;
+        this.clientAddress = clientAddress;
         this.minResponseMillis = minResponseMillis;
         this.supportPhone = supportPhone == null || supportPhone.isBlank() ? null : supportPhone.trim();
     }
 
     /**
      * Always 202 with the same message once the number is well formed (a malformed one is sign-in's 400 on phone).
-     * Answered no sooner than the minimum time, so a registered number cannot be told apart by speed.
+     * Answered no sooner than the minimum time, so a registered number cannot be told apart by speed. Over the address's
+     * limit it is a 429 at once (Business Rule 34): that limit is about the address, never the number.
      */
     @PostMapping("/password-reset-requests")
-    public ResponseEntity<PasswordResetRequestAccepted> request(@Valid @RequestBody PasswordResetRequestPayload payload) {
+    public ResponseEntity<PasswordResetRequestAccepted> request(
+        @Valid @RequestBody PasswordResetRequestPayload payload,
+        HttpServletRequest httpRequest
+    ) {
         String phone = PhoneNumber.normalize(payload.phone());
+        rateLimits.countPasswordResetRequest(clientAddress.of(httpRequest));
         long started = System.nanoTime();
         try {
             requestService.request(phone);

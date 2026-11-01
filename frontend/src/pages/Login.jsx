@@ -34,8 +34,8 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
       const auth = await login(phone.trim(), password, remember);
       onSignedIn?.(auth);
     } catch (err) {
-      // A wrong password (401) and a validation failure (400) both land here;
-      // the backend's message is written for display, so it is shown verbatim.
+      // A wrong password (401), a validation failure (400) and "too many attempts" (429) all land here;
+      // the backend's message is written for display, so it is shown verbatim, and the form stays usable.
       setError(err.message);
       setFieldErrors(err.fieldErrors ?? {});
     } finally {
@@ -336,7 +336,7 @@ function ForgotPasswordForm() {
       await requestPasswordReset(phone.trim());
       setSent(true);
     } catch (err) {
-      // Only a malformed number (the same 400 as sign-in) or a network failure lands here.
+      // A malformed number (the same 400 as sign-in), too many requests (429) or a network failure.
       setFieldError(err.fieldErrors?.phone ?? null);
       setError(err.fieldErrors?.phone ? null : err.message);
     } finally {

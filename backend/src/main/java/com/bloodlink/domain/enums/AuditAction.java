@@ -1,8 +1,8 @@
 package com.bloodlink.domain.enums;
 
 /**
- * The actions the audit log records (Business Rules 17, 19, 24, 28, 31, 33): only changes, never reads. Each has one kind of
- * subject (V26's CHECK); all are an administrator's except STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED (bank staff).
+ * The audit log's actions (Business Rules 17, 19, 24, 28, 31, 33, 34): only changes, never reads. Each has one kind of subject
+ * (V31's CHECK); all are an administrator's except STOCK_WRITTEN_OFF, DONOR_BLOOD_GROUP_UPDATED and SIGN_IN_LOCKED.
  */
 public enum AuditAction {
 
@@ -38,7 +38,11 @@ public enum AuditAction {
 
     /** An administrator closed a password reset request without resetting the password (Business Rule 33, V30).
      *  Its subject is the account that asked. */
-    PASSWORD_REQUEST_CLOSED;
+    PASSWORD_REQUEST_CLOSED,
+
+    /** Failed sign-ins locked a phone number (Business Rule 34, V31). The system did it, so it has no actor;
+     *  its subject is the account holding the number, or none when the number is unregistered. */
+    SIGN_IN_LOCKED;
 
     /**
      * True for the actions whose subject is a user account (the four ACCOUNT_ actions, DONOR_BLOOD_GROUP_UPDATED,

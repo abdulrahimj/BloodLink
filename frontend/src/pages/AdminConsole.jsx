@@ -77,7 +77,7 @@ const HEADINGS = {
   [VIEW.BANKS]: { title: "Blood Banks", sub: "Every blood bank on BloodLink, and adding a new one" },
   [VIEW.HOSPITALS]: { title: "Hospitals", sub: "Every hospital on BloodLink, and adding a new one" },
   [VIEW.REPORTS]: { title: "Reports", sub: "Citywide stock, requests, donations and donors — counts only, read-only" },
-  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions, and stock write-offs and donor blood group changes by bank staff, newest first — permanent and read-only" },
+  [VIEW.AUDIT]: { title: "Audit Log", sub: "Administrator actions, stock write-offs and donor blood group changes by bank staff, and sign-in locks, newest first — permanent and read-only" },
   [VIEW.SETTINGS]: { title: "Profile Settings", sub: "Your name, email and password" },
 };
 
@@ -94,13 +94,15 @@ const AUDIT_ACTION = {
   DONOR_BLOOD_GROUP_UPDATED: { label: "Blood group", tone: "ad-au-edited" },
   ADMIN_PASSWORD_RESET: { label: "Password reset", tone: "ad-au-edited" },
   PASSWORD_REQUEST_CLOSED: { label: "Request closed", tone: "ad-au-edited" },
+  SIGN_IN_LOCKED: { label: "Sign-in locked", tone: "ad-au-suspended" },
 };
 
-/** The line under an audit entry's subject: the account's role, the kind of facility, or a stock batch. */
+/** The line under an audit entry's subject: the account's role, the kind of facility, a stock batch or a phone number. */
 function auditSubjectKind(entry) {
   if (entry.targetType === "BLOOD_BANK") return "Blood bank";
   if (entry.targetType === "HOSPITAL") return "Hospital";
   if (entry.targetType === "BATCH") return "Stock batch";
+  if (entry.targetType === "PHONE_NUMBER") return "Phone number";
   return ROLE_LABEL[entry.targetRole] ?? entry.targetRole;
 }
 

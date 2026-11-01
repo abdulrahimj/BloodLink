@@ -39,17 +39,18 @@ public class AuditLog {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    /** Who acted: an administrator, or bank staff for STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED. */
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "actor_user_id", nullable = false, updatable = false)
+    /** Who acted: an administrator, or bank staff for STOCK_WRITTEN_OFF and DONOR_BLOOD_GROUP_UPDATED.
+     *  Null only for SIGN_IN_LOCKED (V31): the system did that, and nobody was signed in. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "actor_user_id", updatable = false)
     private User actor;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "action", nullable = false, length = 32, updatable = false)
     private AuditAction action;
 
-    /** The account the action was done to — set for the four ACCOUNT_ actions, DONOR_BLOOD_GROUP_UPDATED and
-     *  ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED, null for a facility creation (V14). */
+    /** The account the action was done to — set for the four ACCOUNT_ actions, DONOR_BLOOD_GROUP_UPDATED,
+     *  ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED, and SIGN_IN_LOCKED when the number has an account. */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "target_user_id", updatable = false)
     private User target;
@@ -120,6 +121,16 @@ public class AuditLog {
         entry.actor = actor;
         entry.action = AuditAction.STOCK_WRITTEN_OFF;
         entry.targetBatch = batch;
+        entry.details = details;
+        entry.createdAt = createdAt;
+        return entry;
+    }
+
+    /** A SIGN_IN_LOCKED entry (Business Rule 34): no actor, and no subject when the number has no account. */
+    public static AuditLog recordSignInLocked(User account, String details, Instant createdAt) {
+        AuditLog entry = new AuditLog();
+        entry.action = AuditAction.SIGN_IN_LOCKED;
+        entry.target = account;
         entry.details = details;
         entry.createdAt = createdAt;
         return entry;

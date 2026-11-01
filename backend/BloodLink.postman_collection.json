@@ -31,7 +31,7 @@
     },
     {
       "name": "Auth",
-      "description": "Public: no token needed. Registration only ever creates a DONOR account.",
+      "description": "Public: no token needed. Registration only ever creates a DONOR account. Sign-in, Register and Request Password Reset are rate limited (Business Rule 34): over a limit the answer is 429 with a `Retry-After` header in seconds and `{ \"message\": \"Too many attempts. Please wait 15 minutes and try again.\" }`, stating the real time left. Sign-in: 3 failures per phone number in 15 minutes lock that number for 15 minutes, even for the correct password, and 30 failures per internet address in 15 minutes mean a 15-minute wait. Request Password Reset: 10 per address per hour. Register: 10 new accounts per address per hour.",
       "item": [
         {
           "name": "Register (Donor)",
@@ -58,7 +58,7 @@
               "mode": "raw",
               "raw": "{\n  \"fullName\": \"Aminata Kamara\",\n  \"phone\": \"{{newDonorPhone}}\",\n  \"email\": \"aminata.kamara@example.com\",\n  \"dateOfBirth\": \"1998-04-12\",\n  \"gender\": \"FEMALE\",\n  \"bloodType\": \"O+\",\n  \"address\": \"Wusum, Makeni\",\n  \"password\": \"{{donorPassword}}\"\n}"
             },
-            "description": "Creates a donor and signs them in (201). `phone` is local (`076900005`) or international (`+232 76 900 005`) and is stored as `+232` plus 8 digits (Business Rule 13); a phone already registered is 409. `email` is optional: send `null` or leave it out (Business Rule 18). `bloodType` may be `null` if not known yet. `gender` is `MALE`, `FEMALE` or `PREFER_NOT_TO_SAY`. `password` follows the password rule (README): 8–72 characters with a capital letter, a small letter, a number and a special character (not a letter, number or whitespace); a weak one is 400 with `fieldErrors.password` naming what is missing, e.g. \"Add a capital letter and a special character.\" Saves the token to `donorToken`."
+            "description": "Creates a donor and signs them in (201). `phone` is local (`076900005`) or international (`+232 76 900 005`) and is stored as `+232` plus 8 digits (Business Rule 13); a phone already registered is 409. `email` is optional: send `null` or leave it out (Business Rule 18). `bloodType` may be `null` if not known yet. `gender` is `MALE`, `FEMALE` or `PREFER_NOT_TO_SAY`. `password` follows the password rule (README): 8–72 characters with a capital letter, a small letter, a number and a special character (not a letter, number or whitespace); a weak one is 400 with `fieldErrors.password` naming what is missing, e.g. \"Add a capital letter and a special character.\" Over 10 new accounts per internet address per hour: 429 with `Retry-After` (Business Rule 34). Saves the token to `donorToken`."
           },
           "event": [
             {
@@ -290,7 +290,7 @@
               "mode": "raw",
               "raw": "{\n  \"phone\": \"{{donorPhone}}\"\n}"
             },
-            "description": "Business Rule 33. Public: no token. `phone` is checked exactly as at sign-in (a malformed number is a 400 on `phone`). Every well-formed number then gets the same 202, `{ \"message\": \"If this number is registered, an administrator will contact you.\" }`, never sooner than the minimum answer time (500 ms by default), whether it is unknown, suspended, already waiting or new. For an active account it records a waiting request and notifies every active administrator (PASSWORD_RESET_REQUESTED); asking again within an hour adds nothing, after an hour it re-alerts. It never resets a password."
+            "description": "Business Rule 33. Public: no token. `phone` is checked exactly as at sign-in (a malformed number is a 400 on `phone`). Every well-formed number then gets the same 202, `{ \"message\": \"If this number is registered, an administrator will contact you.\" }`, never sooner than the minimum answer time (500 ms by default), whether it is unknown, suspended, already waiting or new. For an active account it records a waiting request and notifies every active administrator (PASSWORD_RESET_REQUESTED); asking again within an hour adds nothing, after an hour it re-alerts. It never resets a password. Over 10 requests per internet address per hour: 429 with `Retry-After` (Business Rule 34)."
           },
           "event": [
             {

@@ -72,6 +72,15 @@ public class AuditLogService {
     }
 
     /**
+     * Records a locked phone number as SIGN_IN_LOCKED (Business Rule 34). Nobody signed in did this, so it has no actor;
+     * account is null when the number is unregistered.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordSignInLocked(User account, String details, Instant at) {
+        auditLogRepository.save(AuditLog.recordSignInLocked(account, details, at));
+    }
+
+    /**
      * One page of entries, newest first; page and size were validated by AuditLogController.
      * The order (with id tie-breaker) is fixed only in findAllNewestFirst's JPQL.
      */

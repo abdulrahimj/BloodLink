@@ -123,6 +123,7 @@ under a second, so you will barely notice it.
    | `BLOODLINK_DEMO_PASSWORD` | `<demo password 1>`: every demo account except the administrator **(real site: leave out)** |
    | `BLOODLINK_DEMO_ADMIN_PASSWORD` | `<demo password 2>`: the demo administrator **(real site: leave out)** |
    | `BLOODLINK_SUPPORT_PHONE` | optional: a phone number people can call, shown on Sign in after "Forgot password?" ("Or call BloodLink on …"), exactly as typed; leave out to show nothing |
+   | `BLOODLINK_TRUST_PROXY_HEADERS` | `true`: Render's proxy stands between every visitor and the backend. Then do the check under [Rate limits](#rate-limits) |
 
    **(real site)** add the four first-administrator settings instead of the two demo passwords:
    `BLOODLINK_BOOTSTRAP_ADMIN_PHONE`, `BLOODLINK_BOOTSTRAP_ADMIN_NAME`, `BLOODLINK_BOOTSTRAP_ADMIN_EMAIL`,
@@ -229,6 +230,7 @@ To try one, add its address to that variable, separated by a comma.
    work here.
 3. As hospital staff, submit a request. A blood bank staff member signed in in another browser sees it
    arrive without reloading: that proves the WebSocket works through Render.
+4. Do the address check under [Rate limits](#rate-limits). Skipping it can leave every visitor sharing one limit.
 
 ---
 
@@ -267,6 +269,51 @@ What follows from that:
   `BloodLink@2026`.
 
 ---
+
+## Rate limits
+
+Sign-in, "Forgot password?" and registration are limited (Business Rule 34). Over a limit the answer is a `429` with a
+`Retry-After` header, and the page shows "Too many attempts. Please wait 15 minutes and try again." with the real time left.
+Counters live in the server's memory: a restart forgets them, and that includes Render putting a free service to sleep.
+
+| Limit | Variable | Default |
+|---|---|---|
+| Failed sign-ins per phone number | `BLOODLINK_RATE_LIMIT_PHONE_MAX_FAILURES` | 3 |
+| … counted over (minutes) | `BLOODLINK_RATE_LIMIT_PHONE_WINDOW_MINUTES` | 15 |
+| … then locked for (minutes) | `BLOODLINK_RATE_LIMIT_PHONE_LOCK_MINUTES` | 15 |
+| Failed sign-ins per internet address | `BLOODLINK_RATE_LIMIT_ADDRESS_MAX_FAILURES` | 30 |
+| … counted over (minutes) | `BLOODLINK_RATE_LIMIT_ADDRESS_WINDOW_MINUTES` | 15 |
+| … then wait (minutes) | `BLOODLINK_RATE_LIMIT_ADDRESS_WAIT_MINUTES` | 15 |
+| "Forgot password?" requests per address | `BLOODLINK_RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | 10 |
+| … counted over (minutes) | `BLOODLINK_RATE_LIMIT_PASSWORD_RESET_WINDOW_MINUTES` | 60 |
+| New accounts per address | `BLOODLINK_RATE_LIMIT_REGISTRATION_MAX_ACCOUNTS` | 10 |
+| … counted over (minutes) | `BLOODLINK_RATE_LIMIT_REGISTRATION_WINDOW_MINUTES` | 60 |
+| Numbers or addresses each limit remembers | `BLOODLINK_RATE_LIMIT_MAX_ENTRIES` | 10000 |
+| Read the address from `X-Forwarded-For` | `BLOODLINK_TRUST_PROXY_HEADERS` | `false`; **`true` on Render** |
+| Which entry, counted from the right | `BLOODLINK_TRUSTED_PROXY_HOPS` | 1 |
+
+**Which address the server sees.** Behind Render's proxy, the connection the backend sees comes from the proxy, so every
+visitor would look like one address. `BLOODLINK_TRUST_PROXY_HEADERS=true` makes it read `X-Forwarded-For` instead, a list
+each proxy adds to on the right. The left of that list can be typed by the visitor, so the server counts from the right:
+`BLOODLINK_TRUSTED_PROXY_HOPS` = 1 takes the last entry, 2 the one before it. Leave the setting `false` anywhere without a
+proxy you control: there, a visitor could fake the header and dodge the limits.
+
+**Check the hop count after the first deploy: Render does not publish it.** Render's staff have said it puts the real
+client address in the list, and a user reported that it adds to a header sent by the visitor instead of clearing it, but no
+Render page states how many entries it adds. A wrong count does real harm: too low and every visitor shares one address, so
+30 wrong passwords across the city stop sign-in for everyone for 15 minutes; too high and the visitor can choose their address.
+
+1. On Render add `LOGGING_LEVEL_COM_BLOODLINK_RATELIMIT` = `DEBUG` and wait for the redeploy.
+2. Find your own public address (search "what is my IP"), then sign in once on the site.
+3. In **Logs**, find the line `X-Forwarded-For [...]; connection ...; using ...`.
+4. If `using` is your address, 1 is right. If not, find your address in the list, count its position from the right
+   (last entry = 1), and set `BLOODLINK_TRUSTED_PROXY_HOPS` to that number.
+5. Delete `LOGGING_LEVEL_COM_BLOODLINK_RATELIMIT`: the line records visitors' addresses, so it must not stay on.
+
+Check again if you put another proxy in front of the backend, such as a Cloudflare custom domain.
+
+**On the public demo** the sign-in numbers are published, so anyone can lock one for 15 minutes with three wrong passwords.
+That is the rule working. Another demo account still works, and an administrator's reset clears a lock.
 
 ## Memory and CPU settings
 
@@ -331,5 +378,6 @@ until the new one passes its health check.
 | `Unable to obtain connection` … `pooler` or Flyway hangs on a lock | Render logs | The URL is Neon's **pooled** host. Use the direct one (no `-pooler`). |
 | Sign-in says "Could not reach the BloodLink server" | site | The backend is asleep or starting (see [The wake-up delay](#the-wake-up-delay)), or `VITE_API_BASE_URL` is wrong. |
 | Browser console: "blocked by CORS policy" | site | `BLOODLINK_ALLOWED_ORIGINS` must be exactly the site's address: `https://`, no slash at the end. |
+| Everyone gets "Too many attempts" at once | site | The backend is treating all visitors as one address. Do the check under [Rate limits](#rate-limits). |
 | Notifications only arrive on reload | site | The WebSocket was refused; same fix as CORS. The 30-second re-read still delivers them. |
 | Cloudflare build: `VITE_API_BASE_URL is not set` / `must start with https://` | Cloudflare build log | Set the variable for Production (step 3) and retry the deployment. |

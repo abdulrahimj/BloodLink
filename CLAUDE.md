@@ -319,9 +319,9 @@ message template ("<bank> needs <group> donors. …"); later appeals are stamped
 | field | type |
 |---|---|
 | id | UUID, PK |
-| actor_user_id | UUID, FK -> User — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test) |
-| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31), PASSWORD_REQUEST_CLOSED (added in V30, Business Rule 33) |
-| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED only |
+| actor_user_id | UUID, FK -> User, nullable since V31 — the administrator who acted (for STOCK_WRITTEN_OFF, the blood bank staff member who discarded the units — never an administrator, Stage 3b; for DONOR_BLOOD_GROUP_UPDATED, the blood bank staff member who recorded the test). NULL exactly for SIGN_IN_LOCKED, which the system does (`audit_log_actor_absent_only_for_sign_in_lock`, Business Rule 34) |
+| action | enum: ACCOUNT_CREATED, ACCOUNT_EDITED, ACCOUNT_SUSPENDED, ACCOUNT_REACTIVATED, BLOOD_BANK_CREATED, HOSPITAL_CREATED (added in V14), STOCK_WRITTEN_OFF (added in V18; written by the write-off action since Stage 3), DONOR_BLOOD_GROUP_UPDATED (added in V26, Business Rule 28), ADMIN_PASSWORD_RESET (added in V28, Business Rule 31), PASSWORD_REQUEST_CLOSED (added in V30, Business Rule 33), SIGN_IN_LOCKED (added in V31, Business Rule 34) |
+| target_user_id | UUID, FK -> User, nullable since V14 — the account acted upon; set for the four ACCOUNT_ actions, for DONOR_BLOOD_GROUP_UPDATED (the donor's account) and for ADMIN_PASSWORD_RESET and PASSWORD_REQUEST_CLOSED; on SIGN_IN_LOCKED, the account holding the number, or NULL for an unregistered one |
 | target_blood_bank_id | UUID, FK -> BloodBank, nullable — added in V14; set for BLOOD_BANK_CREATED only |
 | target_hospital_id | UUID, FK -> Hospital, nullable — added in V14; set for HOSPITAL_CREATED only |
 | target_batch_id | UUID, FK -> BloodInventoryBatch, nullable — added in V18; set for STOCK_WRITTEN_OFF only |
@@ -335,7 +335,7 @@ with no setters, and V12's triggers make UPDATE, DELETE and TRUNCATE fail in the
 foreign key is ON DELETE NO ACTION, so a user or facility that appears in the log can never be deleted.
 **Exactly one target per row, matching its action** — V14's `audit_log_target_matches_action` CHECK
 replaces the NOT NULL it removed from `target_user_id`, so an account action can never point at nobody;
-V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else.
+V18 extended it so a STOCK_WRITTEN_OFF entry points at its batch and at nothing else. SIGN_IN_LOCKED (V31) is the one exception: an unregistered number has no row to point at, so its only subject is the number in `details`.
 
 ### PasswordResetRequest
 | field | type |
@@ -705,7 +705,7 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
     - **A successful change answers 200 with a fresh token** (`AuthResponse`, the sign-in shape, `Cache-Control:
       no-store`), because every token issued before it stops working (Business Rule 32); the frontend stores it, so
       the device that made the change stays signed in. (It answered 204 before Business Rule 32.)
-    - **Known limit, not handled here:** the current-password check is not rate-limited, the same as login.
+    - **Known limit, not handled here:** the current-password check is not rate-limited (sign-in is, Business Rule 34).
 17. **An administrator may change another account's phone and facility, and every administrator action
     on an account is recorded in a permanent, append-only audit log.**
     - **Editing: `PATCH /api/admin/users/{id}/details`**, admin-only (SecurityConfig's `/api/admin/**`).
@@ -1425,6 +1425,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
     - **A waiting "Forgot password?" request for the account is closed by the reset** (Business Rule 33), from the Password
       requests page or from Manage alike: DONE, RESET, handled by that administrator, in the reset's transaction, and the
       audit entry's details add " Their waiting password reset request is closed."
+    - **The reset also clears that number's sign-in lock and failed count** (Business Rule 34), so a lock never stands
+      between the holder and their temporary password.
     - **Sign-ins made before the reset stop working at once** (Business Rule 32): every token the holder had is
       refused with a 401 `PASSWORD_CHANGED`, and their open notification sockets are closed. The administrator's own
       session is untouched.
@@ -1485,7 +1487,8 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
     notification type, one audit action). Package `com.bloodlink.passwordreset`.
     - **`POST /api/auth/password-reset-requests` `{ phone }`, public** (SecurityConfig, and `PasswordChangeGate`'s public list).
       The phone goes through `PhoneNumber.normalize`, exactly as sign-in: a malformed number is sign-in's own 400 on `phone`
-      (Business Rule 13 — it describes what was typed, so it reveals nothing). **Every well-formed number then gets the same
+      (Business Rule 13 — it describes what was typed, so it reveals nothing). Over 10 requests from one internet address in an
+      hour is a 429 (Business Rule 34), whatever the number. **Every well-formed number otherwise gets the same
       202 with `{ "message": "If this number is registered, an administrator will contact you." }`** and `Cache-Control:
       no-store`, whether it is unknown, suspended, already waiting or new, and even if recording it failed (logged, type
       only). **No faster for an unknown number:** the controller answers no sooner than
@@ -1523,9 +1526,71 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       administrator must reset your password." Done rows read "Password reset" or "Closed" by whom and when, and the note.
       The console now has the shared notification bell (it had a static icon, no type being addressed to administrators
       before); this notice has an amber dot and opens the page. Logic and wording in `lib/passwordRequests.js` (tested).
-    - **Known limits:** nothing stops someone sending requests for many different numbers (each real one alerts the
-      administrators at most once an hour); the minimum answer time holds a server thread for that long; a request stays
+    - **Known limits:** someone with many internet addresses can still send requests for many different numbers (each real
+      one alerts the administrators at most once an hour); the minimum answer time holds a server thread for that long; a request stays
       waiting if the holder later remembers and changes their password themselves (an administrator marks it done).
+
+34. **Sign-in, "Forgot password?" and registration are rate limited, in server memory, to stop password guessing,
+    leaked-password-list attacks and flooding of the one small server.** The project owner's decisions, final. Schema: `V31`
+    (the audit action and a nullable actor only; the counts are not stored). Package `com.bloodlink.ratelimit`. Every number is
+    a setting (`RateLimitSettings`, with its default in code because a local `application.properties` may predate it), listed
+    in `application.properties.example`, `backend/.env.example` and DEPLOYMENT.md, "Rate limits".
+    - **The limits** (`AuthRateLimits`): (1) sign-in per phone number, 3 FAILED attempts within 15 minutes lock that number for
+      15 minutes, from every address; (2) sign-in per internet address, 30 FAILED attempts within 15 minutes mean a 15-minute
+      wait for that address; (3) "Forgot password?" per address, 10 requests per hour; (4) registration per address, 10
+      accounts actually created per hour (a refused one, such as a 409, is not counted). Business Rule 33's one alert per
+      account per hour is separate and unchanged.
+    - **While locked or waiting, every attempt is refused before any password is read**, even the correct one. A refusal
+      neither counts nor extends the wait. A block ends cleanly: the next failure is the first of a new count.
+    - **What counts as a failure:** only `InvalidCredentialsException`, the wrong phone-and-password answer. A malformed number
+      stays sign-in's 400 (Business Rule 13) and counts nothing, and so does a suspended account's correct password (its 403)
+      or a server fault: no password was judged wrong. The third failure itself still answers 401; the fourth attempt is the 429.
+    - **The phone is `PhoneNumber.normalize`d exactly as sign-in does**, by `AuthController`, so `076900005` and
+      `+232 76 900 005` are one count. **Unregistered numbers are treated identically**, status, message and Retry-After alike,
+      because nothing in the limiter reads the database and the wording never mentions the number (`RateLimitedException`).
+    - **A successful sign-in clears that number's count, never the address's:** otherwise anyone with their own account could
+      wipe the address count between guesses. **An administrator's reset (Business Rule 31) clears the number's lock and count**
+      (`AdminUserService.resetPassword`, last in the method: a commit failing after it only forgets a count).
+    - **Over a limit: HTTP 429, `Retry-After` in seconds and "Too many attempts. Please wait 15 minutes and try again."**,
+      the real time left rounded up to whole minutes ("1 minute" singular). The same words for all four limits. The address
+      check runs first, so a blocked address adds no phone entry; a limit on `POST /api/auth/password-reset-requests` answers at
+      once, without Business Rule 33's minimum wait, since it is about the address and never the number.
+    - **Parallel guessing is stopped by claiming a place before the password is checked** (`SlidingWindowLimit.reserve`, then
+      `commit` or `cancel`, atomic per key through Caffeine's `compute`). BCrypt takes long enough that twenty parallel guesses
+      would otherwise all pass a "fewer than 3 failures?" check. When attempts still being checked hold the last places, a
+      further one gets a 429 with a one-minute wait. `try`-with-resources on `SignInAttempt` / `RegistrationAttempt` gives the
+      place back if the outcome was neither success nor failure.
+    - **Bounded memory, thread-safe:** one Caffeine cache per limit (`SlidingWindowLimit`), `maximumSize`
+      `bloodlink.rate-limit.max-entries` (default 10,000) and `expireAfterWrite` of window plus block, ticking on the injected
+      `Clock`, with eviction on the calling thread so the bound holds at once. Estimated worst case about 5 MB per limit (one entry is
+      about 500 bytes at most). A key with nothing to remember is removed, so successful users take no memory. Caffeine, not Bucket4j:
+      these rules are "N failures, then locked, cleared by success", not a token bucket, so only the bounded store was needed,
+      and its eviction resists a flood of one-time keys better than a plain least-recently-used list.
+    - **The client address** (`ClientAddressResolver`): by default `request.getRemoteAddr()`, the real connection. With
+      `BLOODLINK_TRUST_PROXY_HEADERS=true`, the X-Forwarded-For entry `BLOODLINK_TRUSTED_PROXY_HOPS` (default 1) from the right,
+      since a visitor can write the left. All X-Forwarded-For headers are read as one list. A missing, too-short or malformed
+      value falls back to the connection, never to something a visitor chose. Addresses are parsed by `InetAddress.ofLiteral`
+      (no DNS), and IPv6 is counted per /64 network, because one home is given 2^64 addresses to rotate through.
+      **Render's hop count is not documented**: DEPLOYMENT.md's check, using a DEBUG log line, confirms it after a deploy.
+    - **One audit entry per lock, none for an address limit.** `SignInLockAudit.record` writes SIGN_IN_LOCKED, "Sign-in locked
+      for +23276900005 after 3 failed attempts", only for the one `commit` that started the lock. **Nobody signed in caused it, so
+      `actor_user_id` is NULL** and V31's CHECK makes that true of this action and no other. The bootstrap's way (the account as
+      its own actor, Business Rule 27) would say the holder locked themselves out, and an unregistered number has no account.
+      The subject is the account holding the number, or none. `AuditLogEntryResponse` gives `actorName` "System", `actorId` null
+      and, with no account, `targetType` PHONE_NUMBER and `targetName` "Unregistered number"; the page labels it "Sign-in
+      locked" (red). It runs in its own transaction after the failed sign-in's has ended, and `AuditLog`'s readers left-join the
+      actor. If the write fails the lock still stands and only the failure's type is logged.
+    - **Tests:** `application-test.properties` sets the limits out of reach, because every integration test signs in from one
+      address and counters outlive a test; `RateLimitIT` names the real numbers, with a `MutableClock`, and its own numbers and
+      addresses per test. No test sleeps.
+    - **Frontend:** no new logic. `apiRequest` already carries the server's message on any failure, and the Sign in, "Forgot
+      password?" and Register forms show it in their banner and stay usable; `sessionEndFor` ignores a 429.
+    - **Known limits:** anyone who knows a phone number can keep it locked by failing three times every 15 minutes (an
+      administrator's reset clears a lock, but it can be set again); one address hitting its limit stops everyone sharing it for 15
+      minutes; a restart, including Render sleeping a free service, forgets every count; a flood can evict a lock, but it takes
+      over 10,000 failed attempts from hundreds of addresses to win three more guesses; an entry for an unregistered number is
+      permanent, as all audit entries are; `POST /api/auth/register`'s 409 still tells anyone a number is registered, and only
+      created accounts count towards its limit, so it is not slowed down; `/api/users/me/password` is not limited.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1575,6 +1640,10 @@ listed so nothing is forgotten when the chapters are next revised.
   `PasswordResetRequest` (User 1–N as requester and as handler); use cases "ask for a password reset" (any visitor) and
   "handle password reset requests" (administrator); `audit_log` gains PASSWORD_REQUEST_CLOSED and `notifications`
   PASSWORD_RESET_REQUESTED, the first type addressed to administrators.
+- **Chapters 3, 4 and 5 — security narrative for rate limiting (Business Rule 34, V31).** Failed sign-ins, "Forgot password?"
+  and registration are limited in server memory; `audit_log` gains SIGN_IN_LOCKED, the first action with no acting user, so
+  `actor_user_id` becomes optional on the ERD; a new non-functional point on bounded memory and on finding a client's address
+  behind a proxy.
 
 ## Actors (roles) and what each can do
 
@@ -1582,8 +1651,8 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), view live inventory across blood banks (read-only)
 - **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
-  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs and donor blood group changes (Business Rules 17, 28), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
-- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32); anyone who forgot their password can ask from the Sign in page for an administrator to call back (Business Rule 33)
+  hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs, donor blood group changes and sign-in locks (Business Rules 17, 28, 34), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
+- **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32); anyone who forgot their password can ask from the Sign in page for an administrator to call back (Business Rule 33); repeated failed sign-ins lock a number for 15 minutes, and sign-in, "Forgot password?" and registration are limited per internet address (Business Rule 34)
 
 ## Conventions
 
@@ -1616,7 +1685,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`, `RateLimitIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.

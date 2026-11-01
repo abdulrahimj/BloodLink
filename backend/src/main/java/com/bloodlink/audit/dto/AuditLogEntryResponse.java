@@ -10,7 +10,7 @@ import com.bloodlink.domain.enums.Role;
 
 /**
  * One row of the Audit Log page, with actor and subject ids and names (current names; details as written then).
- * targetType says if the subject is an account, a facility or a batch; a batch is described by group, expiry and bank.
+ * targetType says if it is an account, a facility, a batch or an unregistered number; a batch shows group, expiry and bank.
  */
 public record AuditLogEntryResponse(
     UUID id,
@@ -26,7 +26,10 @@ public record AuditLogEntryResponse(
 ) {
 
     /** What kind of thing an entry's subject is. */
-    public enum TargetType { USER, BLOOD_BANK, HOSPITAL, BATCH }
+    public enum TargetType { USER, BLOOD_BANK, HOSPITAL, BATCH, PHONE_NUMBER }
+
+    /** Shown as the actor of an entry the system made itself (SIGN_IN_LOCKED, Business Rule 34). */
+    private static final String SYSTEM_ACTOR = "System";
 
     /** Must run inside the transaction that loaded the entry, since the actor and subject are lazy
      * (AuditLogRepository fetch-joins them). */
@@ -47,6 +50,11 @@ public record AuditLogEntryResponse(
             type = TargetType.BATCH;
             targetId = entry.getTargetBatch().getId();
             targetName = describeBatch(entry.getTargetBatch());
+        } else if (entry.getTarget() == null) {
+            // A locked number with no account (Business Rule 34): the number itself is in the details.
+            type = TargetType.PHONE_NUMBER;
+            targetId = null;
+            targetName = "Unregistered number";
         } else {
             type = TargetType.USER;
             targetId = entry.getTarget().getId();
@@ -57,8 +65,8 @@ public record AuditLogEntryResponse(
         return new AuditLogEntryResponse(
             entry.getId(),
             entry.getAction(),
-            entry.getActor().getId(),
-            entry.getActor().getFullName(),
+            entry.getActor() == null ? null : entry.getActor().getId(),
+            entry.getActor() == null ? SYSTEM_ACTOR : entry.getActor().getFullName(),
             type,
             targetId,
             targetName,

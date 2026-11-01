@@ -79,3 +79,26 @@ bloodlink.support-phone=${BLOODLINK_SUPPORT_PHONE:}
 # The request form always answers after at least this many milliseconds, so a registered
 # number cannot be told from an unknown one by how fast the answer comes. Default 500.
 bloodlink.password-reset-requests.min-response-ms=${BLOODLINK_PASSWORD_RESET_MIN_RESPONSE_MS:500}
+
+# --- Rate limits (Business Rule 34) ---
+# Counted in server memory, so a restart forgets them. Sign-in, per phone number: this many
+# FAILED attempts within the window lock the number for lock-minutes, even with the right password.
+bloodlink.rate-limit.sign-in.phone.max-failures=${BLOODLINK_RATE_LIMIT_PHONE_MAX_FAILURES:3}
+bloodlink.rate-limit.sign-in.phone.window-minutes=${BLOODLINK_RATE_LIMIT_PHONE_WINDOW_MINUTES:15}
+bloodlink.rate-limit.sign-in.phone.lock-minutes=${BLOODLINK_RATE_LIMIT_PHONE_LOCK_MINUTES:15}
+# Sign-in, per internet address: failed attempts by anyone sharing that address.
+bloodlink.rate-limit.sign-in.address.max-failures=${BLOODLINK_RATE_LIMIT_ADDRESS_MAX_FAILURES:30}
+bloodlink.rate-limit.sign-in.address.window-minutes=${BLOODLINK_RATE_LIMIT_ADDRESS_WINDOW_MINUTES:15}
+bloodlink.rate-limit.sign-in.address.wait-minutes=${BLOODLINK_RATE_LIMIT_ADDRESS_WAIT_MINUTES:15}
+# "Forgot password?" requests per internet address, within the window.
+bloodlink.rate-limit.password-reset.max-requests=${BLOODLINK_RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS:10}
+bloodlink.rate-limit.password-reset.window-minutes=${BLOODLINK_RATE_LIMIT_PASSWORD_RESET_WINDOW_MINUTES:60}
+# New accounts per internet address, within the window. Only accounts actually created count.
+bloodlink.rate-limit.registration.max-accounts=${BLOODLINK_RATE_LIMIT_REGISTRATION_MAX_ACCOUNTS:10}
+bloodlink.rate-limit.registration.window-minutes=${BLOODLINK_RATE_LIMIT_REGISTRATION_WINDOW_MINUTES:60}
+# The most numbers or addresses each limit remembers at once, so a flood cannot exhaust memory.
+bloodlink.rate-limit.max-entries=${BLOODLINK_RATE_LIMIT_MAX_ENTRIES:10000}
+# Leave false unless a proxy you control sits in front: a visitor can fake X-Forwarded-For.
+# When true, the address comes from that header, counting this many entries from the right.
+bloodlink.rate-limit.trust-proxy-headers=${BLOODLINK_TRUST_PROXY_HEADERS:false}
+bloodlink.rate-limit.trusted-proxy-hops=${BLOODLINK_TRUSTED_PROXY_HOPS:1}

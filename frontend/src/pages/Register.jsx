@@ -99,7 +99,7 @@ export default function Register({ onSignedIn }) {
       });
       onSignedIn?.(auth);
     } catch (err) {
-      // Shows a duplicate (409) or validation failure (400) message verbatim, once:
+      // Shows a duplicate (409), validation failure (400) or too-many-accounts (429) message verbatim, once:
       // the banner is skipped when a field already shows the same sentence.
       const fieldMessages = Object.values(err.fieldErrors ?? {});
       setError(fieldMessages.includes(err.message) ? null : err.message);

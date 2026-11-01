@@ -43,6 +43,7 @@ import com.bloodlink.domain.enums.AccountStatus;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.passwordreset.PasswordResetRequestService;
+import com.bloodlink.ratelimit.AuthRateLimits;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.security.PasswordChangedEvent;
@@ -76,13 +77,15 @@ class AdminUserServiceTest {
     /** The real encoder, not a mock — see the class comment. */
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
+    @Mock private AuthRateLimits rateLimits;
+
     private AdminUserService service;
 
     @BeforeEach
     void setUp() {
         service = new AdminUserService(
             userRepository, bloodBankRepository, hospitalRepository, passwordEncoder, auditLogService, donationBookingService,
-            notificationService, passwordResetRequestService, eventPublisher);
+            notificationService, passwordResetRequestService, eventPublisher, rateLimits);
     }
 
     /** Creates an account as the test administrator — the actor the audit log records. */

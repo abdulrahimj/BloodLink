@@ -34,6 +34,7 @@ import com.bloodlink.domain.enums.AuditAction;
 import com.bloodlink.domain.enums.Role;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.passwordreset.PasswordResetRequestService;
+import com.bloodlink.ratelimit.AuthRateLimits;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.UserRepository;
@@ -66,6 +67,7 @@ public class AdminUserService {
     private final NotificationService notificationService;
     private final PasswordResetRequestService passwordResetRequestService;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuthRateLimits rateLimits;
 
     AdminUserService(
         UserRepository userRepository,
@@ -76,7 +78,8 @@ public class AdminUserService {
         DonationBookingService donationBookingService,
         NotificationService notificationService,
         PasswordResetRequestService passwordResetRequestService,
-        ApplicationEventPublisher eventPublisher
+        ApplicationEventPublisher eventPublisher,
+        AuthRateLimits rateLimits
     ) {
         this.userRepository = userRepository;
         this.bloodBankRepository = bloodBankRepository;
@@ -87,6 +90,7 @@ public class AdminUserService {
         this.notificationService = notificationService;
         this.passwordResetRequestService = passwordResetRequestService;
         this.eventPublisher = eventPublisher;
+        this.rateLimits = rateLimits;
     }
 
     /**
@@ -391,6 +395,8 @@ public class AdminUserService {
                 + (saved.getStatus() == AccountStatus.SUSPENDED ? " The account stays suspended." : "")
                 + (closedRequest ? " Their waiting password reset request is closed." : ""));
         notificationService.notifyPasswordResetByAdmin(saved);
+        // Done last, and harmless if the commit then fails: a lock must not stand between the holder and the new password.
+        rateLimits.clearSignIn(saved.getPhone());
 
         return new PasswordResetResponse(AdminUserResponse.from(saved), temporaryPassword);
     }

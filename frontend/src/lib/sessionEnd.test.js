@@ -29,6 +29,11 @@ test('nothing ends without a token sent, or on a status other than 401', () => {
   assert.equal(sessionEndFor(200, null, true), null);
 });
 
+test('too many attempts is a message to read, never the end of a session', () => {
+  assert.equal(sessionEndFor(429, { message: 'Too many attempts. Please wait 15 minutes and try again.' }, true), null);
+  assert.equal(sessionEndFor(429, { message: 'Too many attempts. Please wait 15 minutes and try again.' }, false), null);
+});
+
 test('a socket refused for the password change is recognised by its message alone', () => {
   assert.equal(socketRefusedForPasswordChange({ headers: { message: PASSWORD_CHANGED_MESSAGE } }), true);
   assert.equal(socketRefusedForPasswordChange({ headers: { message: 'This account has been suspended. Sign in again.' } }), false);
