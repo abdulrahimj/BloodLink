@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getSupportContact, login, requestPasswordReset } from "../api/auth.js";
 import RateLimitNotice from "../components/RateLimitNotice.jsx";
 import { REQUEST_SENT_MESSAGE, phoneFieldProblem, telHref } from "../lib/passwordRequests.js";
@@ -30,6 +30,15 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
 
   // The lock is per number, so this follows the box: another number has no wait, and the server still decides.
   const countdown = useRateLimitCountdown(countdownKey(SIGN_IN_FORM, phone));
+  const passwordInput = useRef(null);
+
+  /** An administrator's reset clears the lock on the server, which this tab cannot see; the server decides the attempt. */
+  function tryNow() {
+    countdown.cancel();
+    setError(null);
+    setFieldErrors({});
+    passwordInput.current?.focus();
+  }
 
   /**
    * Authenticates and hands the session to the app shell; login() stores the token,
@@ -162,6 +171,12 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
         .au-check input { width: 15px; height: 15px; accent-color: var(--navy); cursor: pointer; }
         .au-link { font-size: clamp(10.5px, 1.5vh, 13px); font-weight: 600; color: var(--red); text-decoration: none; }
         .au-link:hover { text-decoration: underline; }
+        .au-try-now {
+          display: block; background: none; border: none; padding: 0; cursor: pointer;
+          font-family: inherit; text-align: left;
+          margin: calc(-.5 * clamp(10px, 1.7vh, 16px)) 0 clamp(10px, 1.7vh, 16px);
+        }
+        .au-try-now:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
         .au-submit {
           width: 100%; border: none; border-radius: 8px; cursor: pointer;
@@ -252,7 +267,7 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
           <h2 className="au-h">Welcome back</h2>
           <p className="au-p">Sign in to continue to your BloodLink account.</p>
 
-          <RateLimitNotice countdown={countdown} />
+          <RateLimitNotice countdown={countdown} onTryNow={tryNow} />
           {!countdown.waiting && error && <div className="au-alert" role="alert">{error}</div>}
           {/* Why the last session ended (Business Rule 32); replaced by any error from this attempt. */}
           {!countdown.waiting && !error && notice && <div className="au-alert au-alert--notice" role="status">{notice}</div>}
@@ -280,6 +295,7 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
               <LockIcon />
               <input
                 id="au-pass"
+                ref={passwordInput}
                 className={`au-input${fieldErrors.password ? " au-input--bad" : ""}`}
                 type="password"
                 placeholder="Enter your password"

@@ -1,11 +1,14 @@
 /* BloodLink — the waiting time shown after a 429 (Business Rule 34): wording, arithmetic and the end times kept in
    sessionStorage. The server's Retry-After sets the time; the server still decides every attempt. */
 
+import { safeSessionStorage } from "./safeStorage.js";
+
 export const SIGN_IN_FORM = "signin";
 export const FORGOT_PASSWORD_FORM = "forgot";
 export const REGISTER_FORM = "register";
 
 export const TRY_AGAIN_MESSAGE = "You can try again now.";
+export const ADMIN_RESET_LINK = "Did an administrator reset your password? Try now.";
 
 const KEY_PREFIX = "bloodlink.rateLimit.";
 const SIGN_IN_PREFIX = `${KEY_PREFIX}${SIGN_IN_FORM}.`;
@@ -60,73 +63,61 @@ export function countdownKey(form, phone) {
   return identity ? `${SIGN_IN_PREFIX}${identity}` : null;
 }
 
-/** This tab's sessionStorage, or null where the browser refuses it: merely reading the property can throw. */
-function browserStorage() {
-  try {
-    return window.sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
 /** The stored end time if it is still ahead; a finished or unreadable one is removed. */
-export function readEndTime(key, now, storage = browserStorage()) {
+export function readEndTime(key, now, storage = safeSessionStorage) {
   if (!key) return null;
-  try {
-    const raw = storage?.getItem(key);
-    if (raw === null || raw === undefined) return null;
-    const endsAt = Number(raw);
-    if (Number.isFinite(endsAt) && endsAt > now) return endsAt;
-    storage.removeItem(key);
-  } catch {
-    // Without storage the countdown just does not survive a refresh.
-  }
+  const raw = storage.getItem(key);
+  if (raw === null) return null;
+  const endsAt = Number(raw);
+  if (Number.isFinite(endsAt) && endsAt > now) return endsAt;
+  storage.removeItem(key);
   return null;
 }
 
-export function saveEndTime(key, endsAt, storage = browserStorage()) {
-  try {
-    storage?.setItem(key, String(endsAt));
-  } catch {
-    // Without storage the countdown just does not survive a refresh.
-  }
+export function saveEndTime(key, endsAt, storage = safeSessionStorage) {
+  storage.setItem(key, String(endsAt));
 }
 
-export function clearEndTime(key, storage = browserStorage()) {
-  try {
-    storage?.removeItem(key);
-  } catch {
-    // Nothing to clear if storage is unavailable.
-  }
+export function clearEndTime(key, storage = safeSessionStorage) {
+  storage.removeItem(key);
 }
 
-/** Every Sign in key in storage, read up front because removing items shifts the indexes. */
+/** The wait stored under a key: endsAt is null when there is none, and finished shows "You can try again now." */
+export function loadWait(key, now, storage = safeSessionStorage) {
+  return { key, endsAt: readEndTime(key, now, storage), finished: false };
+}
+
+/** The wait a refused attempt carries, stored; null when it carries none, so the form shows the server's message. */
+export function startWait(key, error, now, storage = safeSessionStorage) {
+  const endsAt = key ? endTimeFor(error, now) : null;
+  if (endsAt === null) return null;
+  saveEndTime(key, endsAt, storage);
+  return { key, endsAt, finished: false };
+}
+
+/** "Try now": forgets the wait in this tab only. The server's lock is untouched, so it still decides the next attempt. */
+export function cancelWait(key, storage = safeSessionStorage) {
+  clearEndTime(key, storage);
+  return { key, endsAt: null, finished: false };
+}
+
 function signInKeys(storage) {
-  return Array.from({ length: storage?.length ?? 0 }, (_, index) => storage.key(index))
-    .filter((key) => key?.startsWith(SIGN_IN_PREFIX));
+  return storage.keys().filter((key) => key.startsWith(SIGN_IN_PREFIX));
 }
 
 /** The number whose lock ends last, to refill the box after a refresh; null when none is running. */
-export function lockedSignInPhone(now, storage = browserStorage()) {
-  try {
-    let latest = null;
-    for (const key of signInKeys(storage)) {
-      const endsAt = readEndTime(key, now, storage);
-      if (endsAt !== null && (latest === null || endsAt > latest.endsAt)) {
-        latest = { phone: key.slice(SIGN_IN_PREFIX.length), endsAt };
-      }
+export function lockedSignInPhone(now, storage = safeSessionStorage) {
+  let latest = null;
+  for (const key of signInKeys(storage)) {
+    const endsAt = readEndTime(key, now, storage);
+    if (endsAt !== null && (latest === null || endsAt > latest.endsAt)) {
+      latest = { phone: key.slice(SIGN_IN_PREFIX.length), endsAt };
     }
-    return latest?.phone ?? null;
-  } catch {
-    return null;
   }
+  return latest?.phone ?? null;
 }
 
 /** After a successful sign-in, so the next person at this tab is not shown someone else's number. */
-export function clearSignInCountdowns(storage = browserStorage()) {
-  try {
-    signInKeys(storage).forEach((key) => storage.removeItem(key));
-  } catch {
-    // Nothing to clear if storage is unavailable.
-  }
+export function clearSignInCountdowns(storage = safeSessionStorage) {
+  signInKeys(storage).forEach((key) => storage.removeItem(key));
 }

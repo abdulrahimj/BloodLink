@@ -4,34 +4,30 @@
 import { useEffect, useState } from "react";
 import {
   TRY_AGAIN_MESSAGE,
+  cancelWait,
   clearEndTime,
-  endTimeFor,
-  readEndTime,
-  saveEndTime,
+  loadWait,
   secondsRemaining,
   spokenWaitMessage,
+  startWait,
 } from "./rateLimitCountdown.js";
 
 // Often enough that a late tick never skips a second; the state only changes once a second.
 const TICK_MS = 250;
-
-function loaded(key) {
-  return { key, endsAt: readEndTime(key, Date.now()), finished: false };
-}
 
 /**
  * Follows the wait stored under storageKey. waiting blocks submit, secondsLeft drives the banner, finished shows
  * "You can try again now." until dismiss(), and announcement is the once-only text for the live region.
  */
 export function useRateLimitCountdown(storageKey) {
-  const [stored, setStored] = useState(() => loaded(storageKey));
+  const [stored, setStored] = useState(() => loadWait(storageKey, Date.now()));
   const [, setShownSeconds] = useState(0);
   const [announcement, setAnnouncement] = useState("");
 
   // A different phone number has its own wait, or none: swapped during render so the button never flickers.
   let current = stored;
   if (stored.key !== storageKey) {
-    current = loaded(storageKey);
+    current = loadWait(storageKey, Date.now());
     setStored(current);
   }
   const { endsAt, finished } = current;
@@ -59,11 +55,15 @@ export function useRateLimitCountdown(storageKey) {
 
   /** Starts the wait a refused attempt carries; false means no usable time, so the form shows the server's message. */
   function startFrom(error) {
-    const end = storageKey ? endTimeFor(error, Date.now()) : null;
-    if (end === null) return false;
-    saveEndTime(storageKey, end);
-    setStored({ key: storageKey, endsAt: end, finished: false });
+    const wait = startWait(storageKey, error, Date.now());
+    if (wait === null) return false;
+    setStored(wait);
     return true;
+  }
+
+  /** Drops the wait in this tab; if the lock still stands, the next attempt's 429 starts it again. */
+  function cancel() {
+    setStored(cancelWait(storageKey));
   }
 
   /** Clears "You can try again now." when the next attempt begins. */
@@ -77,6 +77,7 @@ export function useRateLimitCountdown(storageKey) {
     finished,
     announcement,
     startFrom,
+    cancel,
     dismiss,
   };
 }

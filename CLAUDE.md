@@ -1592,12 +1592,15 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
       Sign in only while the box holds the locked number (the same number typed either way counts, `phoneIdentity`), the other two
       for the whole wait. The end time (never the seconds left) is kept in sessionStorage, per form and per number for
       Sign in, so a refresh continues it, and Sign in refills the box with the locked number; the value is cleared when
-      the wait ends, and every Sign in value on a successful sign-in. A screen reader hears the start and the end only: one
+      the wait ends, and every Sign in value on a successful sign-in. **Sign in alone (the one per-number limit) shows a link
+      under the banner while a wait runs: "Did an administrator reset your password? Try now."**, because an administrator's
+      reset clears the lock on the server (Business Rule 31) and the browser cannot see that. It forgets that number's wait in
+      this tab only (`cancelWait`): the banner goes, the button is enabled and the password box takes focus. The server still
+      decides: if the lock stands, the next attempt is a 429 and the countdown restarts from its Retry-After, and a refused
+      attempt never extends a lock. A screen reader hears the start and the end only: one
       `aria-live` line, the ticking banner having no live role. With no usable header the form shows the server's own
       message, as before. `sessionEndFor` ignores a 429. The server still decides every attempt.
-    - **Known limits:** the browser cannot see an administrator's reset (Business Rule 31) clear a lock, so in that tab Sign in
-      stays disabled for that number until its countdown ends (a new tab has no stored wait, and the server accepts it);
-      anyone who knows a phone number can keep it locked by failing three times every 15 minutes (an
+    - **Known limits:** anyone who knows a phone number can keep it locked by failing three times every 15 minutes (an
       administrator's reset clears a lock, but it can be set again); one address hitting its limit stops everyone sharing it for 15
       minutes; a restart, including Render sleeping a free service, forgets every count; a flood can evict a lock, but it takes
       over 10,000 failed attempts from hundreds of addresses to win three more guesses; an entry for an unregistered number is
@@ -1722,6 +1725,7 @@ listed so nothing is forgotten when the chapters are next revised.
 - **Explain what you did in plain, non-technical language in every summary**, in addition to the technical detail. Assume the project owner is not a professional software engineer. If a technical term is genuinely necessary (e.g. "race condition," "pessimistic lock," "BCrypt"), briefly define it in one plain sentence the first time it's used in that summary, rather than leaving it unexplained.
 - **At the end of every task, list every file created or modified**, grouped as New / Modified, and for each new or changed method/function, give its name and a one-line purpose. This is a structured list in addition to any prose summary, not a replacement for it — the project owner reviews this list against `git status` before verifying anything in the browser.
 - **Work directly on the `main` branch.** Do not create feature branches, task branches, or any other branch unless explicitly instructed to. This is a two-person project working phase-by-phase in turns; branching adds coordination overhead we've deliberately chosen not to use.
+- **Browser storage goes only through `frontend/src/lib/safeStorage.js`** (`safeLocalStorage`, `safeSessionStorage`); nothing else may touch `localStorage` or `sessionStorage`. A browser can refuse them, even on reading the property, and one unprotected read blanks the whole app. Nothing in the helper throws: what cannot be stored stays in memory until the page reloads, so with storage blocked a user can sign in and use the app, and signs in again after a refresh. Those stores are the session (`auth/session.js`) and the rate-limit countdown (`lib/rateLimitCountdown.js`).
 - **Comment all non-trivial code**, especially service-layer methods and business logic (eligibility checks, threshold calculations, request status transitions, WebSocket event triggers). A short comment above each method explaining *what it does and why*, not just what the code says. This matters for two people maintaining this together, and for explaining the implementation later.
 - Configuration file: `application.properties` (not `.yml`) — chosen for this project, keep consistent across all phases
 - REST endpoints: `/api/<resource>`, plural nouns, standard verbs (GET/POST/PATCH)
