@@ -191,8 +191,8 @@ public class SecurityConfig {
         config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
-        // Exposes Content-Disposition to the other-origin page so a Reports CSV keeps its file name (Business Rule 23).
-        config.setExposedHeaders(List.of("Content-Disposition"));
+        // Readable by the other-origin page: a Reports CSV's file name (Business Rule 23) and a rate limit's wait (Rule 34).
+        config.setExposedHeaders(List.of("Content-Disposition", "Retry-After"));
         config.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

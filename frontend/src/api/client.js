@@ -3,6 +3,7 @@
 
 import { clearSession, endSession, getToken } from '../auth/session.js';
 import { apiBaseUrlFrom } from '../lib/apiBaseUrl.js';
+import { parseRetryAfter } from '../lib/rateLimitCountdown.js';
 import { PASSWORD_CHANGED_MESSAGE, sessionEndFor } from '../lib/sessionEnd.js';
 
 /** Exported so the WebSocket client can open its socket against the same origin
@@ -11,15 +12,17 @@ export const API_BASE_URL = apiBaseUrlFrom(import.meta.env.VITE_API_BASE_URL);
 
 /**
  * Error carrying the backend's ApiError: message is safe to show;
- * fieldErrors (400s) maps field names to messages for the form; code (rare) names a refusal the form acts on.
+ * fieldErrors (400s) maps field names to messages for the form; code (rare) names a refusal the form acts on;
+ * retryAfterSeconds (429s) is the server's Retry-After, null when it sent none.
  */
 export class ApiError extends Error {
-  constructor(message, status, fieldErrors, code) {
+  constructor(message, status, fieldErrors, code, retryAfterSeconds) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fieldErrors = fieldErrors ?? {};
     this.code = code ?? null;
+    this.retryAfterSeconds = retryAfterSeconds ?? null;
   }
 }
 
@@ -98,6 +101,7 @@ function throwIfFailed(response, payload, sentToken) {
       response.status,
       payload?.fieldErrors,
       payload?.code,
+      parseRetryAfter(response.headers.get('Retry-After')),
     );
   }
 }

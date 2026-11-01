@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { getSupportContact, login, requestPasswordReset } from "../api/auth.js";
+import RateLimitNotice from "../components/RateLimitNotice.jsx";
 import { REQUEST_SENT_MESSAGE, phoneFieldProblem, telHref } from "../lib/passwordRequests.js";
+import {
+  FORGOT_PASSWORD_FORM,
+  SIGN_IN_FORM,
+  clearSignInCountdowns,
+  countdownKey,
+  lockedSignInPhone,
+} from "../lib/rateLimitCountdown.js";
+import { useRateLimitCountdown } from "../lib/useRateLimitCountdown.js";
 
 /* BloodLink — Login, in the shared design system, wired to POST /api/auth/login
    with an error banner and a busy button added to the mockup. */
@@ -8,7 +17,8 @@ import { REQUEST_SENT_MESSAGE, phoneFieldProblem, telHref } from "../lib/passwor
 const ICON = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
 
 export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
-  const [phone, setPhone] = useState("");
+  // A refresh empties the box, so a running lock's number is put back and its countdown carries on.
+  const [phone, setPhone] = useState(() => lockedSignInPhone(Date.now()) ?? "");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
 
@@ -18,24 +28,30 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
+  // The lock is per number, so this follows the box: another number has no wait, and the server still decides.
+  const countdown = useRateLimitCountdown(countdownKey(SIGN_IN_FORM, phone));
+
   /**
    * Authenticates and hands the session to the app shell; login() stores the token,
    * so no credential stays in component state.
    */
   async function handleSubmit(event) {
     event.preventDefault();
-    if (submitting) return;
+    if (submitting || countdown.waiting) return;
 
     setError(null);
     setFieldErrors({});
+    countdown.dismiss();
     setSubmitting(true);
 
     try {
       const auth = await login(phone.trim(), password, remember);
+      clearSignInCountdowns();
       onSignedIn?.(auth);
     } catch (err) {
-      // A wrong password (401), a validation failure (400) and "too many attempts" (429) all land here;
-      // the backend's message is written for display, so it is shown verbatim, and the form stays usable.
+      // A 429 with a time becomes the countdown. Anything else (401, 400, a 429 without one) is shown as the
+      // backend wrote it, and the form stays usable.
+      if (countdown.startFrom(err)) return;
       setError(err.message);
       setFieldErrors(err.fieldErrors ?? {});
     } finally {
@@ -133,10 +149,13 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
           color: #8E0B21; border-radius: 8px;
           padding: clamp(8px, 1.3vh, 11px) 12px;
           font-size: clamp(10.5px, 1.5vh, 13px); font-weight: 500; line-height: 1.45;
+          font-variant-numeric: tabular-nums;
           margin-bottom: clamp(10px, 1.7vh, 16px);
         }
         .au-alert--notice { background: rgba(28,58,94,.06); border-color: rgba(28,58,94,.28); color: var(--navy); }
-        .au-submit:disabled { opacity: .68; cursor: progress; }
+        .au-alert--ok { background: rgba(30,127,69,.08); border-color: rgba(30,127,69,.32); color: #14592F; }
+        .au-submit:disabled { opacity: .68; cursor: not-allowed; }
+        .au-submit[aria-busy="true"] { cursor: progress; }
 
         .au-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: clamp(2px, .8vh, 8px) 0 clamp(14px, 2.4vh, 22px); }
         .au-check { display: flex; align-items: center; gap: 8px; font-size: clamp(10.5px, 1.5vh, 13px); font-weight: 500; color: #3D3D3D; cursor: pointer; }
@@ -233,9 +252,10 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
           <h2 className="au-h">Welcome back</h2>
           <p className="au-p">Sign in to continue to your BloodLink account.</p>
 
-          {error && <div className="au-alert" role="alert">{error}</div>}
+          <RateLimitNotice countdown={countdown} />
+          {!countdown.waiting && error && <div className="au-alert" role="alert">{error}</div>}
           {/* Why the last session ended (Business Rule 32); replaced by any error from this attempt. */}
-          {!error && notice && <div className="au-alert au-alert--notice" role="status">{notice}</div>}
+          {!countdown.waiting && !error && notice && <div className="au-alert au-alert--notice" role="status">{notice}</div>}
 
           <div className="au-field">
             <label className="au-label" htmlFor="au-phone">Phone Number</label>
@@ -282,7 +302,7 @@ export default function Login({ onSignedIn, notice = null, mode = "signin" }) {
             <a className="au-link" href="#forgot">Forgot password?</a>
           </div>
 
-          <button type="submit" className="au-submit" disabled={submitting}>
+          <button type="submit" className="au-submit" aria-busy={submitting} disabled={submitting || countdown.waiting}>
             {submitting ? "Signing in…" : "Sign in"}
           </button>
 
@@ -313,6 +333,9 @@ function ForgotPasswordForm() {
   const [sent, setSent] = useState(false);
   const [supportPhone, setSupportPhone] = useState(null);
 
+  // This limit is per internet address, so it holds whatever number is typed.
+  const countdown = useRateLimitCountdown(countdownKey(FORGOT_PASSWORD_FORM));
+
   // Optional, so a failure just leaves the line out.
   useEffect(() => {
     let cancelled = false;
@@ -324,11 +347,12 @@ function ForgotPasswordForm() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (sending) return;
+    if (sending || countdown.waiting) return;
 
     const problem = phoneFieldProblem(phone);
     setError(null);
     setFieldError(problem);
+    countdown.dismiss();
     if (problem) return;
 
     setSending(true);
@@ -336,7 +360,9 @@ function ForgotPasswordForm() {
       await requestPasswordReset(phone.trim());
       setSent(true);
     } catch (err) {
-      // A malformed number (the same 400 as sign-in), too many requests (429) or a network failure.
+      // Too many requests (429) becomes the countdown; otherwise a malformed number (the same 400 as sign-in)
+      // or a network failure.
+      if (countdown.startFrom(err)) return;
       setFieldError(err.fieldErrors?.phone ?? null);
       setError(err.fieldErrors?.phone ? null : err.message);
     } finally {
@@ -362,7 +388,8 @@ function ForgotPasswordForm() {
         </>
       ) : (
         <>
-          {error && <div className="au-alert" role="alert">{error}</div>}
+          <RateLimitNotice countdown={countdown} />
+          {!countdown.waiting && error && <div className="au-alert" role="alert">{error}</div>}
           <div className="au-field">
             <label className="au-label" htmlFor="au-forgot-phone">Phone Number</label>
             <div className="au-inwrap">
@@ -381,7 +408,7 @@ function ForgotPasswordForm() {
             </div>
             {fieldError && <span className="au-err" id="au-forgot-phone-err">{fieldError}</span>}
           </div>
-          <button type="submit" className="au-submit" disabled={sending}>
+          <button type="submit" className="au-submit" aria-busy={sending} disabled={sending || countdown.waiting}>
             {sending ? "Sending…" : "Send request"}
           </button>
         </>

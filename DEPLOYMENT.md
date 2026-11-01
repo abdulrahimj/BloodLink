@@ -273,7 +273,9 @@ What follows from that:
 ## Rate limits
 
 Sign-in, "Forgot password?" and registration are limited (Business Rule 34). Over a limit the answer is a `429` with a
-`Retry-After` header, and the page shows "Too many attempts. Please wait 15 minutes and try again." with the real time left.
+`Retry-After` header, and the page shows a live countdown from it: "Too many attempts. Please wait 14:32 before trying again."
+The hosted site and the API are on different addresses, so the countdown relies on the backend exposing that header
+(`SecurityConfig`); deploy the backend with the frontend, or the page shows the server's fixed message instead.
 Counters live in the server's memory: a restart forgets them, and that includes Render putting a free service to sleep.
 
 | Limit | Variable | Default |

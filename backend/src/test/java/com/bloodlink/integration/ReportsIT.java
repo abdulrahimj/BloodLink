@@ -2,6 +2,7 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -331,7 +332,7 @@ class ReportsIT {
             .andExpect(status().isOk())
             .andExpect(header().string("Content-Disposition",
                 "attachment; filename=\"bloodlink-report-requests-2001-01-01-to-2001-12-31.csv\""))
-            .andExpect(header().string("Access-Control-Expose-Headers", "Content-Disposition"));
+            .andExpect(header().string("Access-Control-Expose-Headers", containsString("Content-Disposition")));
     }
 
     // ---------- date range validation ----------

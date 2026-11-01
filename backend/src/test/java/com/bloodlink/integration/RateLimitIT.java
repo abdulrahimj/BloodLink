@@ -2,6 +2,7 @@ package com.bloodlink.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -84,6 +85,22 @@ class RateLimitIT {
             .andExpect(status().isTooManyRequests())
             .andExpect(header().string("Retry-After", "900"))
             .andExpect(jsonPath("$.message").value("Too many attempts. Please wait 15 minutes and try again."));
+    }
+
+    /** The site and the API are on different addresses, so the browser hides the wait unless it is exposed. */
+    @Test
+    void aPageOnAnotherAddressMayReadTheWait() throws Exception {
+        User donor = seed(Role.DONOR);
+        String address = uniqueAddress();
+        lock(donor.getPhone(), address);
+
+        mockMvc.perform(from(address, post("/api/auth/login"))
+                .header("Origin", "http://localhost:5173")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(new LoginRequest(donor.getPhone(), PASSWORD))))
+            .andExpect(status().isTooManyRequests())
+            .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:5173"))
+            .andExpect(header().string("Access-Control-Expose-Headers", containsString("Retry-After")));
     }
 
     @Test

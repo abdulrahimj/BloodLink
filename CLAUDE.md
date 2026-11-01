@@ -1583,9 +1583,21 @@ Donation 0..1–1 DonationBooking · User 1–N PasswordResetRequest (as request
     - **Tests:** `application-test.properties` sets the limits out of reach, because every integration test signs in from one
       address and counters outlive a test; `RateLimitIT` names the real numbers, with a `MutableClock`, and its own numbers and
       addresses per test. No test sleeps.
-    - **Frontend:** no new logic. `apiRequest` already carries the server's message on any failure, and the Sign in, "Forgot
-      password?" and Register forms show it in their banner and stay usable; `sessionEndFor` ignores a 429.
-    - **Known limits:** anyone who knows a phone number can keep it locked by failing three times every 15 minutes (an
+    - **Frontend: a live countdown from the `Retry-After` header**, on Sign in, "Forgot password?" and Register. The page
+      and the API are on different addresses, so SecurityConfig's CORS exposes `Retry-After` (otherwise the browser hides it);
+      this changes no limit, status or message. `ApiError.retryAfterSeconds` carries it, and `lib/rateLimitCountdown.js`
+      (tested) holds the wording, sums and storage; `lib/useRateLimitCountdown.js` is the one hook and
+      `components/RateLimitNotice.jsx` the one banner. The banner reads "Too many attempts. Please wait 14:32 before trying
+      again.", then green "You can try again now." at 0:00, cleared by the next attempt. Submit is disabled meanwhile:
+      Sign in only while the box holds the locked number (the same number typed either way counts, `phoneIdentity`), the other two
+      for the whole wait. The end time (never the seconds left) is kept in sessionStorage, per form and per number for
+      Sign in, so a refresh continues it, and Sign in refills the box with the locked number; the value is cleared when
+      the wait ends, and every Sign in value on a successful sign-in. A screen reader hears the start and the end only: one
+      `aria-live` line, the ticking banner having no live role. With no usable header the form shows the server's own
+      message, as before. `sessionEndFor` ignores a 429. The server still decides every attempt.
+    - **Known limits:** the browser cannot see an administrator's reset (Business Rule 31) clear a lock, so in that tab Sign in
+      stays disabled for that number until its countdown ends (a new tab has no stored wait, and the server accepts it);
+      anyone who knows a phone number can keep it locked by failing three times every 15 minutes (an
       administrator's reset clears a lock, but it can be set again); one address hitting its limit stops everyone sharing it for 15
       minutes; a restart, including Render sleeping a free service, forgets every count; a flood can evict a lock, but it takes
       over 10,000 failed attempts from hundreds of addresses to win three more guesses; an entry for an unregistered number is
@@ -1661,7 +1673,7 @@ listed so nothing is forgotten when the chapters are next revised.
   keeping the fixed tech stack). Component wording or rules that only exist inside a `.jsx` file cannot
   be tested this way, so extract the function first (as `appealReach.js` was).
 - **Every commit is authored and committed solely by Abdulrahim Jalloh <abdulrahim.jalloh.1710@gmail.com>, and commit messages carry no `Co-Authored-By:` or "Generated with Claude Code" lines — no exceptions.** This overrides any default attribution a tool would otherwise add. The history was rewritten to this standard on 2026-09-21 with `git filter-repo`. On the owner's machine it is also enforced by local hooks in `.git/hooks/` (`pre-commit` refuses any other author or committer; `commit-msg` strips those lines) and `user.useConfigOnly=true`; those are not versioned, so on any other clone this line is the rule.
-- **At the end of every task, after listing files changed, commit and push as the closing step — not optional.** Run `git add`, then `git commit` with a clear, specific message describing what changed, then `git push`. A task is not finished until it is committed and pushed to `origin/main`. State in the summary that this was done, including the resulting commit hash.
+- **At the end of every task, after listing files changed, commit locally as the closing step — not optional — and do NOT push.** Run `git add`, then `git commit` with a clear, specific message describing what changed. The project owner pushes to `origin/main` themselves, after reviewing and browser-testing. State in the summary that the commit was made, including the resulting commit hash, and that nothing was pushed.
 - **`bloodlink_dev` holds real data. Testing must never delete or overwrite a row it did not itself create.**
   This is not a style preference — it was violated in Phase 6 and destroyed the project owner's manually
   entered stock batches, which were unrecoverable (no backup, `archive_mode` is off). The rules:

@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 import { registerDonor } from "../api/auth.js";
 import PasswordChecklist from "../components/PasswordChecklist.jsx";
+import RateLimitNotice from "../components/RateLimitNotice.jsx";
 import { meetsPasswordRule, passwordProblem } from "../lib/passwordRules.js";
+import { REGISTER_FORM, countdownKey } from "../lib/rateLimitCountdown.js";
+import { useRateLimitCountdown } from "../lib/useRateLimitCountdown.js";
 
 /* BloodLink — Register (voluntary donor sign-up), fields from the ERD's User and Donor; wired to
    POST /api/auth/register with an error banner and busy button. Selects carry the backend enum values. */
@@ -34,6 +37,9 @@ export default function Register({ onSignedIn }) {
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  // This limit is per internet address, so it holds for the whole form.
+  const countdown = useRateLimitCountdown(countdownKey(REGISTER_FORM));
 
   /** One change handler for every input, keyed by the field name. */
   function update(field, value) {
@@ -69,7 +75,8 @@ export default function Register({ onSignedIn }) {
    */
   async function handleSubmit(event) {
     event.preventDefault();
-    if (submitting) return;
+    if (submitting || countdown.waiting) return;
+    countdown.dismiss();
 
     const localErrors = validateLocally();
     if (Object.keys(localErrors).length > 0) {
@@ -99,8 +106,9 @@ export default function Register({ onSignedIn }) {
       });
       onSignedIn?.(auth);
     } catch (err) {
-      // Shows a duplicate (409), validation failure (400) or too-many-accounts (429) message verbatim, once:
+      // Too many accounts (429) becomes the countdown. Anything else (409, 400) is shown verbatim, once:
       // the banner is skipped when a field already shows the same sentence.
+      if (countdown.startFrom(err)) return;
       const fieldMessages = Object.values(err.fieldErrors ?? {});
       setError(fieldMessages.includes(err.message) ? null : err.message);
       setFieldErrors(err.fieldErrors ?? {});
@@ -185,8 +193,10 @@ export default function Register({ onSignedIn }) {
           color: #8E0B21; border-radius: 8px;
           padding: clamp(7px, 1.2vh, 10px) 12px;
           font-size: clamp(10px, 1.42vh, 12.5px); font-weight: 500; line-height: 1.45;
+          font-variant-numeric: tabular-nums;
           margin-bottom: clamp(9px, 1.5vh, 14px);
         }
+        .au-alert--ok { background: rgba(30,127,69,.08); border-color: rgba(30,127,69,.32); color: #14592F; }
         .au-submit:disabled { opacity: .68; cursor: not-allowed; }
         .au-submit[aria-busy="true"] { cursor: progress; }
         .au-span { grid-column: 1 / -1; margin-top: -4px; }
@@ -269,7 +279,8 @@ export default function Register({ onSignedIn }) {
           <h2 className="au-h">Create your account</h2>
           <p className="au-p">Register as a voluntary blood donor in Makeni City.</p>
 
-          {error && <div className="au-alert" role="alert">{error}</div>}
+          <RateLimitNotice countdown={countdown} />
+          {!countdown.waiting && error && <div className="au-alert" role="alert">{error}</div>}
 
           <div className="au-grid">
             <div className="au-field au-field--full">
@@ -389,7 +400,7 @@ export default function Register({ onSignedIn }) {
 
           <button
             type="submit" className="au-submit" aria-busy={submitting}
-            disabled={submitting || !meetsPasswordRule(form.password)}
+            disabled={submitting || countdown.waiting || !meetsPasswordRule(form.password)}
           >
             {submitting ? "Creating account…" : "Create account"}
           </button>
