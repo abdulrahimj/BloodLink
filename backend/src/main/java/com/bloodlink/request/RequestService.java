@@ -135,7 +135,7 @@ public class RequestService {
                 User user = requireUser(principal);
                 yield user.getHospital() == null
                     ? List.of()
-                    : bloodRequestRepository.findByHospitalIdOrderByCreatedAtDesc(user.getHospital().getId());
+                    : bloodRequestRepository.findByHospitalIdOrderByCreatedAtDescIdDesc(user.getHospital().getId());
             }
             case BLOOD_BANK_STAFF -> {
                 User user = requireUser(principal);
@@ -143,7 +143,7 @@ public class RequestService {
                 yield scope == null ? List.of() : bloodRequestRepository.findActionableForBank(scope);
             }
             case ADMIN -> bloodBankId == null
-                ? bloodRequestRepository.findAllByOrderByCreatedAtDesc()
+                ? bloodRequestRepository.findAllByOrderByCreatedAtDescIdDesc()
                 : bloodRequestRepository.findActionableForBank(bloodBankId);
             // DONOR never reaches here (SecurityConfig), but the switch is exhaustive
             // so a new role fails the build instead of seeing everything.

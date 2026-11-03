@@ -22,12 +22,6 @@ export function canCancelRequest(request) {
   return request.status === "PENDING" || request.status === "PARTIALLY_FULFILLED";
 }
 
-/** Whether this notification makes a bank's request list out of date. */
-export function refreshesBankRequests(type) {
-  return type === "NEW_REQUEST" || type === "LOW_STOCK_ALERT" || type === "REQUEST_PROGRESS"
-    || type === "REQUEST_CANCELLED";
-}
-
 /** Why the box can't be sent, as { field, message }, or null; the same two fields the server refuses on. */
 export function cancellationProblem({ reason, note }) {
   if (!reason) return { field: "reason", message: "Choose a reason." };

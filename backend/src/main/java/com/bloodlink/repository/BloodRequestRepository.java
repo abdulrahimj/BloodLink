@@ -20,8 +20,9 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
 
     /**
      * "My Recent Requests": this hospital's own requests only, newest first, scoped in the query.
+     * id breaks ties, so rows sharing a created_at never swap places between quiet re-reads.
      */
-    List<BloodRequest> findByHospitalIdOrderByCreatedAtDesc(UUID hospitalId);
+    List<BloodRequest> findByHospitalIdOrderByCreatedAtDescIdDesc(UUID hospitalId);
 
     /**
      * Every request's status counted, citywide, for the Request Outcomes chart, in one grouped query.
@@ -38,6 +39,7 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     /**
      * A bank's incoming requests: every open one (Business Rule 20) plus every one it contributed to, newest first,
      * minus any it declined (Business Rule 11). So a cancelled request stays only as a contributor's history (Rule 35).
+     * id breaks ties in the order, so rows sharing a created_at never swap places between quiet re-reads.
      */
     @Query("""
         select r from BloodRequest r
@@ -51,12 +53,12 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
               select 1 from BloodRequestDecline d
               where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
           )
-        order by r.createdAt desc
+        order by r.createdAt desc, r.id desc
         """)
     List<BloodRequest> findActionableForBank(@Param("bloodBankId") UUID bloodBankId);
 
-    /** Every request, newest first — the ADMIN's citywide view. */
-    List<BloodRequest> findAllByOrderByCreatedAtDesc();
+    /** Every request, newest first (id breaking ties) — the ADMIN's citywide view. */
+    List<BloodRequest> findAllByOrderByCreatedAtDescIdDesc();
 
     /**
      * The Open Requests stat card: requests this bank could contribute to now (short of units, not declined by it),

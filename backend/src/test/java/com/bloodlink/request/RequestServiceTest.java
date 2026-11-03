@@ -262,7 +262,7 @@ class RequestServiceTest {
     @Test
     void aHospitalSeesOnlyItsOwnRequests() {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(null, hospital())));
-        when(bloodRequestRepository.findByHospitalIdOrderByCreatedAtDesc(HOSPITAL_ID))
+        when(bloodRequestRepository.findByHospitalIdOrderByCreatedAtDescIdDesc(HOSPITAL_ID))
             .thenReturn(List.of(request(RequestStatus.PENDING, null)));
 
         var requests = service.listRequests(principal(Role.HOSPITAL_STAFF), null);
@@ -270,7 +270,7 @@ class RequestServiceTest {
         assertThat(requests).hasSize(1);
         assertThat(requests.get(0).hospitalId()).isEqualTo(HOSPITAL_ID);
         // Scoped by the caller's own hospital, never by anything they could pass in.
-        verify(bloodRequestRepository, never()).findAllByOrderByCreatedAtDesc();
+        verify(bloodRequestRepository, never()).findAllByOrderByCreatedAtDescIdDesc();
     }
 
     @Test

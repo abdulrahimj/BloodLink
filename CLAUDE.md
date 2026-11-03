@@ -934,6 +934,15 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       ("2 of 4 units received · 2 still needed · from …") instead of a binary badge. The dashboard's
       stat card becomes "Open Requests" (PENDING + PARTIALLY_FULFILLED), and the Admin Console's
       request-outcomes donut shows "Partly filled" where "Approved" used to be.
+    - **Both dashboards keep their request lists current without a reload.** Any request notice (NEW_REQUEST,
+      REQUEST_PROGRESS, REQUEST_STATUS_CHANGE, REQUEST_CANCELLED — one check, `lib/requestRefresh.js` `isRequestNotice`;
+      the bank dashboard also on LOW_STOCK_ALERT) re-reads it, and so does `useNotifications`' 30-second check while the
+      dashboard view is open. The second is needed because every bank lists every open request but NEW_REQUEST reaches
+      only banks able to fill it, and a dropped socket delivers no push at all. The re-read is quiet (no spinner, the
+      form, an open box and the scroll position untouched), never overlaps itself, drops any older answer still in flight
+      after an action, and stops when the page closes (`createRefresher`, tested). Every request list is ordered
+      `created_at desc, id desc`: the id tie-breaker stops rows that share a creation time (the demo seed has many)
+      from swapping places on each re-read.
 21. **A blood bank's "donor roster" means donors with at least one donation recorded at that
     bank — there is no other link between a donor and a bank in the schema, since donors
     register on their own.** This is the same reading `DonationRepository.countDistinctDonorsByBloodBankId`
@@ -1668,7 +1677,7 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       cannot be undone."; a partly supplied request also says what stays supplied). The confirm button stays disabled until the
       box is valid. Escape or the scrim closes it, and Tab stays inside. A 409 closes the box, shows the server's sentence on the
       row and re-reads the list. A cancelled row has a grey "Cancelled" badge, "Cancelled - 3 of 5 units supplied", and the
-      reason, note, who and when. Blood Bank Dashboard: REQUEST_CANCELLED re-reads the list. A refused Contribute or Decline on a
+      reason, note, who and when. Blood Bank Dashboard: REQUEST_CANCELLED re-reads the list (Business Rule 20's refresh). A refused Contribute or Decline on a
       request that then leaves the list shows above the list, as its row is gone. On a phone the badge and button drop under the
       text. Bell dot navy, like the booking cancellation. Checks and wording in `lib/requestCancellation.js` (tested).
     - **Known limits:** a cancellation cannot be undone (raise a new request); a bank whose staff are all suspended is told

@@ -10,7 +10,6 @@ import {
   cancellationReasonLabel,
   cancelledReasonLine,
   cancelledSummary,
-  refreshesBankRequests,
   suppliedUnitsNotice,
 } from "./requestCancellation.js";
 
@@ -74,10 +73,4 @@ test("the reason line shows the note only when there is one", () => {
     cancelledReasonLine({ cancellationReason: "OTHER", cancellationNote: "Ward closed" }),
     "Reason: Other - Ward closed",
   );
-});
-
-test("a cancellation refreshes a bank's list, as the other request notices do", () => {
-  assert.equal(refreshesBankRequests("REQUEST_CANCELLED"), true);
-  assert.equal(refreshesBankRequests("REQUEST_PROGRESS"), true);
-  assert.equal(refreshesBankRequests("BATCH_EXPIRED"), false);
 });

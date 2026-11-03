@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getInventory } from "../api/inventory.js";
 import { getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
 import { canCancelRequest, cancelledReasonLine, cancelledSummary } from "../lib/requestCancellation.js";
+import { createRefresher, isRequestNotice } from "../lib/requestRefresh.js";
 import CancelRequestDialog from "../components/CancelRequestDialog.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
@@ -90,26 +91,24 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
     return { myRequests, inventories };
   }, []);
 
-  /**
-   * Reloads without touching the page-level loading or error state, and never touches the form,
-   * so a push can't clear what the clerk is typing.
-   */
-  const refresh = useCallback(async () => {
-    try {
-      const { myRequests, inventories } = await load();
+  // Quiet re-reads: no spinner, never two at once, stopped when the page closes (lib/requestRefresh.js).
+  // They never touch the form or an open Cancel box, so nothing the clerk is doing is reset.
+  const refresherRef = useRef(null);
+  useEffect(() => {
+    const refresher = createRefresher(load, ({ myRequests, inventories }) => {
       setRequests(myRequests);
       setAvailability(citywideAvailability(inventories));
-    } catch {
-      // Left as it was; the next notification or page load will try again.
-    }
+    });
+    refresherRef.current = refresher;
+    return () => refresher.stop();
   }, [load]);
+  const refresh = useCallback(() => refresherRef.current?.background(), []);
 
-  /**
-   * The header bell plus the live refresh; a hospital only receives REQUEST_STATUS_CHANGE,
-   * which can stale both panels, so every arrival reloads.
-   */
+  // A request notice (units arrived, fulfilled, declined by every bank) re-reads both panels at once; the
+  // 30-second check catches anything a dropped live connection missed, and keeps availability current.
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
-    onNotification: () => refresh(),
+    onNotification: (notification) => { if (isRequestNotice(notification.type)) refresh(); },
+    onPoll: () => { if (view === "dashboard") refresh(); },
   });
 
   useEffect(() => {
@@ -176,6 +175,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
         urgencyLevel: urgency,
         patientReference: ward,
       });
+      // A quiet read begun before the submit would not include it, so it is discarded.
+      refresherRef.current?.invalidate();
       setRequests((current) => [created, ...current]);
       setFormNotice(`Request sent — ${created.unitsRequested} unit${created.unitsRequested > 1 ? "s" : ""} of ${created.bloodType}.`);
       // Only the ward clears: the group and urgency a ward is working through are
@@ -192,14 +193,15 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   function handleCancelled(updated) {
     setCancelling(null);
     setCancelRefusal(null);
+    refresherRef.current?.invalidate();
     setRequests((current) => current.map((r) => (r.id === updated.id ? updated : r)));
   }
 
-  /** A 409: the request closed a moment ago, so the row says why and the list is read again. */
+  /** A 409: the request closed a moment ago, so the row says why and the list is read afresh. */
   function handleCancelRefused(message) {
     setCancelRefusal({ requestId: cancelling.id, message });
     setCancelling(null);
-    refresh();
+    refresherRef.current?.now();
   }
 
   return (

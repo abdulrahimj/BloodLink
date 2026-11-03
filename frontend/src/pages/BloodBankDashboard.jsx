@@ -5,7 +5,8 @@ import { actOnRequest, getRequests } from "../api/requests.js";
 import { getUpcomingBookings } from "../api/bookings.js";
 import { describeBookingWhen, refreshesBookings, upcomingBloodGroupLabel } from "../lib/donationBooking.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
-import { cancelledReasonLine, cancelledSummary, refreshesBankRequests } from "../lib/requestCancellation.js";
+import { cancelledReasonLine, cancelledSummary } from "../lib/requestCancellation.js";
+import { createRefresher, refreshesBankDashboard } from "../lib/requestRefresh.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -65,30 +66,28 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
     return { inventory, dashboardData, requestList };
   }, [bloodBankId]);
 
-  /**
-   * Reloads without touching the page-level loading or error state, for background refreshes
-   * triggered by notifications.
-   */
-  const refresh = useCallback(async () => {
-    try {
-      const { inventory, dashboardData, requestList } = await load();
+  // Quiet re-reads: no spinner, never two at once, stopped when the page closes (lib/requestRefresh.js).
+  // Rows keep their key, so an open units box, the Decline dialog and the scroll position survive them.
+  const refresherRef = useRef(null);
+  useEffect(() => {
+    const refresher = createRefresher(load, ({ inventory, dashboardData, requestList }) => {
       setStock(inventory);
       setDashboard(dashboardData);
       setRequests(requestList);
-    } catch {
-      // Left as it was; the next action or notification will try again.
-    }
+    });
+    refresherRef.current = refresher;
+    return () => refresher.stop();
   }, [load]);
+  const refresh = useCallback(() => refresherRef.current?.background(), []);
 
-  // The header bell, plus live refreshes for notifications that make the screen out of date:
-  // this bank's stock and new hospital requests.
+  // Any request notice or low-stock alert re-reads the screen; so does the 30-second check, because a bank
+  // without the stock to fill a new request gets no NEW_REQUEST yet still lists it (Business Rule 20).
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
-      // REQUEST_PROGRESS (Business Rule 20): another bank contributed, so outstanding units and this row's cap changed.
-      // REQUEST_CANCELLED (Business Rule 35): the request leaves this list, or closes as this bank's history.
-      if (refreshesBankRequests(notification.type)) refresh();
+      if (refreshesBankDashboard(notification.type)) refresh();
       if (refreshesBookings(notification.type)) loadVisits();
     },
+    onPoll: () => { if (!onSettings) refresh(); },
   });
 
   useEffect(() => {
@@ -133,26 +132,12 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
     setActionError(null);
     try {
       await actOnRequest(requestId, action, bloodBankId, units);
-      const { inventory, dashboardData, requestList } = await load();
-      setStock(inventory);
-      setDashboard(dashboardData);
-      setRequests(requestList);
     } catch (err) {
       setActionError({ requestId, message: err.message });
-      // Re-read regardless: a refusal usually means this screen's copy of the
-      // request is stale, and leaving the old buttons up invites a second failure.
-      try {
-        const { inventory, dashboardData, requestList } = await load();
-        setStock(inventory);
-        setDashboard(dashboardData);
-        setRequests(requestList);
-      } catch {
-        // The action's own message is the useful one; a failed refresh on top of
-        // it would only replace it with something less specific.
-      }
-    } finally {
-      setActingOn(null);
     }
+    // Re-read either way, as a refusal usually means this copy is stale; now() also drops any older quiet read.
+    await refresherRef.current?.now();
+    setActingOn(null);
   }
 
   /**
