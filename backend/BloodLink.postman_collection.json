@@ -1000,7 +1000,7 @@
               "mode": "raw",
               "raw": "{\n  \"bloodType\": \"O+\",\n  \"unitsRequested\": 3,\n  \"urgencyLevel\": \"URGENT\",\n  \"patientReference\": \"Maternity Ward - Bed 4\"\n}"
             },
-            "description": "HOSPITAL_STAFF only (201). The caller's own hospital is stamped on by the server. `urgencyLevel` is `ROUTINE`, `URGENT` or `EMERGENCY`. `unitsRequested` is 1–500. `patientReference` is optional, 255 characters at most. Saves the new id to `bloodRequestId`."
+            "description": "HOSPITAL_STAFF only (201). The caller's own hospital is stamped on by the server. `urgencyLevel` is `ROUTINE`, `URGENT` or `EMERGENCY`. `unitsRequested` is 1–500. `patientReference` is optional, 255 characters at most. Active staff of every blood bank holding at least 1 usable unit of the group get a NEW_REQUEST notice saying whether they can supply all of it or only part (with their unit count); if no bank holds any, every bank's active staff are told. Saves the new id to `bloodRequestId`."
           },
           "event": [
             {

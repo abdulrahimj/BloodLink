@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -129,10 +130,13 @@ public class BatchStockService {
         return Math.toIntExact(batchRepository.sumUsableUnits(bloodBankId, bloodType, stockPolicy.today()));
     }
 
-    /** Banks holding at least {@code units} usable units of one group. */
+    /** Usable units of one group at every bank holding at least 1, by bank id; banks with none are absent. */
     @Transactional(readOnly = true)
-    public List<UUID> bankIdsWithUsableUnitsAtLeast(BloodType bloodType, int units) {
-        return batchRepository.findBankIdsWithUsableUnitsAtLeast(bloodType, units, stockPolicy.today());
+    public Map<UUID, Integer> usableUnitsByBank(BloodType bloodType) {
+        Map<UUID, Integer> units = new LinkedHashMap<>();
+        batchRepository.findUsableUnitsByBank(bloodType, stockPolicy.today())
+            .forEach(row -> units.put(row.getBankId(), Math.toIntExact(row.getUsableUnits())));
+        return units;
     }
 
     // ---------- daily expiry notices (Business Rule 26) ----------

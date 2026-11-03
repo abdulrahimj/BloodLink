@@ -460,30 +460,51 @@ class NotificationServiceTest {
 
     // ---------- NEW_REQUEST ----------
 
+    /** One row of the per-bank usable-units query. */
+    private static BloodInventoryBatchRepository.BankUnits bankUnits(UUID bankId, long units) {
+        return new BloodInventoryBatchRepository.BankUnits() {
+            @Override public UUID getBankId() { return bankId; }
+            @Override public long getUsableUnits() { return units; }
+        };
+    }
+
     @Test
-    void aNewRequestAlertsOnlyTheBanksThatCouldCoverIt() {
-        User capableStaff = user("Aminata Kamara");
-        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
-            .thenReturn(List.of(BANK_ID));
+    void aNewRequestTellsAFullBankItCanSupplyAllAndAPartBankHowManyItHas() {
+        User fullStaff = user("Aminata Kamara");
+        User partStaff = user("Mohamed Bangura");
+        when(batchRepository.findUsableUnitsByBank(BloodType.O_NEGATIVE, TODAY))
+            .thenReturn(List.of(bankUnits(BANK_ID, 9), bankUnits(OTHER_BANK_ID, 1)));
         when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
-            .thenReturn(List.of(capableStaff));
+            .thenReturn(List.of(fullStaff));
+        when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE))
+            .thenReturn(List.of(partStaff));
         echoSavedNotifications();
 
         service.notifyNewRequest(request(RequestStatus.PENDING, null));
 
         List<Notification> rows = capturedRows();
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).getType()).isEqualTo(NotificationType.NEW_REQUEST);
-        assertThat(rows.get(0).getRecipient()).isEqualTo(capableStaff);
-        assertThat(rows.get(0).getMessage()).contains("Makeni Regional Hospital", "4 units", "O-", "Emergency");
-        // The bank that could not cover it was never looked up, let alone written to.
-        verify(userRepository, never()).findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE);
+        assertThat(rows).extracting(Notification::getRecipient).containsExactly(fullStaff, partStaff);
+        assertThat(rows).extracting(Notification::getType).containsOnly(NotificationType.NEW_REQUEST);
+        assertThat(rows.get(0).getMessage()).isEqualTo(
+            "New request from Makeni Regional Hospital: 4 units O- (Emergency). You can supply all of it.");
+        assertThat(rows.get(1).getMessage()).isEqualTo(
+            "New request from Makeni Regional Hospital: 4 units O- (Emergency). You have 1 unit and can contribute part.");
+        verify(userRepository, never()).findByRoleAndStatus(any(), any());
     }
 
     @Test
-    void aRequestNoBankCanCoverStillAlertsEveryBank() {
-        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
-            .thenReturn(List.of());
+    void theWordingTurnsOnExactlyTheUnitsRequested() {
+        BloodRequest request = request(RequestStatus.PENDING, null); // 4 units
+        assertThat(NotificationService.newRequestMessage(request, 4)).endsWith("You can supply all of it.");
+        assertThat(NotificationService.newRequestMessage(request, 3)).endsWith("You have 3 units and can contribute part.");
+        request.setPatientReference("Ward 3, bed 2");
+        // The ward/patient note never travels in the notice.
+        assertThat(NotificationService.newRequestMessage(request, 3)).doesNotContain("Ward");
+    }
+
+    @Test
+    void aRequestNoBankHoldsAnyOfStillAlertsEveryBank() {
+        when(batchRepository.findUsableUnitsByBank(BloodType.O_NEGATIVE, TODAY)).thenReturn(List.of());
         when(userRepository.findByRoleAndStatus(Role.BLOOD_BANK_STAFF, AccountStatus.ACTIVE))
             .thenReturn(List.of(user("Aminata Kamara"), user("Mohamed Bangura")));
         echoSavedNotifications();
@@ -491,7 +512,10 @@ class NotificationServiceTest {
         service.notifyNewRequest(request(RequestStatus.PENDING, null));
 
         // The alternative is silence on exactly the request that most needs a human.
-        assertThat(capturedRows()).hasSize(2);
+        List<Notification> rows = capturedRows();
+        assertThat(rows).hasSize(2);
+        assertThat(rows).extracting(Notification::getMessage).containsOnly(
+            "New request from Makeni Regional Hospital: 4 units O- (Emergency). No blood bank has O- in stock right now.");
     }
 
     // ---------- REQUEST_STATUS_CHANGE ----------
@@ -636,8 +660,8 @@ class NotificationServiceTest {
     @Test
     void oneRecipientReachedByTwoBanksIsWrittenToOnce() {
         User shared = user("Aminata Kamara");
-        when(batchRepository.findBankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, 4L, TODAY))
-            .thenReturn(List.of(BANK_ID, OTHER_BANK_ID));
+        when(batchRepository.findUsableUnitsByBank(BloodType.O_NEGATIVE, TODAY))
+            .thenReturn(List.of(bankUnits(BANK_ID, 9), bankUnits(OTHER_BANK_ID, 2)));
         when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, BANK_ID, AccountStatus.ACTIVE))
             .thenReturn(List.of(shared));
         when(userRepository.findByRoleAndBloodBankIdAndStatus(Role.BLOOD_BANK_STAFF, OTHER_BANK_ID, AccountStatus.ACTIVE))

@@ -81,7 +81,7 @@ export default function BloodBankDashboard({ bloodBankId, user, onSignOut, onNav
   const refresh = useCallback(() => refresherRef.current?.background(), []);
 
   // Any request notice or low-stock alert re-reads the screen; so does the 30-second check, because a bank
-  // without the stock to fill a new request gets no NEW_REQUEST yet still lists it (Business Rule 20).
+  // with none of a new request's group gets no NEW_REQUEST yet still lists it (Business Rule 20).
   const { notifications, unreadCount, connected, markAllRead } = useNotifications({
     onNotification: (notification) => {
       if (refreshesBankDashboard(notification.type)) refresh();

@@ -50,7 +50,7 @@ client→server messages (a donor's acceptance of an appeal is a REST call, Busi
 | LOW_STOCK_ALERT | that bank's BLOOD_BANK_STAFF | a stock change drops a group into Low or Critical |
 | DONATION_APPEAL | **eligible** donors (Business Rule 2) whose `Donor.blood_type` matches | a blood bank sends an appeal (Business Rule 1) |
 | DONATION_APPEAL_ACCEPTED | BLOOD_BANK_STAFF of the bank that sent the appeal | a donor accepts that appeal (Business Rule 25) |
-| NEW_REQUEST | BLOOD_BANK_STAFF at banks that could fulfil it | a hospital submits a request |
+| NEW_REQUEST | BLOOD_BANK_STAFF at every bank holding at least 1 usable unit of the group, worded "supply all of it" or "contribute part"; every bank if none holds any (Business Rule 20) | a hospital submits a request |
 | REQUEST_STATUS_CHANGE | the raising hospital's HOSPITAL_STAFF | units arrive against a request, it is fulfilled, or it closes |
 | REQUEST_PROGRESS | BLOOD_BANK_STAFF at every other bank still watching it | a bank contributes, changing the units outstanding (Business Rule 20) |
 | BATCH_EXPIRY_REMINDER | that bank's **active** BLOOD_BANK_STAFF | the daily job finds batches 7 days from expiry (Business Rule 26) |
@@ -926,6 +926,19 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       in its own response) and not a bank that has declined (it can no longer act). Without it two
       banks can each set out to cover the same shrinking gap. The hospital hears separately, as
       REQUEST_STATUS_CHANGE, with the figures ("2 of 4 units received, 2 units still needed").
+    - **NEW_REQUEST goes to every bank that can contribute, not only those that can fill it** (the project owner's
+      decision, 2026-11-03). Before it only banks whose usable stock covered the *whole* request were told, so a bank
+      holding 1 of 5 units — Makeni Regional, in the hospital's own compound — never heard of requests it could help
+      with. Now `NotificationService.notifyNewRequest` sends it to the **active** staff of every bank holding **at least
+      1 usable unit** of the requested group (Business Rule 24's usable: expired units count for nothing; the exact
+      group only, no compatible-group substitution), read in one query (`BatchStockService.usableUnitsByBank`). The
+      wording is per bank, from its usable units at that moment (`NotificationService.newRequestMessage`): enough for
+      the whole request, "New request from Holy Spirit Hospital: 5 units O+ (Emergency). You can supply all of it.";
+      some, "… You have 2 units and can contribute part." A bank with none is not alerted (the request still reaches
+      its list through the 30-second refresh below). **If no bank holds any usable unit, every bank's active staff
+      are told** ("… No blood bank has O+ in stock right now."), as before: that request most needs a person. The
+      ward/patient note is not in the message (the urgency is), for the reason Business Rule 35 leaves it out of the
+      cancellation notice. Same type, no migration; who sees requests and how contributions work are unchanged.
     - **Units Issued** on the Inventory screen now sums this bank's own contributions by
       `contributed_at`, rather than the full size of requests it fulfilled by their creation date —
       more accurate on both counts once a request can be split between banks.
@@ -938,7 +951,7 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       REQUEST_PROGRESS, REQUEST_STATUS_CHANGE, REQUEST_CANCELLED — one check, `lib/requestRefresh.js` `isRequestNotice`;
       the bank dashboard also on LOW_STOCK_ALERT) re-reads it, and so does `useNotifications`' 30-second check while the
       dashboard view is open. The second is needed because every bank lists every open request but NEW_REQUEST reaches
-      only banks able to fill it, and a dropped socket delivers no push at all. The re-read is quiet (no spinner, the
+      only banks holding some of the group, and a dropped socket delivers no push at all. The re-read is quiet (no spinner, the
       form, an open box and the scroll position untouched), never overlaps itself, drops any older answer still in flight
       after an action, and stops when the page closes (`createRefresher`, tested). Every request list is ordered
       `created_at desc, id desc`: the id tie-breaker stops rows that share a creation time (the demo seed has many)
@@ -1099,6 +1112,9 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       because its earliest batch does. Already-expired units are never "expiring soon".
     - **Expired units are shown, never counted:** reported as `expiredUnits` (inventory rows and summary)
       and `pastExpiryUnits` (Admin Reports), "awaiting discard" — discarded with the write-off action below.
+    - **The new-request alert reads usable units per bank** (`BatchStockService.usableUnitsByBank`, one grouped query):
+      a bank is alerted when it holds at least 1 usable unit of the group, and the figure in its message is its usable
+      units only, so expired units can neither earn a bank the alert nor raise the number it is told (Business Rule 20).
     - **Writing stock off (Stage 3).** `POST /api/inventory/{bank}/batches/{batch}/write-offs` with
       `{ units, reason, note? }` takes units off one batch and records why (`BatchWriteOffService`).
       **Who:** the bank's own active BLOOD_BANK_STAFF only, by the same `InventoryService` rule as Add New
@@ -1651,8 +1667,8 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       needed."), a row first then a push, in the cancellation's transaction, to the **active** BLOOD_BANK_STAFF of every bank that
       has not declined the request (`NotificationService.notifyRequestCancelled`): every such bank could see it, and a
       contributor can never have declined, so that set includes every contributor. A bank that declined is left out: the
-      request had already left its queue. The wider set is deliberate: NEW_REQUEST goes only to banks that could fill it, but
-      every bank sees every open request. The hospital's own staff are not notified, and **the note never appears in a
+      request had already left its queue. The wider set is deliberate: NEW_REQUEST goes only to banks holding some of the group
+      (Business Rule 20), but every bank sees every open request. The hospital's own staff are not notified, and **the note never appears in a
       notification or an audit entry**, since it may name a patient.
     - **The reference.** `BloodRequest.getReference()`, the UUID's first eight characters in capitals, sent as
       `BloodRequestResponse.reference` and shown as `#3F2A9C1B` on both portals' rows, so the notice can be matched to a row.

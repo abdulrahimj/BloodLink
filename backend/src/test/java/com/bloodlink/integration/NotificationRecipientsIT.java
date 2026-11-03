@@ -39,6 +39,7 @@ import com.bloodlink.repository.DonorRepository;
 import com.bloodlink.repository.HospitalRepository;
 import com.bloodlink.repository.NotificationRepository;
 import com.bloodlink.repository.UserRepository;
+import com.bloodlink.stock.BatchStockService;
 
 import jakarta.persistence.EntityManager;
 
@@ -62,6 +63,7 @@ class NotificationRecipientsIT {
     @Autowired private BloodInventoryBatchRepository batchRepository;
     @Autowired private NotificationRepository notificationRepository;
     @Autowired private NotificationService notificationService;
+    @Autowired private BatchStockService batchStockService;
 
     private BloodBank bank;
     private BloodBank otherBank;
@@ -123,12 +125,50 @@ class NotificationRecipientsIT {
     }
 
     @Test
-    void aNewRequestNoBankCanCoverSkipsSuspendedStaffToo() {
-        // The every-bank fallback: nobody holds two million units.
-        notificationService.notifyNewRequest(request(BloodType.O_POSITIVE, 2_000_000, RequestStatus.PENDING));
+    void aNewRequestNoBankHoldsAnyOfSkipsSuspendedStaffToo() {
+        // The every-bank fallback; only expired O+ exists, which counts for nothing.
+        batchRepository.save(BloodInventoryBatch.manual(bank, BloodType.O_POSITIVE, 20, today().minusDays(1)));
+        flush();
+        assertThat(batchStockService.usableUnitsByBank(BloodType.O_POSITIVE))
+            .as("precondition: no bank in bloodlink_test holds usable O+").isEmpty();
+
+        notificationService.notifyNewRequest(request(BloodType.O_POSITIVE, 5, RequestStatus.PENDING));
         flush();
 
         assertReachesOnlyTheActive(NotificationType.NEW_REQUEST, activeStaff, suspendedStaff);
+        assertThat(notices(activeStaff, NotificationType.NEW_REQUEST).get(0).getMessage())
+            .endsWith("No blood bank has O+ in stock right now.");
+    }
+
+    @Test
+    void aNewRequestReachesEveryBankThatCanContributeWordedByWhatEachHolds() {
+        // Full: 6 usable. Part: 2 usable (its 50 expired do not count). Empty: only expired AB- and other groups.
+        batchRepository.save(BloodInventoryBatch.manual(bank, BloodType.AB_NEGATIVE, 6, today().plusDays(20)));
+        batchRepository.save(BloodInventoryBatch.manual(otherBank, BloodType.AB_NEGATIVE, 2, today()));
+        batchRepository.save(BloodInventoryBatch.manual(otherBank, BloodType.AB_NEGATIVE, 50, today().minusDays(1)));
+        BloodBank emptyBank = newBank("Recipients Empty Bank");
+        batchRepository.save(BloodInventoryBatch.manual(emptyBank, BloodType.AB_NEGATIVE, 30, today().minusDays(3)));
+        batchRepository.save(BloodInventoryBatch.manual(emptyBank, BloodType.AB_POSITIVE, 40, today().plusDays(20)));
+        User partStaff = user("Recipients Part Technician", Role.BLOOD_BANK_STAFF, otherBank, null, AccountStatus.ACTIVE);
+        User emptyStaff = user("Recipients Empty Technician", Role.BLOOD_BANK_STAFF, emptyBank, null, AccountStatus.ACTIVE);
+        flush();
+        assertThat(batchStockService.usableUnitsByBank(BloodType.AB_NEGATIVE))
+            .as("precondition: only this test's banks hold usable AB-")
+            .containsOnlyKeys(bank.getId(), otherBank.getId());
+        long before = countNewRequestNotices();
+
+        notificationService.notifyNewRequest(request(BloodType.AB_NEGATIVE, 5, RequestStatus.PENDING));
+        flush();
+
+        String opening = "New request from " + hospital.getName() + ": 5 units AB- (Urgent).";
+        assertThat(notices(activeStaff, NotificationType.NEW_REQUEST)).extracting(Notification::getMessage)
+            .containsExactly(opening + " You can supply all of it.");
+        assertThat(notices(partStaff, NotificationType.NEW_REQUEST)).extracting(Notification::getMessage)
+            .containsExactly(opening + " You have 2 units and can contribute part.");
+        assertThat(notices(emptyStaff, NotificationType.NEW_REQUEST)).isEmpty();
+        assertThat(notices(suspendedStaff, NotificationType.NEW_REQUEST)).isEmpty();
+        // Exactly one row per active staff member at the two banks holding some, and none anywhere else.
+        assertThat(countNewRequestNotices() - before).isEqualTo(2);
     }
 
     @Test
@@ -211,6 +251,12 @@ class NotificationRecipientsIT {
         return notificationRepository.findTop50ByRecipientIdOrderByCreatedAtDesc(user.getId()).stream()
             .filter(notification -> notification.getType() == type)
             .toList();
+    }
+
+    private long countNewRequestNotices() {
+        return entityManager.createQuery("select count(n) from Notification n where n.type = :type", Long.class)
+            .setParameter("type", NotificationType.NEW_REQUEST)
+            .getSingleResult();
     }
 
     private void flush() {

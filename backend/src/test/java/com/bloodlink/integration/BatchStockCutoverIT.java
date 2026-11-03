@@ -278,9 +278,8 @@ class BatchStockCutoverIT {
         }
         assertThat(bankRow).isNotNull();
         assertThat(bankRow.get("totalUnits").asInt()).isEqualTo(usable);
-        // 6. the request-alert query: exactly the usable figure is enough, one more is not
-        assertThat(batchStockService.bankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, usable)).contains(bank.getId());
-        assertThat(batchStockService.bankIdsWithUsableUnitsAtLeast(BloodType.O_NEGATIVE, usable + 1)).doesNotContain(bank.getId());
+        // 6. the request-alert query: the usable figure, the 9 expired units left out
+        assertThat(batchStockService.usableUnitsByBank(BloodType.O_NEGATIVE)).containsEntry(bank.getId(), usable);
         // 7. the appeal rule: 22 usable is a shortage (under 30), so the bank may
         //    appeal; counting the 9 expired units (31) would have hidden that.
         assertThat(staffRow.get("appealAvailability").asString()).isEqualTo("AVAILABLE");

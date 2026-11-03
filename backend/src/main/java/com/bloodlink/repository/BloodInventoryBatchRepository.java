@@ -115,20 +115,26 @@ public interface BloodInventoryBatchRepository extends Repository<BloodInventory
     // ---------- across banks ----------
 
     /**
-     * Banks holding at least units usable units of a group, the ones alerted about a new request;
-     * expired units do not count.
+     * Usable units of one group per bank, for every bank holding at least 1: those alerted about a new request.
+     * Expired units do not count; ordered by bank id so the alerts go out in a stable order.
      */
     @Query("""
-        select b.bloodBank.id from BloodInventoryBatch b
+        select b.bloodBank.id as bankId, sum(b.unitsRemaining) as usableUnits from BloodInventoryBatch b
          where b.bloodType = :bloodType and b.expiryDate >= :today
          group by b.bloodBank.id
-        having sum(b.unitsRemaining) >= :units
+        having sum(b.unitsRemaining) > 0
+         order by b.bloodBank.id
         """)
-    List<UUID> findBankIdsWithUsableUnitsAtLeast(
+    List<BankUnits> findUsableUnitsByBank(
         @Param("bloodType") BloodType bloodType,
-        @Param("units") long units,
         @Param("today") LocalDate today
     );
+
+    /** One row of {@link #findUsableUnitsByBank}. */
+    interface BankUnits {
+        UUID getBankId();
+        long getUsableUnits();
+    }
 
     // ---------- Admin Reports: stock overview (Business Rule 23) ----------
 

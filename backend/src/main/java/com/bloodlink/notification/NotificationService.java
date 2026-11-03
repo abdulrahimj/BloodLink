@@ -253,30 +253,42 @@ public class NotificationService {
     // ========================================== NEW_REQUEST ==========================================
 
     /**
-     * Alerts staff of banks holding enough usable units to cover a new request (Business Rule 24);
-     * if none does, every bank is told, since an unfillable request is the most urgent.
+     * Alerts the active staff of every bank with at least 1 usable unit of the group, worded by what that bank can
+     * give (Business Rule 20); if no bank has any, every bank is told, since that request is the most urgent.
      */
     @Transactional
     public void notifyNewRequest(BloodRequest request) {
-        String message = "%s has requested %s of %s (%s).%s".formatted(
-            request.getHospital().getName(),
-            units(request.getUnitsRequested()),
-            request.getBloodType().getLabel(),
-            titleCase(request.getUrgencyLevel().name()),
-            request.getPatientReference() == null ? "" : " For " + request.getPatientReference() + "."
-        );
+        Map<UUID, Integer> usableByBank = batchStockService.usableUnitsByBank(request.getBloodType());
 
-        List<UUID> capableBankIds = batchStockService.bankIdsWithUsableUnitsAtLeast(
-            request.getBloodType(), request.getUnitsRequested()
-        );
+        if (usableByBank.isEmpty()) {
+            dispatch(userRepository.findByRoleAndStatus(Role.BLOOD_BANK_STAFF, AccountStatus.ACTIVE),
+                newRequestMessage(request, 0), NotificationType.NEW_REQUEST);
+            return;
+        }
 
-        List<User> recipients = capableBankIds.isEmpty()
-            ? userRepository.findByRoleAndStatus(Role.BLOOD_BANK_STAFF, AccountStatus.ACTIVE)
-            : capableBankIds.stream()
-                .flatMap(bankId -> activeBankStaff(bankId).stream())
-                .toList();
+        List<Addressed> addressed = new ArrayList<>();
+        usableByBank.forEach((bankId, usable) -> {
+            String message = newRequestMessage(request, usable);
+            activeBankStaff(bankId).forEach(staff -> addressed.add(new Addressed(staff, message)));
+        });
+        writeAndPush(addressed, NotificationType.NEW_REQUEST, null, null, null);
+    }
 
-        dispatch(recipients, message, NotificationType.NEW_REQUEST);
+    /**
+     * "New request from X: 5 units O+ (Emergency)." then what this bank can do with {@code usable} units; 0 means
+     * no bank has any. The ward/patient note is left out, as in the cancellation notice (Business Rule 35).
+     */
+    static String newRequestMessage(BloodRequest request, int usable) {
+        String group = request.getBloodType().getLabel();
+        String opening = "New request from %s: %s %s (%s).".formatted(
+            request.getHospital().getName(), units(request.getUnitsRequested()), group,
+            titleCase(request.getUrgencyLevel().name()));
+        if (usable <= 0) {
+            return opening + " No blood bank has %s in stock right now.".formatted(group);
+        }
+        return usable >= request.getUnitsRequested()
+            ? opening + " You can supply all of it."
+            : opening + " You have %s and can contribute part.".formatted(units(usable));
     }
 
     // ===================================== REQUEST_STATUS_CHANGE =====================================
@@ -585,14 +597,25 @@ public class NotificationService {
         List<User> recipients, String message, NotificationType type, BloodBank sourceBank, BloodType bloodType,
         Instant createdAt
     ) {
-        Map<UUID, User> unique = new LinkedHashMap<>();
-        recipients.forEach(user -> unique.putIfAbsent(user.getId(), user));
+        writeAndPush(recipients.stream().map(user -> new Addressed(user, message)).toList(),
+            type, sourceBank, bloodType, createdAt);
+    }
+
+    /** One recipient and the message written for them; lets one trigger word each bank's notice differently. */
+    private record Addressed(User recipient, String message) {}
+
+    /** The shared core of dispatch: one row per user id (the first message wins), saved, then queued to push. */
+    private void writeAndPush(
+        List<Addressed> addressed, NotificationType type, BloodBank sourceBank, BloodType bloodType, Instant createdAt
+    ) {
+        Map<UUID, Addressed> unique = new LinkedHashMap<>();
+        addressed.forEach(entry -> unique.putIfAbsent(entry.recipient().getId(), entry));
 
         List<Notification> rows = new ArrayList<>(unique.size());
-        for (User recipient : unique.values()) {
+        for (Addressed entry : unique.values()) {
             Notification notification = new Notification();
-            notification.setRecipient(recipient);
-            notification.setMessage(message);
+            notification.setRecipient(entry.recipient());
+            notification.setMessage(entry.message());
             notification.setType(type);
             notification.setRead(false);
             notification.setSourceBloodBank(sourceBank);
