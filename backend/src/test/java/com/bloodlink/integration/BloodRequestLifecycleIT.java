@@ -184,11 +184,13 @@ class BloodRequestLifecycleIT {
         // 20 units added, 3 issued, so 17 more than whatever the bank started with.
         assertThat(readOPlusUnits(bank.getId(), bankToken)).isEqualTo(startingOPlusUnits + 17);
 
-        // The hospital sees its own request as FULFILLED through its own read path too.
-        mockMvc.perform(get("/api/requests").header("Authorization", bearer(hospitalToken)))
+        // Finished, it leaves the hospital's dashboard list and is on its Request history (Business Rule 36).
+        assertThat(requestIdsVisibleTo(hospitalToken)).doesNotContain(created.id());
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(hospitalToken)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].id").value(created.id().toString()))
-            .andExpect(jsonPath("$[0].status").value("FULFILLED"));
+            .andExpect(jsonPath("$.content[0].request.id").value(created.id().toString()))
+            .andExpect(jsonPath("$.content[0].request.status").value("FULFILLED"))
+            .andExpect(jsonPath("$.content[0].request.closedAt").exists());
 
         // ---------- 6. The chain's final link: the hospital was actually notified ----------
         // Read from the repository, since the push is after-commit and this transaction rolls back.
@@ -292,10 +294,12 @@ class BloodRequestLifecycleIT {
 
         // Only now, with no bank left to ask, is the hospital's request closed —
         // and the hospital is told once, on that final decline.
-        mockMvc.perform(get("/api/requests").header("Authorization", bearer(hospitalToken)))
+        assertThat(requestIdsVisibleTo(hospitalToken)).doesNotContain(requestId);
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(hospitalToken)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].id").value(requestId.toString()))
-            .andExpect(jsonPath("$[0].status").value("REJECTED"));
+            .andExpect(jsonPath("$.content[0].request.id").value(requestId.toString()))
+            .andExpect(jsonPath("$.content[0].request.status").value("REJECTED"))
+            .andExpect(jsonPath("$.content[0].request.closedAt").exists());
 
         List<Notification> hospitalNotifications =
             notificationRepository.findTop50ByRecipientIdOrderByCreatedAtDesc(hospitalStaff.getId());

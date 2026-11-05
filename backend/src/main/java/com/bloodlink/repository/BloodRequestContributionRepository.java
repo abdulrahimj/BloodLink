@@ -27,6 +27,13 @@ public interface BloodRequestContributionRepository extends JpaRepository<BloodR
         """)
     int sumUnitsForRequest(@Param("requestId") UUID requestId);
 
+    /** Units received across every request of one hospital, open or finished: the Hospital dashboard's card. */
+    @Query("""
+        select coalesce(sum(c.unitsContributed), 0) from BloodRequestContribution c
+        where c.bloodRequest.hospital.id = :hospitalId
+        """)
+    long sumUnitsForHospital(@Param("hospitalId") UUID hospitalId);
+
     /** Whether this bank has contributed to this request — Business Rule 20's
      *  "a bank that has given units cannot then decline the same request". */
     boolean existsByBloodRequestIdAndBloodBankId(UUID bloodRequestId, UUID bloodBankId);

@@ -43,3 +43,21 @@ export function actOnRequest(requestId, action, bloodBankId, units = null) {
     body: { action, bloodBankId: bloodBankId ?? null, units },
   });
 }
+
+/**
+ * GET /api/requests/summary: the Hospital dashboard's four stat cards, counted by the server over open and
+ * finished requests (Business Rule 36); hospital staff only.
+ */
+export function getHospitalRequestSummary() {
+  return apiRequest('/api/requests/summary');
+}
+
+/**
+ * GET /api/requests/history: one page of finished requests, newest closed first (Business Rule 36).
+ * params come from lib/requestHistory.js buildHistoryParams; a bad one is a 400 naming the field.
+ */
+export function getRequestHistory(params) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => query.set(key, String(value)));
+  return apiRequest(`/api/requests/history?${query.toString()}`);
+}

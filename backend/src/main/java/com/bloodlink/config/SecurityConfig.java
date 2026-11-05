@@ -111,6 +111,11 @@ public class SecurityConfig {
                 // --- Blood requests: hospitals raise them, bank staff act on them ---
                 // Only the raising hospital's staff cancel (Business Rule 35); matched before the general rule below.
                 .requestMatchers(HttpMethod.POST, "/api/requests/*/cancel").hasRole(Role.HOSPITAL_STAFF.name())
+                // The Hospital dashboard's cards, and Request history (Business Rule 36): not ADMIN, who has the
+                // Audit Log and Reports; both refused again in the services.
+                .requestMatchers(HttpMethod.GET, "/api/requests/summary").hasRole(Role.HOSPITAL_STAFF.name())
+                .requestMatchers(HttpMethod.GET, "/api/requests/history").hasAnyRole(
+                    Role.HOSPITAL_STAFF.name(), Role.BLOOD_BANK_STAFF.name())
                 // ADMIN stays here for REJECT; RequestService.act refuses an ADMIN's CONTRIBUTE (a URL rule can't see it).
                 .requestMatchers("/api/requests/**").hasAnyRole(
                     Role.HOSPITAL_STAFF.name(), Role.BLOOD_BANK_STAFF.name(), Role.ADMIN.name())

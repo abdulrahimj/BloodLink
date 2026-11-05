@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getBloodBanks } from "../api/bloodBanks.js";
 import { getInventory } from "../api/inventory.js";
-import { getRequests, submitBloodRequest } from "../api/requests.js";
+import { getHospitalRequestSummary, getRequests, submitBloodRequest } from "../api/requests.js";
 import { formatHeaderDate, formatRelativeTime, initials } from "../lib/dates.js";
-import { canCancelRequest, cancelledReasonLine, cancelledSummary } from "../lib/requestCancellation.js";
+import { canCancelRequest } from "../lib/requestCancellation.js";
 import { createRefresher, isRequestNotice } from "../lib/requestRefresh.js";
 import CancelRequestDialog from "../components/CancelRequestDialog.jsx";
+import RequestHistoryPanel from "../components/RequestHistoryPanel.jsx";
 import NotificationBell from "../components/NotificationBell.jsx";
 import MobileMenuToggle from "../components/MobileMenuToggle.jsx";
 import ProfileSettings from "../components/ProfileSettings.jsx";
@@ -79,24 +80,32 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
   const [cancelling, setCancelling] = useState(null);
   const [cancelRefusal, setCancelRefusal] = useState(null);
 
+  // The four stat cards, counted by the server over open and finished requests (Business Rule 36).
+  const [summary, setSummary] = useState(null);
+  // A short line after a cancellation, since the row leaves the open list.
+  const [listNotice, setListNotice] = useState(null);
+
   /**
-   * Loads the request list and per-bank availability once; submitting doesn't change stock,
-   * and a bank's contribution triggers refresh below.
+   * Loads the open requests, the card figures and per-bank availability; a bank's contribution triggers
+   * refresh below. Finished requests are on Request history.
    */
   const load = useCallback(async () => {
-    const [myRequests, banks] = await Promise.all([getRequests(), getBloodBanks()]);
+    const [myRequests, requestSummary, banks] = await Promise.all([
+      getRequests(), getHospitalRequestSummary(), getBloodBanks(),
+    ]);
     // Sequential rather than folded into the Promise.all above: which banks exist
     // is only known once that first call returns.
     const inventories = await Promise.all(banks.map((bank) => getInventory(bank.id)));
-    return { myRequests, inventories };
+    return { myRequests, requestSummary, inventories };
   }, []);
 
   // Quiet re-reads: no spinner, never two at once, stopped when the page closes (lib/requestRefresh.js).
   // They never touch the form or an open Cancel box, so nothing the clerk is doing is reset.
   const refresherRef = useRef(null);
   useEffect(() => {
-    const refresher = createRefresher(load, ({ myRequests, inventories }) => {
+    const refresher = createRefresher(load, ({ myRequests, requestSummary, inventories }) => {
       setRequests(myRequests);
+      setSummary(requestSummary);
       setAvailability(citywideAvailability(inventories));
     });
     refresherRef.current = refresher;
@@ -117,9 +126,10 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
     setError(null);
 
     load()
-      .then(({ myRequests, inventories }) => {
+      .then(({ myRequests, requestSummary, inventories }) => {
         if (cancelled) return;
         setRequests(myRequests);
+        setSummary(requestSummary);
         setAvailability(citywideAvailability(inventories));
       })
       .catch((err) => { if (!cancelled) setError(err.message); })
@@ -130,35 +140,14 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
     return () => { cancelled = true; };
   }, [load]);
 
-  /**
-   * The four stat cards, counted from the request list already loaded.
-   */
-  const stats = useMemo(() => {
-    const now = new Date();
-    let thisMonth = 0;
-    let pending = 0;
-    let unitsReceived = 0;
-    let openEmergencies = 0;
-
-    requests.forEach((r) => {
-      const created = new Date(r.createdAt);
-      if (created.getFullYear() === now.getFullYear() && created.getMonth() === now.getMonth()) {
-        thisMonth += 1;
-      }
-      // "Pending" is anything still waiting on units, including a request part way there (Business Rule 20).
-      if (r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED") pending += 1;
-      // Units actually received, not units requested — a partially filled request
-      // contributes exactly what arrived, which is the figure a ward can plan with.
-      unitsReceived += r.unitsContributed;
-      // "Highest priority" means the ones still needing attention — an emergency
-      // that has been covered in full or closed is no longer a live case.
-      if (r.urgencyLevel === "EMERGENCY" && (r.status === "PENDING" || r.status === "PARTIALLY_FULFILLED")) {
-        openEmergencies += 1;
-      }
-    });
-
-    return { thisMonth, pending, unitsReceived, openEmergencies };
-  }, [requests]);
+  // The cards read the server's figures (GET /api/requests/summary): the list holds open requests only, so counting
+  // it here would drop finished ones from "this month" and "units received".
+  const stats = {
+    thisMonth: summary?.requestsThisMonth ?? 0,
+    pending: summary?.awaitingUnits ?? 0,
+    unitsReceived: summary?.unitsReceived ?? 0,
+    openEmergencies: summary?.openEmergencies ?? 0,
+  };
 
   /**
    * Submits the form and puts the new request straight at the top of the tracking
@@ -178,6 +167,9 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
       // A quiet read begun before the submit would not include it, so it is discarded.
       refresherRef.current?.invalidate();
       setRequests((current) => [created, ...current]);
+      setListNotice(null);
+      // The cards change too ("this month", "awaiting units"), so they are read again quietly.
+      refresh();
       setFormNotice(`Request sent — ${created.unitsRequested} unit${created.unitsRequested > 1 ? "s" : ""} of ${created.bloodType}.`);
       // Only the ward clears: the group and urgency a ward is working through are
       // usually the same across consecutive requests, so re-typing them is friction.
@@ -189,12 +181,14 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
     }
   }
 
-  /** The server accepted: the row shows the request as returned, with its supplied count and reason. */
+  /** The server accepted: a cancelled request is finished, so it leaves this list for Request history (Rule 36). */
   function handleCancelled(updated) {
     setCancelling(null);
     setCancelRefusal(null);
     refresherRef.current?.invalidate();
-    setRequests((current) => current.map((r) => (r.id === updated.id ? updated : r)));
+    setRequests((current) => current.filter((r) => r.id !== updated.id));
+    setListNotice(`Request #${updated.reference} was cancelled. It is now in Request history.`);
+    refresh();
   }
 
   /** A 409: the request closed a moment ago, so the row says why and the list is read afresh. */
@@ -349,6 +343,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
         .hp-panel-head { flex: 0 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: clamp(7px, 1.2vh, 13px); }
         .hp-panel-title { font-size: clamp(12px, 1.85vh, 16px); font-weight: 700; letter-spacing: -.01em; }
         .hp-panel-link { font-size: clamp(9.5px, 1.35vh, 12px); font-weight: 600; color: var(--red); cursor: pointer; }
+        .hp-link-btn { background: transparent; border: none; padding: 0; font-family: inherit; }
+        .hp-link-btn:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
 
         /* ===== FORM ===== */
         .hp-form { display: flex; flex-direction: column; gap: clamp(7px, 1.25vh, 13px); min-height: 0; }
@@ -502,8 +498,7 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
 
         <div className="hp-role">{user.role === "ADMIN" ? "ADMINISTRATOR" : "HOSPITAL STAFF"}</div>
 
-        {/* Dashboard and Settings are wired; the middle four are still the
-            mockup's inert entries. */}
+        {/* Dashboard, Request history and Settings are wired; the other three are still the mockup's inert entries. */}
         <nav className="hp-nav" onClick={() => setMobileMenuOpen(false)}>
           <button
             type="button" className={view === "dashboard" ? "is-active" : ""}
@@ -513,7 +508,13 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
             <GridIcon /> Dashboard
           </button>
           <button type="button"><PlusIcon /> New Request</button>
-          <button type="button"><ClockIcon /> Request History</button>
+          <button
+            type="button" className={view === "history" ? "is-active" : ""}
+            aria-current={view === "history" ? "page" : undefined}
+            onClick={() => setView("history")}
+          >
+            <ClockIcon /> Request history
+          </button>
           <button type="button"><DropletIcon /> Blood Availability</button>
           <button type="button"><ChartIcon /> Report</button>
           <button
@@ -533,8 +534,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
         <div className="hp-top">
           <MobileMenuToggle open={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)} controls="hp-sidebar" />
           <div>
-            <div className="hp-title">{view === "settings" ? "Profile Settings" : (hospital.name ?? "Hospital Portal")}</div>
-            <div className="hp-sub">{view === "settings" ? "Your name, email and password" : "Blood request desk"}</div>
+            <div className="hp-title">{view === "settings" ? "Profile Settings" : view === "history" ? "Request history" : (hospital.name ?? "Hospital Portal")}</div>
+            <div className="hp-sub">{view === "settings" ? "Your name, email and password" : view === "history" ? "Your hospital's fulfilled, rejected and cancelled requests" : "Blood request desk"}</div>
           </div>
           <div className="hp-top-right">
             <div className="hp-date"><CalendarIcon /> Today, {formatHeaderDate(today)}</div>
@@ -549,6 +550,8 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
         </div>
 
         {view === "settings" && <ProfileSettings onUserUpdated={onUserUpdated} />}
+
+        {view === "history" && <RequestHistoryPanel side="hospital" />}
 
         {view === "dashboard" && loading && (
           <div className="hp-loading"><div className="hp-sub">Loading request desk…</div></div>
@@ -649,12 +652,19 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
 
                 <div className="hp-panel" style={{ flex: "1 1 auto" }}>
                   <div className="hp-panel-head">
-                    <div className="hp-panel-title">My Recent Requests</div>
-                    <div className="hp-panel-link">View All</div>
+                    <div className="hp-panel-title">My Open Requests</div>
+                    <button type="button" className="hp-panel-link hp-link-btn" onClick={() => setView("history")}>
+                      Request history
+                    </button>
                   </div>
                   <div className="hp-list">
+                    {listNotice && <div className="hp-form-msg hp-form-msg--ok" role="status">{listNotice}</div>}
+                    {/* A refused cancel on a request that has since left this list has no row left to show it on. */}
+                    {cancelRefusal && !requests.some((r) => r.id === cancelRefusal.requestId) && (
+                      <div className="hp-item-error" role="alert">{cancelRefusal.message}</div>
+                    )}
                     {requests.length === 0 && (
-                      <div className="hp-empty">No requests yet. Submit one on the left.</div>
+                      <div className="hp-empty">No open requests. Submit one on the left; finished ones are on Request history.</div>
                     )}
                     {requests.map((r) => (
                       <div className="hp-item" key={r.id}>
@@ -667,18 +677,9 @@ export default function HospitalDashboard({ hospital, user, onSignOut, onUserUpd
                             #{r.reference} · {r.lastContributedByBloodBankName ?? (r.status === "CANCELLED" ? "No units supplied" : "Awaiting a blood bank")} · {formatRelativeTime(r.createdAt)}
                             {r.patientReference ? ` · ${r.patientReference}` : ""}
                           </div>
-                          {/* Where the blood came from and how much is still coming (Business Rule 20),
-                              naming each contributing bank. A cancelled request keeps its supplied count (Rule 35). */}
-                          {r.status === "CANCELLED" ? (
-                            <div className="hp-item-cancelled">
-                              {cancelledSummary(r)}
-                              {r.contributions.length > 0 && ` · ${r.contributions
-                                .map((c) => `${c.unitsContributed} from ${c.bloodBankName}`)
-                                .join(", ")}`}
-                              <br />
-                              {cancelledReasonLine(r)} · by {r.cancelledByName} · {formatRelativeTime(r.cancelledAt)}
-                            </div>
-                          ) : r.unitsContributed > 0 && (
+                          {/* Where the blood came from and how much is still coming (Business Rule 20), naming each
+                              contributing bank. Only open requests are listed; finished ones are on Request history. */}
+                          {r.unitsContributed > 0 && (
                             <div className="hp-item-progress">
                               {r.unitsContributed} of {r.unitsRequested} units received
                               {r.unitsOutstanding > 0 ? ` · ${r.unitsOutstanding} still to come` : ""}

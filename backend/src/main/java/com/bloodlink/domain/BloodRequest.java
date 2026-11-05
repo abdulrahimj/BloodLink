@@ -93,6 +93,20 @@ public class BloodRequest {
     @Setter(AccessLevel.NONE)
     private Instant cancelledAt;
 
+    /** When it finished (FULFILLED, REJECTED or CANCELLED), null while open (Business Rule 36, V33). */
+    @Column(name = "closed_at")
+    @Setter(AccessLevel.NONE)
+    private Instant closedAt;
+
+    /** Finishes the request by contribution or decline, recording when; cancelling has its own method below. */
+    public void close(RequestStatus finalStatus, Instant at) {
+        if (finalStatus.isOpen() || finalStatus == RequestStatus.CANCELLED) {
+            throw new IllegalArgumentException("close() takes FULFILLED or REJECTED, not " + finalStatus);
+        }
+        status = finalStatus;
+        closedAt = at;
+    }
+
     /** The short id people see and say: "#3F2A9C1B", the first eight characters of the UUID in capitals. */
     public String getReference() {
         return id.toString().substring(0, 8).toUpperCase(Locale.ROOT);
@@ -105,6 +119,7 @@ public class BloodRequest {
         cancellationNote = note;
         cancelledBy = by;
         cancelledAt = at;
+        closedAt = at;
     }
 
     @PrePersist

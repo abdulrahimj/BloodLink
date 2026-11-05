@@ -260,9 +260,9 @@ class RequestServiceTest {
     // ---------- scoping ----------
 
     @Test
-    void aHospitalSeesOnlyItsOwnRequests() {
+    void aHospitalSeesOnlyItsOwnOpenRequests() {
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(staff(null, hospital())));
-        when(bloodRequestRepository.findByHospitalIdOrderByCreatedAtDescIdDesc(HOSPITAL_ID))
+        when(bloodRequestRepository.findOpenForHospital(HOSPITAL_ID))
             .thenReturn(List.of(request(RequestStatus.PENDING, null)));
 
         var requests = service.listRequests(principal(Role.HOSPITAL_STAFF), null);

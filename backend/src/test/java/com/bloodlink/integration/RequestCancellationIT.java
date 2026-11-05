@@ -129,11 +129,12 @@ class RequestCancellationIT {
             .andExpect(jsonPath("$.unitsContributed").value(0))
             .andExpect(jsonPath("$.unitsOutstanding").value(0));
 
-        // It is still on the hospital's own list, as cancelled, with who and why.
-        mockMvc.perform(get("/api/requests").header("Authorization", bearer(hospitalToken)))
-            .andExpect(jsonPath("$[0].id").value(requestId.toString()))
-            .andExpect(jsonPath("$[0].status").value("CANCELLED"))
-            .andExpect(jsonPath("$[0].cancelledByName").value("Cancel Ward Clerk"));
+        // It leaves the hospital's dashboard list and is on its Request history, with who and why (Business Rule 36).
+        assertThat(requestIdsVisibleTo(hospitalToken)).doesNotContain(requestId);
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(hospitalToken)))
+            .andExpect(jsonPath("$.content[0].request.id").value(requestId.toString()))
+            .andExpect(jsonPath("$.content[0].request.status").value("CANCELLED"))
+            .andExpect(jsonPath("$.content[0].request.cancelledByName").value("Cancel Ward Clerk"));
 
         assertThat(cancellationEntries(requestId)).singleElement()
             .satisfies(entry -> assertThat(entry.getDetails()).endsWith("No units had been supplied."));
@@ -352,14 +353,24 @@ class RequestCancellationIT {
 
         cancel(hospitalToken, requestId, "PATIENT_TRANSFERRED", NOTE).andExpect(status().isOk());
 
-        // Bank B never gave to it, so it simply goes; bank A keeps it as history, with the reason alone.
+        // It leaves both queues (Business Rule 36). Bank A, which gave to it, has it on its history with the reason
+        // alone; bank B neither gave nor declined, so it is not on bank B's.
+        assertThat(requestIdsVisibleTo(bankAToken)).doesNotContain(requestId);
         assertThat(requestIdsVisibleTo(bankBToken)).doesNotContain(requestId);
-        mockMvc.perform(get("/api/requests").header("Authorization", bearer(bankAToken)))
-            .andExpect(jsonPath("$[?(@.id == '%s')].status".formatted(requestId)).value("CANCELLED"))
-            .andExpect(jsonPath("$[?(@.id == '%s')].cancellationReason".formatted(requestId)).value("PATIENT_TRANSFERRED"))
-            .andExpect(jsonPath("$[?(@.id == '%s')].unitsContributed".formatted(requestId)).value(3))
-            .andExpect(jsonPath("$[?(@.id == '%s')].cancellationNote".formatted(requestId)).value(org.hamcrest.Matchers.contains((Object) null)))
-            .andExpect(jsonPath("$[?(@.id == '%s')].cancelledByName".formatted(requestId)).value(org.hamcrest.Matchers.contains((Object) null)));
+        String row = "$.content[?(@.request.id == '%s')]".formatted(requestId);
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(bankAToken)))
+            .andExpect(jsonPath(row + ".request.status").value(org.hamcrest.Matchers.contains("CANCELLED")))
+            .andExpect(jsonPath(row + ".request.cancellationReason").value(org.hamcrest.Matchers.contains("PATIENT_TRANSFERRED")))
+            .andExpect(jsonPath(row + ".request.unitsContributed").value(org.hamcrest.Matchers.contains(3)))
+            .andExpect(jsonPath(row + ".unitsFromYourBank").value(org.hamcrest.Matchers.contains(3)))
+            .andExpect(jsonPath(row + ".request.cancellationNote").value(org.hamcrest.Matchers.contains((Object) null)))
+            .andExpect(jsonPath(row + ".request.cancelledByName").value(org.hamcrest.Matchers.contains((Object) null)));
+        // The private note never appears anywhere in the bank's history response.
+        String bankHistory = mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(bankAToken)))
+            .andReturn().getResponse().getContentAsString();
+        assertThat(bankHistory).doesNotContain(NOTE);
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(bankBToken)))
+            .andExpect(jsonPath(row).isEmpty());
     }
 
     @Test

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import BloodBankDashboard from "./BloodBankDashboard.jsx";
 import BloodBankInventory from "./BloodBankInventory.jsx";
 import BloodBankDonors from "./BloodBankDonors.jsx";
+import BloodBankRequestHistory from "./BloodBankRequestHistory.jsx";
 import { getBloodBanks } from "../api/bloodBanks.js";
 
 /* BloodLink — Blood Bank portal shell: resolves which bank this session manages (staff go straight in,
@@ -38,11 +39,12 @@ export default function BloodBankPortal({ user, onSignOut, onUserUpdated }) {
     );
   }
 
-  // Four views from three page components; Settings is shown inside the Dashboard page,
+  // Five views from four page components; Settings is shown inside the Dashboard page,
   // keeping its sidebar and bell mounted.
   const shared = { bloodBankId: bank.id, user, onSignOut, activeView: view, onNavigate: setView, onUserUpdated };
   if (view === "inventory") return <BloodBankInventory {...shared} />;
   if (view === "donors") return <BloodBankDonors {...shared} />;
+  if (view === "history") return <BloodBankRequestHistory {...shared} />;
   return <BloodBankDashboard {...shared} />;
 }
 

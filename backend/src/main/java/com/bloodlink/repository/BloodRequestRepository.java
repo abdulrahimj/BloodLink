@@ -1,11 +1,13 @@
 package com.bloodlink.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -16,13 +18,33 @@ import com.bloodlink.domain.enums.UrgencyLevel;
 
 import jakarta.persistence.LockModeType;
 
-public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID> {
+public interface BloodRequestRepository
+    extends JpaRepository<BloodRequest, UUID>, JpaSpecificationExecutor<BloodRequest> {
 
     /**
-     * "My Recent Requests": this hospital's own requests only, newest first, scoped in the query.
-     * id breaks ties, so rows sharing a created_at never swap places between quiet re-reads.
+     * The Hospital dashboard's list: this hospital's OPEN requests only, newest first (finished ones are on Request
+     * history, Business Rule 36). id breaks ties, so rows sharing a created_at never swap places between re-reads.
      */
-    List<BloodRequest> findByHospitalIdOrderByCreatedAtDescIdDesc(UUID hospitalId);
+    @Query("""
+        select r from BloodRequest r
+        where r.hospital.id = :hospitalId
+          and r.status in (com.bloodlink.domain.enums.RequestStatus.PENDING,
+                           com.bloodlink.domain.enums.RequestStatus.PARTIALLY_FULFILLED)
+        order by r.createdAt desc, r.id desc
+        """)
+    List<BloodRequest> findOpenForHospital(@Param("hospitalId") UUID hospitalId);
+
+    // ---------- the Hospital dashboard's stat cards, counted in the database ----------
+
+    /** Requests this hospital raised in [from, to): "Total Requests, this month". */
+    long countByHospitalIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(UUID hospitalId, Instant from, Instant to);
+
+    /** This hospital's requests in the given statuses: "Awaiting Units" when passed the two open ones. */
+    long countByHospitalIdAndStatusIn(UUID hospitalId, Collection<RequestStatus> statuses);
+
+    /** The same, of one urgency: "Emergency Cases" when passed EMERGENCY and the open statuses. */
+    long countByHospitalIdAndUrgencyLevelAndStatusIn(
+        UUID hospitalId, UrgencyLevel urgencyLevel, Collection<RequestStatus> statuses);
 
     /**
      * Every request's status counted, citywide, for the Request Outcomes chart, in one grouped query.
@@ -37,18 +59,13 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
     }
 
     /**
-     * A bank's incoming requests: every open one (Business Rule 20) plus every one it contributed to, newest first,
-     * minus any it declined (Business Rule 11). So a cancelled request stays only as a contributor's history (Rule 35).
-     * id breaks ties in the order, so rows sharing a created_at never swap places between quiet re-reads.
+     * A bank's incoming requests: every OPEN one it has not declined (Business Rules 11, 20), newest first. Finished
+     * ones, its own contributions included, are on Request history (Business Rule 36). id breaks ties in the order.
      */
     @Query("""
         select r from BloodRequest r
-        where (r.status in (com.bloodlink.domain.enums.RequestStatus.PENDING,
-                            com.bloodlink.domain.enums.RequestStatus.PARTIALLY_FULFILLED)
-               or exists (
-                   select 1 from BloodRequestContribution c
-                   where c.bloodRequest.id = r.id and c.bloodBank.id = :bloodBankId
-               ))
+        where r.status in (com.bloodlink.domain.enums.RequestStatus.PENDING,
+                           com.bloodlink.domain.enums.RequestStatus.PARTIALLY_FULFILLED)
           and not exists (
               select 1 from BloodRequestDecline d
               where d.bloodRequest.id = r.id and d.bloodBank.id = :bloodBankId
@@ -62,7 +79,7 @@ public interface BloodRequestRepository extends JpaRepository<BloodRequest, UUID
 
     /**
      * The Open Requests stat card: requests this bank could contribute to now (short of units, not declined by it),
-     * the same scope as findActionableForBank minus closed history, so the card matches the rows.
+     * the same scope as findActionableForBank, so the card matches the rows.
      */
     @Query("""
         select count(r) from BloodRequest r

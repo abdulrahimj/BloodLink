@@ -109,11 +109,11 @@ class PartialFulfilmentIT {
 
         assertThat(unitsInStock(fixture.bankB.getId(), fixture.bankBToken)).isEqualTo(1); // 3 - 2
 
-        // The hospital's own view says the same thing, from its own read path.
-        mockMvc.perform(get("/api/requests").header("Authorization", bearer(fixture.hospitalToken)))
+        // The hospital's own view says the same thing, now from its Request history (Business Rule 36).
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(fixture.hospitalToken)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$[0].status").value("FULFILLED"))
-            .andExpect(jsonPath("$[0].unitsContributed").value(4));
+            .andExpect(jsonPath("$.content[0].request.status").value("FULFILLED"))
+            .andExpect(jsonPath("$.content[0].request.unitsContributed").value(4));
 
         // And it was told twice, once per event: units arrived, then the request was
         // complete — with the figures, not just a state.
@@ -165,10 +165,14 @@ class PartialFulfilmentIT {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("FULFILLED"));
 
-        // Bank A never touched it and it is closed, so it is not bank A's business.
+        // Finished, it leaves both dashboards; only bank B, which filled it, has it on its Request history.
         assertThat(requestIdsVisibleTo(fixture.bankAToken)).doesNotContain(otherRequestId);
-        // Bank B, which filled it, keeps it in view as its own history.
-        assertThat(requestIdsVisibleTo(fixture.bankBToken)).contains(otherRequestId);
+        assertThat(requestIdsVisibleTo(fixture.bankBToken)).doesNotContain(otherRequestId);
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(fixture.bankBToken)))
+            .andExpect(jsonPath("$.content[?(@.request.id == '%s')].unitsFromYourBank"
+                .formatted(otherRequestId)).value(org.hamcrest.Matchers.contains(1)));
+        mockMvc.perform(get("/api/requests/history").header("Authorization", bearer(fixture.bankAToken)))
+            .andExpect(jsonPath("$.content[?(@.request.id == '%s')]".formatted(otherRequestId)).isEmpty());
 
         // And bank A can contribute again to the one it part-filled, once restocked.
         addStock(fixture.bankAToken, fixture.bankA.getId(), 2);

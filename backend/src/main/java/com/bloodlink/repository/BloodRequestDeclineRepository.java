@@ -1,5 +1,6 @@
 package com.bloodlink.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,4 +32,12 @@ public interface BloodRequestDeclineRepository extends JpaRepository<BloodReques
      */
     @Query("select d.bloodBank.id from BloodRequestDecline d where d.bloodRequest.id = :requestId")
     List<UUID> findBloodBankIdsByRequestId(@Param("requestId") UUID requestId);
+
+    /** Which of these requests this bank declined, for one page of its Request history (Business Rule 36). */
+    @Query("""
+        select d.bloodRequest.id from BloodRequestDecline d
+        where d.bloodBank.id = :bloodBankId and d.bloodRequest.id in :requestIds
+        """)
+    List<UUID> findRequestIdsDeclinedByBank(
+        @Param("bloodBankId") UUID bloodBankId, @Param("requestIds") Collection<UUID> requestIds);
 }

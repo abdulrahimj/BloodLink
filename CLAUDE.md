@@ -236,6 +236,7 @@ audit entry in one transaction; read by the batch history endpoint.
 | cancellation_note | varchar(200), nullable — added in V32; never blank, required for OTHER (DB CHECKs) |
 | cancelled_by | UUID, FK -> User, nullable — added in V32; the hospital staff member; set exactly when CANCELLED |
 | cancelled_at | timestamp, nullable — added in V32; set exactly when CANCELLED |
+| closed_at | timestamp, nullable — added in V33 (Business Rule 36); when the request finished: the completing contribution, the last decline, or the cancellation (equal to `cancelled_at`, DB CHECK). Null while open (DB CHECK); set by the application on every close. V33 back-filled it, and the demo seed's `V907` fills the demo rows |
 
 ### BloodRequestDecline
 | field | type |
@@ -460,7 +461,8 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
    the same pattern as rule 8. A hospital request is stamped with the submitting staff member's own
    hospital automatically — a hospital cannot submit a request on another hospital's behalf. Hospital
    staff only see their own hospital's requests; what blood bank staff see is set by Business Rule 20
-   (every request with units outstanding that their bank has not declined, plus any it contributed to).
+   (every request with units outstanding that their bank has not declined); finished requests are on
+   Request history, Business Rule 36 (a hospital its own, a bank those it contributed to or declined).
 10. **Approving a request also requires sufficient stock at that moment** — **superseded by
     Business Rule 20, and no longer applicable.** There is no approval step: a bank issues units when
     it acts, so the stock check and the deduction are the same moment. The concern behind this rule —
@@ -887,9 +889,9 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       wording. **`BloodRequestContribution` is the source of truth** for who gave what and how much.
     - **A request with units outstanding stays visible and actionable to every bank** (PENDING and
       PARTIALLY_FULFILLED alike), which reverses the old "disappears from other queues on approval"
-      behaviour. A bank also keeps any request it has contributed to, closed or not, as its own
-      history; a request another bank completed without it never appears.
-      `BloodRequestRepository.findActionableForBank` is the one place this is expressed.
+      behaviour. Since Business Rule 36 the Blood Bank Dashboard lists **open** requests only: a finished one, its own
+      contributions included, moves to Request history. `BloodRequestRepository.findActionableForBank` is the one place
+      this is expressed.
     - **A bank that contributes is done with declining, and a bank that declines is done
       contributing.** Both are refused with a 409. Known limit: a bank that declined and later
       receives stock cannot contribute to that request — its decline was its final answer, and the
@@ -1684,21 +1686,71 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       A contribution that only part-fills it goes first and the cancellation then succeeds with those units supplied, which
       is correct. `PartialFulfilmentRaceIT` proves it with real threads.
     - **What each side sees.** The hospital: reason, note, who and when. **Bank staff get the reason and time only**
-      (`BloodRequestResponse.forBank`; note and name are null): data minimisation. A cancelled request leaves a bank's list
-      unless it contributed, when it stays as its own history with the supplied count (`findActionableForBank`, unchanged). An ADMIN sees all of it in the API.
+      (`BloodRequestResponse.forBank`; note and name are null): data minimisation. A cancelled request leaves every bank's
+      list (Business Rule 36); a bank that contributed or declined finds it on Request history with the reason alone. An ADMIN
+      sees all of it in the API.
     - **Reports:** CANCELLED is a row in Business Rule 23's "By status" and CSV and in the Dashboard's Request Outcomes donut
       (grey), counts in "raised", and is not "decided", so the fulfilment rate is unchanged.
     - **Frontend.** Hospital Portal: open rows carry "Cancel request", opening `components/CancelRequestDialog.jsx` (reason
       dropdown, note with a 200 counter, required for Other, then "Cancel request #X? Blood banks will stop working on it. This
       cannot be undone."; a partly supplied request also says what stays supplied). The confirm button stays disabled until the
       box is valid. Escape or the scrim closes it, and Tab stays inside. A 409 closes the box, shows the server's sentence on the
-      row and re-reads the list. A cancelled row has a grey "Cancelled" badge, "Cancelled - 3 of 5 units supplied", and the
-      reason, note, who and when. Blood Bank Dashboard: REQUEST_CANCELLED re-reads the list (Business Rule 20's refresh). A refused Contribute or Decline on a
+      row and re-reads the list. A cancelled request leaves the dashboard list ("Request #X was cancelled. It is now in Request
+      history.", Business Rule 36), where it has a grey badge, "Cancelled · 3 of 5 supplied", and the reason, note, who and when. Blood Bank Dashboard: REQUEST_CANCELLED re-reads the list (Business Rule 20's refresh). A refused Contribute or Decline on a
       request that then leaves the list shows above the list, as its row is gone. On a phone the badge and button drop under the
       text. Bell dot navy, like the booking cancellation. Checks and wording in `lib/requestCancellation.js` (tested).
     - **Known limits:** a cancellation cannot be undone (raise a new request); a bank whose staff are all suspended is told
       nothing; other staff of the hospital are not notified and see it at their next reload; a batch already on its way is
       not recalled, as the system tracks no transport: a contribution is the moment units are counted as supplied.
+
+36. **Finished requests have their own page, Request history; both dashboards list open requests only.** The project
+    owner's decisions, final. Before it fulfilled, rejected and cancelled requests stayed mixed with open ones and the lists kept
+    growing; the dashboards are now a summary plus today's work. Schema: `V33` (`blood_requests.closed_at`). Package
+    `com.bloodlink.request` (`RequestHistoryService`).
+    - **Dashboards:** `GET /api/requests` returns a hospital's own **open** requests (PENDING, PARTIALLY_FULFILLED; still with
+      Cancel) and a bank's open requests it has not declined (`findOpenForHospital`, `findActionableForBank`). A request leaves
+      the moment it finishes. The ADMIN feed is unchanged. Everything else on the dashboards stays (cards, stock, availability,
+      live refresh). The Hospital dashboard's four cards used to be counted in the browser from the full list, so they now come
+      from **`GET /api/requests/summary`** (HOSPITAL_STAFF only; `{ requestsThisMonth, awaitingUnits, unitsReceived,
+      openEmergencies }`, counted in the database over open and finished requests; "this month" is the UTC calendar month).
+    - **`GET /api/requests/history`**: FULFILLED, REJECTED and CANCELLED only, **newest closed first** (`closed_at desc, id
+      desc`), in the usual `{ content, page, size, totalElements, totalPages }` envelope. `page` (0-based) and `size` (default
+      **20**, max 100) as the Audit Log; `status` FULFILLED|REJECTED|CANCELLED; `from` / `to` ISO dates on the **closed date**,
+      both inclusive, UTC (a backwards range is a 400 on `from`); `bloodType`; `hospitalId` for bank staff only (a hospital
+      sending one is a 400 on `hospitalId`, never ignored). Every bad value is a 400 naming the field. Each item is
+      `{ request, unitsFromYourBank, declinedByYourBank }`: `request` is the dashboards' `BloodRequestResponse` (now with
+      `closedAt`), and the two bank fields are null for a hospital.
+    - **Whose:** a hospital's staff see that hospital's requests; a bank's staff see the requests their bank **contributed to or
+      declined** (a request another bank finished without them never appears). Active HOSPITAL_STAFF / BLOOD_BANK_STAFF assigned
+      to a facility only: SecurityConfig (`GET /api/requests/history` matched before the general rule) and again in the
+      service. **ADMIN and DONOR are a 403** (an administrator has the Audit Log and Reports), no token a 401, a suspended
+      account a 401 at the filter.
+    - **The cancellation note stays private (Business Rule 35):** banks get `BloodRequestResponse.forBank`, the reason with no
+      note and no canceller's name; the hospital sees both.
+    - **The closing time.** It was not reliably derivable for every request: REJECTED requests from before V9 have no decline
+      rows, and V15 dated converted fulfilments at `created_at`. So `closed_at` is stored. **Set on every close, in the same
+      transaction, from the injected `Clock`:** the completing contribution (whose `contributed_at` is the same instant), the
+      last decline (same instant as its `declined_at`) and the cancellation (`BloodRequest.close` / `cancel`). **V33
+      back-filled** existing rows from the best evidence: CANCELLED `cancelled_at`; FULFILLED the latest `contributed_at`;
+      REJECTED the latest `declined_at`; **`created_at` when there is no such row** (an honest lower bound, not a guess at a
+      later time). CHECKs: an open request has no `closed_at`; a cancelled one's equals `cancelled_at`. "Finished means it has
+      one" is the application's job rather than a CHECK, because the demo seed inserts finished requests after V33 runs; demo
+      file `V907` fills theirs in by the same rules (a fresh demo database was built to prove it: 20 fulfilled and 8 rejected,
+      every one with a closing time). Index `idx_blood_requests_hospital_closed`. `V33ClosedAtMigrationIT` proves the
+      back-fill row by row.
+    - **Frontend.** One shared component, `components/RequestHistoryPanel.jsx`, logic and wording in `lib/requestHistory.js`
+      (tested). Blood Bank: the dead "Report" sidebar button is now **"Request history"** on every bank page, opening
+      `pages/BloodBankRequestHistory.jsx`. Hospital: the sidebar's "Request history" opens it inside the portal. Both
+      dashboards' list headers link to it. Columns: `#REF`, Hospital (bank) or "Supplied by" (hospital), units and group, an
+      outcome badge ("Fulfilled · 3 from us", "Fulfilled · we declined", "Cancelled · 2 of 5 supplied", "Rejected"), urgency,
+      closed date. Filters: outcome, closed date (All time, last 7 / 30 / 90 days, or a custom from-to; a preset is sent as
+      from-to, "last 7 days" being today and the six before), blood group, and hospital (bank). A row opens a details box:
+      raised and closed times, each contribution (bank, units, time), how it ended ("All 5 units were supplied.", "Every blood
+      bank declined this request.", or the cancellation reason), who cancelled and the ward reference for the hospital only.
+      Escape or the scrim closes it. On a phone the rows become small wrapping cards and the filters stack.
+    - **Known limits:** a request rejected before V9, or a demo one, shows its raising time as its closing time; history is not
+      refreshed live (it is read when the page opens or a filter changes); a bank that only *saw* a request (neither gave nor
+      declined) has no record of it once it closes.
 
 ## Pending documentation updates (dissertation chapters — not acted on here)
 
@@ -1756,12 +1808,15 @@ listed so nothing is forgotten when the chapters are next revised.
   CANCELLED and four cancellation columns (User 1–N as canceller); `audit_log` gains `target_blood_request_id` and REQUEST_CANCELLED,
   the first action by hospital staff; a fourteenth notification type; the lifecycle figure gains a transition from each open
   status; a new hospital use case "cancel a blood request".
+- **Chapters 3, 4 and 5 — ERD, use cases and narrative for Request history (Business Rule 36, V33).** `BloodRequest` gains
+  `closed_at`; new use cases "view request history" for hospital staff and for bank staff; the dashboards now show open requests
+  only, and the Hospital dashboard's cards are counted by the server.
 
 ## Actors (roles) and what each can do
 
 - **Donor** — view own profile/history/eligibility (the blood group as a blood bank recorded it, Business Rule 28), accept donation appeals while eligible (Business Rule 25), book one donation visit at a time while eligible and cancel it (Business Rule 29)
-- **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), cancel their hospital's open requests with a reason (Business Rule 35), view live inventory across blood banks (read-only)
-- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
+- **Hospital Staff** — submit blood requests, track their hospital's requests including how many units have arrived and from which banks (Business Rule 20), cancel their hospital's open requests with a reason (Business Rule 35), look back over its finished requests on Request history (Business Rule 36), view live inventory across blood banks (read-only)
+- **Blood Bank/Lab Staff** — manage own bank's inventory, batch by batch (each batch with its own expiry date; view their own bank's batches and each batch's history, and write units off a batch with a reason — Business Rule 24; every stock change — adding, writing off, recording donations, contributing — is theirs alone, Business Rule 8), contribute units to incoming requests or decline them (Business Rule 20), look back over the finished requests their bank contributed to or declined on Request history (Business Rule 36), send donation appeals and be told when a donor accepts one (Business Rule 25), be told daily of their bank's batches 7 days from expiry and of expired batches still to write off (Business Rule 26), view the roster of donors who have given at their own bank and each one's donation history there (Business Rule 21), set or correct any donor's blood group from a test — when recording a donation or by hand with a note (Business Rule 28), see their bank's upcoming booked donation visits and be told when one is booked or cancelled (Business Rule 29)
 - **Administrator** — create staff and administrator accounts (Business Rule 14), add new blood banks and
   hospitals (Business Rule 19), manage all user accounts (search, filter, sort and page through them — Business Rule 22 — edit another account's phone and facility, reset another account's password to a temporary one — Business Rule 31 — activate/suspend, all from one Manage box per account), handle "Forgot password?" requests: call back the registered number, then reset or mark done (Business Rule 33), view every bank's stock and batches read-only — an administrator cannot add a batch, write one off, record a donation or contribute units to a request, though they may still decline a request on a named bank's behalf (Business Rules 8, 20, 24), view the audit log of administrator actions, stock write-offs, donor blood group changes, sign-in locks and request cancellations (Business Rules 17, 28, 34, 35), view aggregate reports (donation trends and request outcomes on the Dashboard; the Reports page's stock, requests, donations and donors summaries with CSV export — Business Rule 23)
 - **Every role** — edit own name, email and password from Profile Settings (Business Rule 16; any new password meets Business Rule 30); an account an administrator created (or the first administrator), or whose password an administrator reset (Business Rule 31), must set its own password at its next sign-in before anything else (Business Rule 27); a password change or reset signs out every earlier session, while the device that made the change stays signed in (Business Rule 32); anyone who forgot their password can ask from the Sign in page for an administrator to call back (Business Rule 33); repeated failed sign-ins lock a number for 15 minutes, and sign-in, "Forgot password?" and registration are limited per internet address (Business Rule 34)
@@ -1797,7 +1852,7 @@ listed so nothing is forgotten when the chapters are next revised.
     `DonorOptionalEmailIT`, `AdminFacilityCreationIT`, `PartialFulfilmentIT`, `DonorRosterIT`,
     `AdminUserSearchIT`, `ReportsIT`, `BatchStockSchemaIT`, `BatchStockCutoverIT`, `InventoryApiContractIT`,
     `BatchWriteOffIT`, `AdminStockLockoutIT`, `BatchExpiryNotificationIT`, `NotificationRecipientsIT`,
-    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`, `RateLimitIT`, `RequestCancellationIT`),
+    `ForcedPasswordChangeIT`, `BootstrapAdminIT`, `DonorBloodGroupIT`, `DonationBookingIT`, `AdminPasswordResetIT`, `PasswordResetRequestIT`, `RateLimitIT`, `RequestCancellationIT`, `RequestHistoryIT`),
     every one of which is `@Transactional` and rolls back everything it writes,
     so re-running them never leaves residue to clean up.
     Create it once with `createdb bloodlink_test`; Flyway builds the schema on first use like anywhere else.
@@ -1810,7 +1865,8 @@ listed so nothing is forgotten when the chapters are next revised.
     `V19CutoverMigrationIT` follows: it must stop the schema at V17 and run real, committed Flyway
     migrations, so it creates `bloodlink_migration_test` before each test (plain JUnit, no Spring
     context) and drops it afterwards. `BootstrapAdminRaceIT` (Business Rule 27) races six first-administrator
-    bootstraps in real transactions, so it creates and drops `bloodlink_bootstrap_race_test` the same way.
+    bootstraps in real transactions, so it creates and drops `bloodlink_bootstrap_race_test` the same way, and
+    `V33ClosedAtMigrationIT` (Business Rule 36) stops at V32 like V19's test, on `bloodlink_v33_migration_test`.
     **Enforced, not just stated:** an environment variable outranks `application-test.properties`, so a
     `SPRING_DATASOURCE_URL` left set in a terminal would silently redirect the tests. `IntegrationDatabaseGuard`
     (test classpath only, registered in `src/test/resources/META-INF/spring.factories`) refuses any start

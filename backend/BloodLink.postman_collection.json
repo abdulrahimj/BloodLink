@@ -1036,7 +1036,90 @@
                 "value": "Bearer {{hospitalStaffToken}}"
               }
             ],
-            "description": "Hospital staff see their own hospital's requests, with how many units have arrived and from which banks. Switch the token to `{{bankStaffToken}}` for a bank's view: every request with units outstanding that the bank has not declined, plus requests it has contributed to."
+            "description": "The dashboards' list: OPEN requests only (Business Rule 36). Hospital staff see their own hospital's open requests, with how many units have arrived and from which banks. Switch the token to `{{bankStaffToken}}` for a bank's view: every open request the bank has not declined. Finished requests are on Request History."
+          }
+        },
+        {
+          "name": "Hospital Request Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "summary"
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{hospitalStaffToken}}"
+              }
+            ],
+            "description": "Business Rule 36. HOSPITAL_STAFF only (any other role 403). The Hospital dashboard's four cards for the caller's own hospital, counted over open and finished requests: `{ requestsThisMonth, awaitingUnits, unitsReceived, openEmergencies }` (this month = the UTC calendar month)."
+          }
+        },
+        {
+          "name": "Request History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/requests/history?page=0&size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "requests",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                },
+                {
+                  "key": "status",
+                  "value": "FULFILLED",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "2026-10-01",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "2026-10-31",
+                  "disabled": true
+                },
+                {
+                  "key": "bloodType",
+                  "value": "O-",
+                  "disabled": true
+                },
+                {
+                  "key": "hospitalId",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{hospitalStaffToken}}"
+              }
+            ],
+            "description": "Business Rule 36. Finished requests only (FULFILLED, REJECTED, CANCELLED), newest closed first, as `{ content, page, size, totalElements, totalPages }`; each item is `{ request, unitsFromYourBank, declinedByYourBank }` (the two bank fields null for a hospital). Hospital staff see their own hospital's; switch to `{{bankStaffToken}}` for the requests that bank contributed to or declined, without the hospital's cancellation note. `size` default 20, max 100; `status` FULFILLED|REJECTED|CANCELLED; `from`/`to` are closed dates, both inclusive, UTC; `hospitalId` for bank staff only. A bad value is a 400 naming the field. ADMIN and donors 403, no token 401."
           }
         },
         {

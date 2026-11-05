@@ -45,7 +45,10 @@ public record BloodRequestResponse(
     Instant cancelledAt,
     /** The hospital's own note and the staff member's name; also null for bank staff, who don't need them. */
     String cancellationNote,
-    String cancelledByName
+    String cancelledByName,
+
+    /** When it finished (fulfilled, rejected or cancelled), null while open (Business Rule 36). */
+    Instant closedAt
 ) {
 
     /**
@@ -98,7 +101,8 @@ public record BloodRequestResponse(
             request.getCancellationReason(),
             request.getCancelledAt(),
             showCanceller ? request.getCancellationNote() : null,
-            showCanceller && cancelledBy != null ? cancelledBy.getFullName() : null
+            showCanceller && cancelledBy != null ? cancelledBy.getFullName() : null,
+            request.getClosedAt()
         );
     }
 }

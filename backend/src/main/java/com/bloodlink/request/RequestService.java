@@ -2,6 +2,8 @@ package com.bloodlink.request;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,6 +26,7 @@ import com.bloodlink.domain.enums.BloodType;
 import com.bloodlink.domain.enums.RequestCancellationReason;
 import com.bloodlink.domain.enums.RequestStatus;
 import com.bloodlink.domain.enums.Role;
+import com.bloodlink.domain.enums.UrgencyLevel;
 import com.bloodlink.notification.NotificationService;
 import com.bloodlink.repository.BloodBankRepository;
 import com.bloodlink.repository.BloodRequestContributionRepository;
@@ -33,6 +36,7 @@ import com.bloodlink.repository.UserRepository;
 import com.bloodlink.request.dto.BloodRequestResponse;
 import com.bloodlink.request.dto.CancelRequestPayload;
 import com.bloodlink.request.dto.CreateRequestPayload;
+import com.bloodlink.request.dto.HospitalRequestSummaryResponse;
 import com.bloodlink.request.dto.RequestAction;
 import com.bloodlink.request.dto.RequestActionPayload;
 import com.bloodlink.security.AuthenticatedUser;
@@ -50,6 +54,10 @@ public class RequestService {
 
     /** The size of blood_requests.cancellation_note (V32). */
     private static final int CANCELLATION_NOTE_MAX_LENGTH = 200;
+
+    /** The two statuses a request still has units outstanding in. */
+    private static final List<RequestStatus> OPEN_STATUSES =
+        List.of(RequestStatus.PENDING, RequestStatus.PARTIALLY_FULFILLED);
 
     private final BloodRequestRepository bloodRequestRepository;
     private final BatchStockService batchStockService;
@@ -125,8 +133,8 @@ public class RequestService {
     }
 
     /**
-     * The request feed scoped to the caller: a hospital's own, a bank's actionable scope, or everything for ADMIN.
-     * bloodBankId is a view filter, never a grant; assigned staff always see their own bank.
+     * The dashboard feed: a hospital's own OPEN requests, a bank's open undeclined ones, or everything for ADMIN.
+     * Finished requests are on Request history (Business Rule 36). bloodBankId is a view filter, never a grant.
      */
     @Transactional(readOnly = true)
     public List<BloodRequestResponse> listRequests(AuthenticatedUser principal, UUID bloodBankId) {
@@ -135,7 +143,7 @@ public class RequestService {
                 User user = requireUser(principal);
                 yield user.getHospital() == null
                     ? List.of()
-                    : bloodRequestRepository.findByHospitalIdOrderByCreatedAtDescIdDesc(user.getHospital().getId());
+                    : bloodRequestRepository.findOpenForHospital(user.getHospital().getId());
             }
             case BLOOD_BANK_STAFF -> {
                 User user = requireUser(principal);
@@ -151,6 +159,33 @@ public class RequestService {
         };
 
         return withContributions(requests, principal.getRole() == Role.BLOOD_BANK_STAFF);
+    }
+
+    /**
+     * The Hospital dashboard's four stat cards for the caller's own hospital, counted in the database over open and
+     * finished requests alike, so they mean what they did before the list held open requests only (Business Rule 36).
+     */
+    @Transactional(readOnly = true)
+    public HospitalRequestSummaryResponse hospitalSummary(AuthenticatedUser principal) {
+        User user = principal.getRole() == Role.HOSPITAL_STAFF ? requireUser(principal) : null;
+        if (user == null || user.getHospital() == null) {
+            throw new AccessDeniedException("Only hospital staff assigned to a hospital have a request summary.");
+        }
+        UUID hospitalId = user.getHospital().getId();
+
+        // "This month" is the UTC calendar month, Sierra Leone's own time.
+        YearMonth month = YearMonth.now(clock);
+        Instant monthStart = month.atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant nextMonthStart = month.plusMonths(1).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+
+        return new HospitalRequestSummaryResponse(
+            bloodRequestRepository.countByHospitalIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThan(
+                hospitalId, monthStart, nextMonthStart),
+            bloodRequestRepository.countByHospitalIdAndStatusIn(hospitalId, OPEN_STATUSES),
+            contributionRepository.sumUnitsForHospital(hospitalId),
+            bloodRequestRepository.countByHospitalIdAndUrgencyLevelAndStatusIn(
+                hospitalId, UrgencyLevel.EMERGENCY, OPEN_STATUSES)
+        );
     }
 
     /**
@@ -314,11 +349,13 @@ public class RequestService {
             throw insufficientStock(request, shortOfStock.getUsableUnits(), units, shortOfStock.getExpiredUnits());
         }
 
+        // One instant for the contribution and, if it completes the request, its closing time (Business Rule 36).
+        Instant now = clock.instant();
         BloodRequestContribution contribution = new BloodRequestContribution();
         contribution.setBloodRequest(request);
         contribution.setBloodBank(actingBank);
         contribution.setUnitsContributed(units);
-        // contributedAt is set by the entity's @PrePersist.
+        contribution.setContributedAt(now);
         contributionRepository.save(contribution);
         // Which batches the units came from. Refuses (rolling everything back) if the
         // draws do not add up to the contribution's units.
@@ -327,9 +364,11 @@ public class RequestService {
         int contributedNow = alreadyContributed + units;
         // Status is derived, never declared: whatever the arithmetic says is what
         // the request is. That is why there is no "mark fulfilled" action anywhere.
-        request.setStatus(contributedNow >= request.getUnitsRequested()
-            ? RequestStatus.FULFILLED
-            : RequestStatus.PARTIALLY_FULFILLED);
+        if (contributedNow >= request.getUnitsRequested()) {
+            request.close(RequestStatus.FULFILLED, now);
+        } else {
+            request.setStatus(RequestStatus.PARTIALLY_FULFILLED);
+        }
         request.setLastContributedByBloodBank(actingBank);
 
         // Issuing units is the main way a group falls into Low or Critical, so the low-stock alert is raised here,
@@ -373,10 +412,12 @@ public class RequestService {
             throw new ConflictException("This blood bank has already declined this request.");
         }
 
+        // One instant for the decline and, if it is the last one, the request's closing time (Business Rule 36).
+        Instant now = clock.instant();
         BloodRequestDecline decline = new BloodRequestDecline();
         decline.setBloodRequest(request);
         decline.setBloodBank(actingBank);
-        // declinedAt is set by the entity's @PrePersist.
+        decline.setDeclinedAt(now);
         declineRepository.save(decline);
 
         // Counted after the save so this decline is included — the question is
@@ -387,7 +428,7 @@ public class RequestService {
         // >= so a request stays closable if a bank is ever removed after declining; PENDING only,
         // since a request that has received units stays open.
         if (declines >= banks && request.getStatus() == RequestStatus.PENDING) {
-            request.setStatus(RequestStatus.REJECTED);
+            request.close(RequestStatus.REJECTED, now);
         }
     }
 
