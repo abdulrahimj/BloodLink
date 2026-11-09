@@ -181,6 +181,19 @@ class RequestHistoryIT {
         assertThat(dashboardIds(bankBToken)).contains(r5).doesNotContain(r1, r2, r3, r4, r6, r7);
     }
 
+    @Test
+    void theBankDashboardsOpenRequestsCardCountsExactlyTheRowsListed() throws Exception {
+        // The card is counted by the server (countOpenForBank); the list is now open-only too, so they agree.
+        for (String token : List.of(bankAToken, bankBToken)) {
+            UUID bankId = token.equals(bankAToken) ? bankA.getId() : bankB.getId();
+            MvcResult result = mockMvc.perform(get("/api/blood-banks/{id}/dashboard", bankId)
+                    .header("Authorization", bearer(token)))
+                .andExpect(status().isOk()).andReturn();
+            int card = objectMapper.readTree(result.getResponse().getContentAsString()).get("openRequestsCount").asInt();
+            assertThat(card).as("Open Requests card").isEqualTo(dashboardIds(token).size());
+        }
+    }
+
     // ---------- the cancellation note ----------
 
     @Test

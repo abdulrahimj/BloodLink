@@ -1713,6 +1713,9 @@ User 1–N BloodRequest (as canceller) · BloodRequest 1–N AuditLog (as target
       live refresh). The Hospital dashboard's four cards used to be counted in the browser from the full list, so they now come
       from **`GET /api/requests/summary`** (HOSPITAL_STAFF only; `{ requestsThisMonth, awaitingUnits, unitsReceived,
       openEmergencies }`, counted in the database over open and finished requests; "this month" is the UTC calendar month).
+      The Blood Bank dashboard's four cards were already counted by the server (`BloodBankService.getDashboard`: usable
+      units, donations this month, registered donors, `countOpenForBank`) and are unchanged; its Open Requests card now
+      matches the open-only list row for row (`RequestHistoryIT` checks it), where the old list also held finished requests.
     - **`GET /api/requests/history`**: FULFILLED, REJECTED and CANCELLED only, **newest closed first** (`closed_at desc, id
       desc`), in the usual `{ content, page, size, totalElements, totalPages }` envelope. `page` (0-based) and `size` (default
       **20**, max 100) as the Audit Log; `status` FULFILLED|REJECTED|CANCELLED; `from` / `to` ISO dates on the **closed date**,
